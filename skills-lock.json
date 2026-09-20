@@ -1,11 +1,23 @@
 {
   "version": 1,
   "skills": {
+    "requirements-engineering": {
+      "source": "jasonkneen/kiro",
+      "sourceType": "github",
+      "skillPath": "skills/requirements-engineering/SKILL.md",
+      "computedHash": "b784e2ff7c6ffa2aa9af6cd289011de002089e8d3cecbd0036f4ceec943d14a1"
+    },
     "stop-slop": {
       "source": "hardikpandya/stop-slop",
       "sourceType": "github",
       "skillPath": "SKILL.md",
       "computedHash": "617bf97d33162a6bd0da4f40a97aac589de58e5a6c9cf011ed6108992210e7cb"
+    },
+    "user-story": {
+      "source": "deanpeters/product-manager-skills",
+      "sourceType": "github",
+      "skillPath": "skills/user-story/SKILL.md",
+      "computedHash": "ca8f8869c1597af5f979130b9b2805c32e6e985e04cdeefe4c99a9a537360b79"
     },
     "vercel-react-best-practices": {
       "source": "vercel-labs/agent-skills",
