@@ -1,4 +1,6 @@
 .env
 node_modules
+backend/.venv
 
 tmp
+__pycache__
