@@ -27,3 +27,28 @@ On a high level, Trace will operate with the client-server model, with the serve
 - Langsmith: For adding observabilty to AI agent and workflow runs to ensure reliability of results and findings.
 
 - Sentry: For error monitoring and observability of API serve and user interface to ensure reliability of the platform.
+
+## Local services
+
+Phase 1 runs the FastAPI backend, PostgreSQL, Redis, and Mailpit with Docker Compose.
+
+1. Copy `.env.example` to `.env` and replace the local PostgreSQL password in both `POSTGRES_PASSWORD` and `DATABASE_URL` with the same URL-safe value.
+2. Start the stack and wait for all service health checks:
+
+   ```bash
+   docker compose up --build --wait
+   ```
+
+3. Open the FastAPI health endpoint at [http://localhost:8000/health](http://localhost:8000/health) and the Mailpit inbox at [http://localhost:8025](http://localhost:8025).
+
+PostgreSQL, Redis, and Mailpit SMTP are available only on the private Docker networks. The backend connects to them as `postgres`, `redis`, and `mailpit` respectively.
+
+Stop the stack cleanly with:
+
+```bash
+docker compose down
+```
+
+This preserves PostgreSQL data. Use `docker compose down -v` only when you intentionally want to delete local database data.
+
+The backend container runs [start.sh](backend/start.sh) with locked dependencies and without runtime downloads. It is non-root, has a read-only filesystem, cannot gain new privileges, and exposes only the API port on localhost. Service images are pinned to immutable digests; update them deliberately as part of maintenance.
