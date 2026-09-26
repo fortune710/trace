@@ -1,6 +1,18 @@
 {
   "version": 1,
   "skills": {
+    "agent-owasp-compliance": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/agent-owasp-compliance/SKILL.md",
+      "computedHash": "3c461f890564aa52d154b64a85f70a396ff6533e68633fa02556ebbaa7b843e0"
+    },
+    "api-security-best-practices": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "skillPath": "skills/api-security-best-practices/SKILL.md",
+      "computedHash": "acbfe4f3c173162aa0b1ba8e78779728e574505d126ed4f858668cac7274cee6"
+    },
     "requirements-engineering": {
       "source": "jasonkneen/kiro",
       "sourceType": "github",
