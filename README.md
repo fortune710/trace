@@ -52,3 +52,13 @@ docker compose down
 This preserves PostgreSQL data. Use `docker compose down -v` only when you intentionally want to delete local database data.
 
 The backend container runs [start.sh](backend/start.sh) with locked dependencies and without runtime downloads. It is non-root, has a read-only filesystem, cannot gain new privileges, and exposes only the API port on localhost. Service images are pinned to immutable digests; update them deliberately as part of maintenance.
+
+## Database migrations
+
+After copying `.env.example` to `.env`, apply migrations with:
+
+```bash
+./scripts/migrate.sh
+```
+
+This waits for PostgreSQL and runs Alembic in a separate migration-only container. FastAPI startup never changes the database schema automatically.
