@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from redis.asyncio import Redis
 from sqlalchemy import Engine, create_engine
 
 
@@ -28,3 +29,23 @@ def get_redis_url() -> str:
         raise RuntimeError("REDIS_URL is not configured")
 
     return redis_url
+
+
+@lru_cache
+def get_redis_client() -> Redis:
+    return Redis.from_url(
+        get_redis_url(),
+        decode_responses=False,
+        health_check_interval=30,
+        socket_connect_timeout=3,
+        socket_timeout=3,
+    )
+
+
+async def close_redis_client() -> None:
+    if get_redis_client.cache_info().currsize == 0:
+        return
+
+    redis_client = get_redis_client()
+    await redis_client.aclose()
+    get_redis_client.cache_clear()

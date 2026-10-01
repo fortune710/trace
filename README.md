@@ -30,18 +30,19 @@ On a high level, Trace will operate with the client-server model, with the serve
 
 ## Local services
 
-Phase 1 runs the FastAPI backend, PostgreSQL, Redis, and Mailpit with Docker Compose.
+Phase 1 runs the FastAPI backend, PostgreSQL, Redis, Mailpit, and a local Vault Transit service with Docker Compose.
 
 1. Copy `.env.example` to `.env` and replace the local PostgreSQL password in both `POSTGRES_PASSWORD` and `DATABASE_URL` with the same URL-safe value.
-2. Start the stack and wait for all service health checks:
+2. Generate distinct values for the four required `AUTH_*_KEY` entries and `VAULT_DEV_ROOT_TOKEN_ID` using the commands in `.env.example`. The backend refuses to start without them.
+3. Start the stack and wait for all service health checks:
 
    ```bash
    docker compose up --build --wait
    ```
 
-3. Open the FastAPI health endpoint at [http://localhost:8000/health](http://localhost:8000/health) and the Mailpit inbox at [http://localhost:8025](http://localhost:8025).
+4. Open the FastAPI health endpoint at [http://localhost:8000/health](http://localhost:8000/health) and the Mailpit inbox at [http://localhost:8025](http://localhost:8025).
 
-PostgreSQL, Redis, and Mailpit SMTP are available only on the private Docker networks. The backend connects to them as `postgres`, `redis`, and `mailpit` respectively.
+PostgreSQL, Redis, Mailpit SMTP, and Vault are available only on private Docker networks. The backend connects to them as `postgres`, `redis`, `mailpit`, and `vault` respectively.
 
 Stop the stack cleanly with:
 
@@ -52,6 +53,25 @@ docker compose down
 This preserves PostgreSQL data. Use `docker compose down -v` only when you intentionally want to delete local database data.
 
 The backend container runs [start.sh](backend/start.sh) with locked dependencies and without runtime downloads. It is non-root, has a read-only filesystem, cannot gain new privileges, and exposes only the API port on localhost. Service images are pinned to immutable digests; update them deliberately as part of maintenance.
+
+## Authentication security configuration
+
+Phase 3 uses a 60-minute Ed25519-signed JWT access token and a rotating opaque refresh token that expires after seven days. Both are designed to be sent only in HttpOnly cookies; they are never returned in JSON responses or stored in browser storage. Email/password accounts require email verification before they can sign in.
+
+Before starting the backend, generate distinct local values for `AUTH_JWT_PRIVATE_KEY`, `AUTH_TOKEN_HASH_KEY`, `AUTH_CSRF_HMAC_KEY`, `AUTH_AUDIT_HASH_KEY`, and `VAULT_DEV_ROOT_TOKEN_ID` in your untracked `.env` file. The four `AUTH_*_KEY` values must be base64url-encoded 32-byte secrets; the command in `.env.example` produces a suitable value. Startup scripts never generate, replace, or print secrets.
+
+JWT key rotation uses `AUTH_JWT_KID` for the active signing key and `AUTH_JWT_VERIFICATION_KEYS` for the short-lived map of retired key IDs to public keys. Sign only with the active key, retain a retired public key only until every token it signed has expired, then remove it.
+
+Production uses `Secure; SameSite=None` host-only cookies and accepts credentialed CORS requests only from `https://trace.fortunealebiosu.dev` and `https://traceai.vercel.app`. These exact origins are enforced at startup. The browser must send the signed CSRF value in `X-CSRF-Token` for unsafe authenticated requests.
+
+The complete authentication contract—including session rotation, OAuth PKCE, recovery, rate limits, failure responses, and audit retention—is in [docs/authentication.md](docs/authentication.md).
+
+Register GitHub and Google OAuth applications with these exact local callback URLs:
+
+- `http://localhost:8000/auth/oauth/github/callback`
+- `http://localhost:8000/auth/oauth/google/callback`
+
+Use authorization-code OAuth with PKCE. Provider access and refresh tokens are stored only when Trace needs to call the provider later; Vault Transit encrypts them with AES-256-GCM and binds them to the credential owner and provider before persistence. The Compose Vault instance is development-only; [docs/vault-transit.md](docs/vault-transit.md) defines the self-hosted-server requirements and HCP migration path.
 
 ## Database migrations
 

@@ -10,12 +10,43 @@ services:
       REDIS_URL: ${REDIS_URL:?Set REDIS_URL in .env}
       SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST in .env}
       SMTP_PORT: ${SMTP_PORT:?Set SMTP_PORT in .env}
+      AUTH_ENVIRONMENT: ${AUTH_ENVIRONMENT:-development}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      AUTH_ACCESS_COOKIE_NAME: ${AUTH_ACCESS_COOKIE_NAME:-trace_access}
+      AUTH_REFRESH_COOKIE_NAME: ${AUTH_REFRESH_COOKIE_NAME:-trace_refresh}
+      AUTH_CSRF_COOKIE_NAME: ${AUTH_CSRF_COOKIE_NAME:-trace_csrf}
+      AUTH_COOKIE_SAME_SITE: ${AUTH_COOKIE_SAME_SITE:-lax}
+      AUTH_JWT_ISSUER: ${AUTH_JWT_ISSUER:-http://localhost:8000}
+      AUTH_JWT_AUDIENCE: ${AUTH_JWT_AUDIENCE:-trace-api}
+      AUTH_JWT_KID: ${AUTH_JWT_KID:-local-v1}
+      AUTH_JWT_PRIVATE_KEY: ${AUTH_JWT_PRIVATE_KEY:-}
+      AUTH_JWT_VERIFICATION_KEYS: ${AUTH_JWT_VERIFICATION_KEYS:-{}}
+      AUTH_TOKEN_HASH_KEY: ${AUTH_TOKEN_HASH_KEY:-}
+      AUTH_CREDENTIAL_ENCRYPTION_PROVIDER: ${AUTH_CREDENTIAL_ENCRYPTION_PROVIDER:-vault}
+      AUTH_CREDENTIAL_ENCRYPTION_KEY: ${AUTH_CREDENTIAL_ENCRYPTION_KEY:-}
+      AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION: ${AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION:-local-v1}
+      AUTH_VAULT_ADDR: ${AUTH_VAULT_ADDR:-http://vault:8200}
+      AUTH_VAULT_TOKEN_FILE: /run/vault/trace-backend-token
+      AUTH_VAULT_TRANSIT_MOUNT: ${AUTH_VAULT_TRANSIT_MOUNT:-transit}
+      AUTH_VAULT_TRANSIT_KEY: ${AUTH_VAULT_TRANSIT_KEY:-trace-provider-credentials}
+      AUTH_VAULT_REQUEST_TIMEOUT_SECONDS: ${AUTH_VAULT_REQUEST_TIMEOUT_SECONDS:-3}
+      AUTH_VAULT_TOKEN_RENEWAL_SECONDS: ${AUTH_VAULT_TOKEN_RENEWAL_SECONDS:-300}
+      AUTH_CSRF_HMAC_KEY: ${AUTH_CSRF_HMAC_KEY:-}
+      AUTH_AUDIT_HASH_KEY: ${AUTH_AUDIT_HASH_KEY:-}
+      AUTH_ALLOWED_ORIGINS: ${AUTH_ALLOWED_ORIGINS:-[]}
+      AUTH_GITHUB_CLIENT_ID: ${AUTH_GITHUB_CLIENT_ID:-}
+      AUTH_GITHUB_CLIENT_SECRET: ${AUTH_GITHUB_CLIENT_SECRET:-}
+      AUTH_GITHUB_REDIRECT_URI: ${AUTH_GITHUB_REDIRECT_URI:-}
+      AUTH_GOOGLE_CLIENT_ID: ${AUTH_GOOGLE_CLIENT_ID:-}
+      AUTH_GOOGLE_CLIENT_SECRET: ${AUTH_GOOGLE_CLIENT_SECRET:-}
+      AUTH_GOOGLE_REDIRECT_URI: ${AUTH_GOOGLE_REDIRECT_URI:-}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
       - ./backend:/app:ro
+      - vault_runtime:/run/vault:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -23,10 +54,13 @@ services:
         condition: service_healthy
       mailpit:
         condition: service_healthy
+      vault-bootstrap:
+        condition: service_completed_successfully
     networks:
       - edge
       - data
       - mail
+      - secrets
     init: true
     read_only: true
     tmpfs:
@@ -160,12 +194,78 @@ services:
       timeout: 3s
       retries: 10
 
+  vault:
+    image: hashicorp/vault:1.21.3@sha256:5f244d447c6f90107149c9565da5ffedf847cec673ba0062a82fc3dd83c89e65
+    command:
+      - server
+      - -dev
+      - -dev-root-token-id=${VAULT_DEV_ROOT_TOKEN_ID:?Set VAULT_DEV_ROOT_TOKEN_ID in .env}
+      - -dev-listen-address=0.0.0.0:8200
+    environment:
+      VAULT_DISABLE_MLOCK: "true"
+      SKIP_SETCAP: "true"
+    networks:
+      - secrets
+    user: "100:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+      - /home/vault:rw,noexec,nosuid,size=16m,uid=100,gid=1000,mode=0700
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    stop_grace_period: 15s
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - VAULT_ADDR=http://127.0.0.1:8200 vault status >/dev/null 2>&1
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  vault-bootstrap:
+    image: hashicorp/vault:1.21.3@sha256:5f244d447c6f90107149c9565da5ffedf847cec673ba0062a82fc3dd83c89e65
+    entrypoint:
+      - /bin/sh
+      - /bootstrap/vault-bootstrap.sh
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_DEV_ROOT_TOKEN_ID:?Set VAULT_DEV_ROOT_TOKEN_ID in .env}
+      VAULT_TRANSIT_MOUNT: ${AUTH_VAULT_TRANSIT_MOUNT:-transit}
+      VAULT_TRANSIT_KEY: ${AUTH_VAULT_TRANSIT_KEY:-trace-provider-credentials}
+      VAULT_BACKEND_TOKEN_FILE: /run/vault/trace-backend-token
+    volumes:
+      - ./scripts/vault-bootstrap.sh:/bootstrap/vault-bootstrap.sh:ro
+      - vault_runtime:/run/vault
+    depends_on:
+      vault:
+        condition: service_healthy
+    networks:
+      - secrets
+    user: "0:0"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    restart: "no"
+
 volumes:
   postgres_data:
+  vault_runtime:
 
 networks:
   edge:
   data:
     internal: true
   mail:
+    internal: true
+  secrets:
     internal: true
