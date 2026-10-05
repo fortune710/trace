@@ -321,3 +321,33 @@ def credential_cipher_from_settings(settings: AuthSettings) -> CredentialCipher 
         ),
         key_version=settings.credential_encryption_key_version,
     )
+
+
+def email_payload_cipher_from_settings(settings: AuthSettings) -> CredentialCipher | VaultTransitCredentialCipher:
+    """Create the distinct cipher used for durable email job payloads.
+
+    The type is intentionally the same as the provider-credential cipher: both
+    provide authenticated encryption, but the Transit key and authenticated context
+    are distinct so an email payload cannot be substituted for a provider credential.
+    """
+    if settings.credential_encryption_provider == "vault":
+        settings._validate_vault_settings()
+        assert settings.vault_addr is not None
+        assert settings.vault_token is not None
+        return VaultTransitCredentialCipher(
+            client=VaultTransitClient(
+                address=settings.vault_addr,
+                token=settings.vault_token.get_secret_value(),
+                timeout_seconds=settings.vault_request_timeout_seconds,
+            ),
+            mount=settings.vault_transit_mount,
+            key=settings.vault_email_transit_key,
+        )
+    if settings.credential_encryption_key is None:
+        raise CredentialEncryptionUnavailable("Email payload encryption configuration is incomplete")
+    return CredentialCipher(
+        key=decode_base64url_key(
+            settings.credential_encryption_key.get_secret_value(), name="AUTH_CREDENTIAL_ENCRYPTION_KEY"
+        ),
+        key_version=settings.credential_encryption_key_version,
+    )

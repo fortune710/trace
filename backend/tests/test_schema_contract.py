@@ -6,6 +6,7 @@ from db.models import (
     AuthSession,
     AuthUser,
     Credential,
+    EmailDeliveryJob,
     EmailVerificationToken,
     PasswordRecoveryToken,
     Project,
@@ -20,6 +21,8 @@ def test_string_columns_use_text_and_provider_fields_use_native_enums() -> None:
     assert isinstance(Project.__table__.c.name.type, sa.Text)
     assert isinstance(Credential.__table__.c.key_version.type, sa.Text)
     assert isinstance(Credential.__table__.c.key_reference.type, sa.Text)
+    assert isinstance(EmailDeliveryJob.__table__.c.payload_key_version.type, sa.Text)
+    assert isinstance(EmailDeliveryJob.__table__.c.payload_key_reference.type, sa.Text)
     assert isinstance(Credential.__table__.c.encryption_provider.type, sa.Enum)
     assert isinstance(AuthIdentity.__table__.c.provider.type, sa.Enum)
     assert isinstance(Project.__table__.c.source_type.type, sa.Enum)
@@ -31,6 +34,7 @@ def test_all_auth_and_public_tables_match_the_database_contract() -> None:
     expected_tables = {
         "auth": {
             "email_verification_tokens",
+            "email_delivery_jobs",
             "identities",
             "password_credentials",
             "password_recovery_tokens",

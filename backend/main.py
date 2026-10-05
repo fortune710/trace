@@ -14,6 +14,8 @@ from auth.config import AuthSettings, get_auth_settings
 from auth.credentials import CredentialEncryptionUnavailable, VaultTransitClient
 from auth.errors import install_auth_error_handlers
 from auth.http import install_auth_cors
+from auth.oauth import install_oauth_routes
+from auth.routes import install_auth_routes
 from auth.tokens import decode_base64url_key
 from auth.uuids import uuid7
 from db.session import close_redis_client, get_engine, get_redis_client
@@ -85,7 +87,10 @@ def create_app(settings: AuthSettings | None = None) -> FastAPI:
     application = FastAPI(title="Trace API", lifespan=lifespan)
     install_auth_cors(application, auth_settings)
     application.add_middleware(RequestIdMiddleware)
-    install_auth_error_handlers(application, _audit_hasher(auth_settings))
+    audit_hasher = _audit_hasher(auth_settings)
+    install_auth_error_handlers(application, audit_hasher)
+    install_auth_routes(application, auth_settings, audit_hasher)
+    install_oauth_routes(application, auth_settings, audit_hasher)
 
     @application.get("/")
     def read_root() -> dict[str, str]:

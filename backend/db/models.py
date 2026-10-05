@@ -45,6 +45,18 @@ class CredentialEncryptionProvider(str, Enum):
     VAULT = "vault"
 
 
+class EmailDeliveryKind(str, Enum):
+    VERIFICATION = "verification"
+    PASSWORD_RECOVERY = "password_recovery"
+
+
+class EmailDeliveryStatus(str, Enum):
+    PENDING = "pending"
+    SENDING = "sending"
+    SENT = "sent"
+    FAILED = "failed"
+
+
 def native_enum(enum_class: type[Enum], name: str, schema: str) -> sa.Enum:
     return sa.Enum(
         enum_class,
@@ -203,6 +215,45 @@ class PasswordRecoveryToken(Base):
     )
 
 
+class EmailDeliveryJob(Base):
+    __tablename__ = "email_delivery_jobs"
+    __table_args__ = {"schema": "auth"}
+
+    id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=sa.text("public.uuidv7()")
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), sa.ForeignKey("auth.users.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[EmailDeliveryKind] = mapped_column(
+        native_enum(EmailDeliveryKind, "email_delivery_kind", "auth"), nullable=False
+    )
+    status: Mapped[EmailDeliveryStatus] = mapped_column(
+        native_enum(EmailDeliveryStatus, "email_delivery_status", "auth"),
+        nullable=False,
+        server_default=sa.text("'pending'::auth.email_delivery_status"),
+    )
+    payload_ciphertext: Mapped[bytes] = mapped_column(sa.LargeBinary(), nullable=False)
+    payload_nonce: Mapped[bytes] = mapped_column(sa.LargeBinary(), nullable=False)
+    payload_key_version: Mapped[str] = mapped_column(sa.Text(), nullable=False)
+    payload_aad_version: Mapped[str] = mapped_column(sa.Text(), nullable=False, server_default=sa.text("'v1'"))
+    payload_encryption_provider: Mapped[CredentialEncryptionProvider] = mapped_column(
+        native_enum(CredentialEncryptionProvider, "email_payload_encryption_provider", "auth"), nullable=False
+    )
+    payload_key_reference: Mapped[str] = mapped_column(sa.Text(), nullable=False)
+    attempt_count: Mapped[int] = mapped_column(sa.Integer(), nullable=False, server_default=sa.text("0"))
+    published_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    failed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+    )
+
+
 class User(Base):
     __tablename__ = "users"
     __table_args__ = {"schema": "public"}
@@ -294,6 +345,12 @@ sa.Index(
     sa.func.lower(AuthUser.email),
     unique=True,
     postgresql_where=AuthUser.email.is_not(None),
+)
+sa.Index(
+    "auth_email_delivery_jobs_pending_created_idx",
+    EmailDeliveryJob.status,
+    EmailDeliveryJob.created_at,
+    postgresql_where=EmailDeliveryJob.status == EmailDeliveryStatus.PENDING,
 )
 sa.Index("auth_identities_user_created_idx", AuthIdentity.user_id, AuthIdentity.created_at.desc())
 sa.Index("auth_sessions_user_expires_idx", AuthSession.user_id, AuthSession.expires_at.desc())

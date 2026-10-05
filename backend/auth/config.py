@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +34,7 @@ class AuthSettings(BaseSettings):
     vault_token: SecretStr | None = None
     vault_transit_mount: str = "transit"
     vault_transit_key: str = "trace-provider-credentials"
+    vault_email_transit_key: str = "trace-email-delivery"
     vault_request_timeout_seconds: float = 3.0
     vault_token_renewal_seconds: int = 300
     csrf_hmac_key: SecretStr | None = None
@@ -42,6 +43,16 @@ class AuthSettings(BaseSettings):
     refresh_token_days: int = 7
     email_verification_hours: int = 24
     password_recovery_minutes: int = 15
+    email_max_retries: int = 3
+    email_retry_delays_seconds: tuple[int, int, int] = (30, 300, 1800)
+    email_from: str = "Trace <no-reply@trace.local>"
+    frontend_url: str = "http://localhost:5173"
+    smtp_host: str | None = Field(default=None, validation_alias=AliasChoices("AUTH_SMTP_HOST", "SMTP_HOST"))
+    smtp_port: int = Field(default=1025, validation_alias=AliasChoices("AUTH_SMTP_PORT", "SMTP_PORT"))
+    smtp_username: str | None = Field(default=None, validation_alias=AliasChoices("AUTH_SMTP_USERNAME", "SMTP_USERNAME"))
+    smtp_password: SecretStr | None = Field(default=None, validation_alias=AliasChoices("AUTH_SMTP_PASSWORD", "SMTP_PASSWORD"))
+    smtp_use_starttls: bool = False
+    rabbitmq_url: str | None = None
     cookie_secure: bool = True
     access_cookie_name: str = "__Host-trace_access"
     refresh_cookie_name: str = "__Secure-trace_refresh"
@@ -84,6 +95,16 @@ class AuthSettings(BaseSettings):
         if self.access_token_minutes != 60 or self.refresh_token_days != 7:
             raise AuthenticationConfigurationError("Configured token lifetimes do not match the approved security policy")
 
+        if self.email_max_retries < 1 or len(self.email_retry_delays_seconds) != self.email_max_retries:
+            raise AuthenticationConfigurationError("Email retry configuration is invalid")
+        if any(delay <= 0 or delay > 86_400 for delay in self.email_retry_delays_seconds):
+            raise AuthenticationConfigurationError("Email retry configuration is invalid")
+        if not self.email_from or len(self.email_from) > 320:
+            raise AuthenticationConfigurationError("Email sender configuration is invalid")
+        frontend = urlparse(self.frontend_url)
+        if frontend.scheme not in {"http", "https"} or not frontend.netloc or frontend.username or frontend.password:
+            raise AuthenticationConfigurationError("Frontend URL configuration is invalid")
+
         if self.credential_encryption_provider == "vault":
             self._validate_vault_settings()
 
@@ -98,6 +119,10 @@ class AuthSettings(BaseSettings):
                 raise AuthenticationConfigurationError("Production cookies must support the approved cross-site frontend")
             if set(self.allowed_origins) != PRODUCTION_FRONTEND_ORIGINS:
                 raise AuthenticationConfigurationError("Production authentication origins do not match the approved frontend origins")
+            if self.frontend_url.rstrip("/") not in PRODUCTION_FRONTEND_ORIGINS:
+                raise AuthenticationConfigurationError("Production email links must use an approved frontend origin")
+            if not self.smtp_host or not self.rabbitmq_url:
+                raise AuthenticationConfigurationError("Production email delivery configuration is incomplete")
         elif self.cookie_same_site == "none" and not self.cookie_secure:
             raise AuthenticationConfigurationError("SameSite=None cookies require the Secure attribute")
 
@@ -114,7 +139,7 @@ class AuthSettings(BaseSettings):
             raise AuthenticationConfigurationError("Vault credential encryption configuration is invalid")
         if self.environment == "production" and parsed.scheme != "https":
             raise AuthenticationConfigurationError("Production Vault connections require HTTPS")
-        for value in (self.vault_transit_mount, self.vault_transit_key):
+        for value in (self.vault_transit_mount, self.vault_transit_key, self.vault_email_transit_key):
             if not value or len(value) > 128 or not value.replace("-", "").replace("_", "").isalnum():
                 raise AuthenticationConfigurationError("Vault credential encryption configuration is invalid")
         if not 0 < self.vault_request_timeout_seconds <= 10:

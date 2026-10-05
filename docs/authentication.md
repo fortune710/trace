@@ -55,6 +55,8 @@ Passwords use Argon2id with a minimum 12-character policy and a 1024-byte upper 
 
 Registration creates a single-use email-verification token. Recovery requests always return `202` with the same generic response, whether or not an eligible account exists. Verification and recovery tokens are 256-bit random values, stored only as purpose-bound HMAC digests. Verification tokens expire after 24 hours; recovery tokens expire after 15 minutes. Both are consumed atomically.
 
+The same transaction that creates either token also creates an `auth.email_delivery_jobs` record. Its payload is encrypted with the dedicated Vault Transit email key; RabbitMQ receives only the job UUID. The email worker uses durable publish confirmations and manual acknowledgements, then retries transient SMTP failures through three fixed delay queues. After `AUTH_EMAIL_MAX_RETRIES` (three by default), terminal work is routed to `trace.email.dead-letter` for operator inspection. See [Queueing Convention](queueing.md) for the topology and recovery rules.
+
 The recovery link carries its token in a URL fragment. The frontend submits it in the confirmation request body over HTTPS, avoiding query-string and referrer leakage. A successful reset changes the password, consumes outstanding recovery tokens, revokes all sessions, and requires fresh authentication.
 
 ## Rate limits
