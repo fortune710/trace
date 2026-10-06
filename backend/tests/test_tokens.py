@@ -3,7 +3,12 @@ from uuid import UUID
 
 import pytest
 
-from auth.tokens import InvalidAccessToken, JWTService, TokenPurpose, digest_opaque_token
+from auth.tokens import (
+    InvalidAccessToken,
+    JWTService,
+    TokenPurpose,
+    digest_opaque_token,
+)
 
 
 def test_access_token_has_the_approved_contract() -> None:
@@ -47,7 +52,11 @@ def test_access_token_is_rejected_by_a_different_audience() -> None:
 
 
 def test_opaque_token_digests_are_purpose_bound() -> None:
-    refresh_digest = digest_opaque_token("a" * 43, key=b"b" * 32, purpose=TokenPurpose.REFRESH)
-    recovery_digest = digest_opaque_token("a" * 43, key=b"b" * 32, purpose=TokenPurpose.PASSWORD_RECOVERY)
+    refresh_digest = digest_opaque_token(
+        "a" * 43, key=b"b" * 32, purpose=TokenPurpose.REFRESH
+    )
+    recovery_digest = digest_opaque_token(
+        "a" * 43, key=b"b" * 32, purpose=TokenPurpose.PASSWORD_RECOVERY
+    )
 
     assert refresh_digest != recovery_digest

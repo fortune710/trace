@@ -46,7 +46,14 @@ def _request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "unavailable")
 
 
-def _error_response(*, code: str, message: str, request_id: str, status_code: int, headers: Mapping[str, str] | None = None) -> JSONResponse:
+def _error_response(
+    *,
+    code: str,
+    message: str,
+    request_id: str,
+    status_code: int,
+    headers: Mapping[str, str] | None = None,
+) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content={"error": {"code": code, "message": message, "request_id": request_id}},
@@ -54,10 +61,14 @@ def _error_response(*, code: str, message: str, request_id: str, status_code: in
     )
 
 
-def install_auth_error_handlers(app: FastAPI, audit_hasher: AuditHasher | None = None) -> None:
+def install_auth_error_handlers(
+    app: FastAPI, audit_hasher: AuditHasher | None = None
+) -> None:
     @app.exception_handler(AuthError)
     async def auth_error_handler(request: Request, error: AuthError) -> JSONResponse:
-        context = {"policy": error.policy} if isinstance(error, RateLimitExceeded) else None
+        context = (
+            {"policy": error.policy} if isinstance(error, RateLimitExceeded) else None
+        )
         log_auth_event(
             event=error.event,
             outcome="rejected",
@@ -79,7 +90,9 @@ def install_auth_error_handlers(app: FastAPI, audit_hasher: AuditHasher | None =
         )
 
     @app.exception_handler(RequestValidationError)
-    async def request_validation_error_handler(request: Request, error: RequestValidationError) -> JSONResponse:
+    async def request_validation_error_handler(
+        request: Request, error: RequestValidationError
+    ) -> JSONResponse:
         log_auth_event(
             event="request",
             outcome="rejected",

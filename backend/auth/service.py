@@ -12,11 +12,24 @@ from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.engine import Engine
 
 from auth.config import AuthSettings
-from auth.credentials import CredentialCipher, CredentialEncryptionUnavailable, VaultTransitCredentialCipher, email_payload_cipher_from_settings
+from auth.credentials import (
+    CredentialCipher,
+    CredentialEncryptionUnavailable,
+    VaultTransitCredentialCipher,
+    email_payload_cipher_from_settings,
+)
 from auth.email_delivery import EmailJobDispatcher, EmailJobStore
 from auth.passwords import hash_password, password_needs_rehash, verify_password
 from auth.queueing import RabbitMQEmailPublisher
-from auth.tokens import AccessTokenClaims, JWTService, TokenPurpose, decode_base64url_key, digest_opaque_token, generate_opaque_token, jwt_service_from_settings
+from auth.tokens import (
+    AccessTokenClaims,
+    JWTService,
+    TokenPurpose,
+    decode_base64url_key,
+    digest_opaque_token,
+    generate_opaque_token,
+    jwt_service_from_settings,
+)
 from auth.uuids import uuid7
 from db.models import (
     AuthIdentity,
@@ -70,7 +83,7 @@ class AuthService:
         self._dispatcher = dispatcher
 
     @classmethod
-    def from_settings(cls, *, engine: Engine, settings: AuthSettings) -> "AuthService":
+    def from_settings(cls, *, engine: Engine, settings: AuthSettings) -> AuthService:
         settings.validate_for_authentication()
         assert settings.token_hash_key is not None
         dispatcher = None
@@ -84,12 +97,16 @@ class AuthService:
             engine=engine,
             settings=settings,
             jwt_service=jwt_service_from_settings(settings),
-            token_hash_key=decode_base64url_key(settings.token_hash_key.get_secret_value(), name="AUTH_TOKEN_HASH_KEY"),
+            token_hash_key=decode_base64url_key(
+                settings.token_hash_key.get_secret_value(), name="AUTH_TOKEN_HASH_KEY"
+            ),
             email_cipher=email_payload_cipher_from_settings(settings),
             dispatcher=dispatcher,
         )
 
-    def register(self, *, email: str, password: str, display_name: str | None, destination: str) -> None:
+    def register(
+        self, *, email: str, password: str, display_name: str | None, destination: str
+    ) -> None:
         normalized_email = _normalize_email(email)
         user_id = uuid7()
         token = generate_opaque_token()
@@ -98,7 +115,9 @@ class AuthService:
             with self._engine.begin() as connection:
                 inserted = connection.execute(
                     postgres_insert(AuthUser)
-                    .values(id=user_id, email=normalized_email, status=UserStatus.ACTIVE)
+                    .values(
+                        id=user_id, email=normalized_email, status=UserStatus.ACTIVE
+                    )
                     .on_conflict_do_nothing(
                         index_elements=[sa.func.lower(AuthUser.email)],
                         index_where=AuthUser.email.is_not(None),
@@ -107,7 +126,9 @@ class AuthService:
                 ).scalar_one_or_none()
                 if inserted is None:
                     return
-                connection.execute(sa.insert(User).values(id=user_id, display_name=display_name))
+                connection.execute(
+                    sa.insert(User).values(id=user_id, display_name=display_name)
+                )
                 connection.execute(
                     sa.insert(AuthIdentity).values(
                         id=uuid7(),
@@ -116,55 +137,79 @@ class AuthService:
                         provider_subject=normalized_email,
                     )
                 )
-                connection.execute(sa.insert(PasswordCredential).values(user_id=user_id, password_hash=hash_password(password)))
+                connection.execute(
+                    sa.insert(PasswordCredential).values(
+                        user_id=user_id, password_hash=hash_password(password)
+                    )
+                )
                 connection.execute(
                     sa.insert(EmailVerificationToken).values(
                         id=uuid7(),
                         user_id=user_id,
                         token_hash=self._digest(token, TokenPurpose.EMAIL_VERIFICATION),
-                        expires_at=_now() + timedelta(hours=self._settings.email_verification_hours),
+                        expires_at=_now()
+                        + timedelta(hours=self._settings.email_verification_hours),
                     )
                 )
                 job_id = self._jobs.create(
                     connection,
                     user_id=user_id,
                     kind=EmailDeliveryKind.VERIFICATION,
-                    payload={"email": normalized_email, "token": token, "destination": destination},
+                    payload={
+                        "email": normalized_email,
+                        "token": token,
+                        "destination": destination,
+                    },
                     cipher=self._email_cipher,
                 )
         except (sa.exc.SQLAlchemyError, CredentialEncryptionUnavailable) as error:
-            raise AuthenticationUnavailable("Authentication database is unavailable") from error
+            raise AuthenticationUnavailable(
+                "Authentication database is unavailable"
+            ) from error
         self._dispatch(job_id)
 
     def verify_email(self, *, token: str) -> bool:
         try:
             with self._engine.begin() as connection:
-                token_row = connection.execute(
-                    sa.select(EmailVerificationToken)
-                    .where(
-                        EmailVerificationToken.token_hash == self._digest(token, TokenPurpose.EMAIL_VERIFICATION),
-                        EmailVerificationToken.used_at.is_(None),
-                        EmailVerificationToken.expires_at > _now(),
+                token_row = (
+                    connection.execute(
+                        sa.select(EmailVerificationToken)
+                        .where(
+                            EmailVerificationToken.token_hash
+                            == self._digest(token, TokenPurpose.EMAIL_VERIFICATION),
+                            EmailVerificationToken.used_at.is_(None),
+                            EmailVerificationToken.expires_at > _now(),
+                        )
+                        .with_for_update()
                     )
-                    .with_for_update()
-                ).mappings().one_or_none()
+                    .mappings()
+                    .one_or_none()
+                )
                 if token_row is None:
                     return False
                 connection.execute(
                     sa.update(EmailVerificationToken)
-                    .where(EmailVerificationToken.id == token_row["id"], EmailVerificationToken.used_at.is_(None))
+                    .where(
+                        EmailVerificationToken.id == token_row["id"],
+                        EmailVerificationToken.used_at.is_(None),
+                    )
                     .values(used_at=sa.func.now())
                 )
                 connection.execute(
                     sa.update(AuthUser)
-                    .where(AuthUser.id == token_row["user_id"], AuthUser.email_confirmed_at.is_(None))
+                    .where(
+                        AuthUser.id == token_row["user_id"],
+                        AuthUser.email_confirmed_at.is_(None),
+                    )
                     .values(email_confirmed_at=sa.func.now(), updated_at=sa.func.now())
                 )
                 return True
         except (ValueError, sa.exc.SQLAlchemyError) as error:
             if isinstance(error, ValueError):
                 return False
-            raise AuthenticationUnavailable("Authentication database is unavailable") from error
+            raise AuthenticationUnavailable(
+                "Authentication database is unavailable"
+            ) from error
 
     def login(self, *, email: str, password: str) -> LoginResult:
         try:
@@ -173,17 +218,24 @@ class AuthService:
             return LoginResult("rejected")
         try:
             with self._engine.begin() as connection:
-                row = connection.execute(
-                    sa.select(
-                        AuthUser.id,
-                        AuthUser.status,
-                        AuthUser.email_confirmed_at,
-                        PasswordCredential.password_hash,
+                row = (
+                    connection.execute(
+                        sa.select(
+                            AuthUser.id,
+                            AuthUser.status,
+                            AuthUser.email_confirmed_at,
+                            PasswordCredential.password_hash,
+                        )
+                        .join(
+                            PasswordCredential,
+                            PasswordCredential.user_id == AuthUser.id,
+                        )
+                        .where(sa.func.lower(AuthUser.email) == normalized_email)
+                        .with_for_update()
                     )
-                    .join(PasswordCredential, PasswordCredential.user_id == AuthUser.id)
-                    .where(sa.func.lower(AuthUser.email) == normalized_email)
-                    .with_for_update()
-                ).mappings().one_or_none()
+                    .mappings()
+                    .one_or_none()
+                )
                 if (
                     row is None
                     or row["status"] != UserStatus.ACTIVE
@@ -195,19 +247,31 @@ class AuthService:
                     connection.execute(
                         sa.update(PasswordCredential)
                         .where(PasswordCredential.user_id == row["id"])
-                        .values(password_hash=hash_password(password), password_changed_at=sa.func.now())
+                        .values(
+                            password_hash=hash_password(password),
+                            password_changed_at=sa.func.now(),
+                        )
                     )
-                return LoginResult("authenticated", self._create_session(connection, user_id=row["id"]))
+                return LoginResult(
+                    "authenticated", self._create_session(connection, user_id=row["id"])
+                )
         except sa.exc.SQLAlchemyError as error:
-            raise AuthenticationUnavailable("Authentication database is unavailable") from error
+            raise AuthenticationUnavailable(
+                "Authentication database is unavailable"
+            ) from error
 
-    def oauth_login(self, *, provider: IdentityProvider, subject: str, email: str) -> LoginResult:
+    def oauth_login(
+        self, *, provider: IdentityProvider, subject: str, email: str
+    ) -> LoginResult:
         """Find an exact provider identity or atomically create a new OAuth account.
 
         A collision with an existing email account is intentionally rejected; linking
         requires an authenticated account owner and is not inferred from email.
         """
-        if provider not in {IdentityProvider.GITHUB, IdentityProvider.GOOGLE} or not subject:
+        if (
+            provider not in {IdentityProvider.GITHUB, IdentityProvider.GOOGLE}
+            or not subject
+        ):
             return LoginResult("rejected")
         try:
             normalized_email = _normalize_email(email)
@@ -215,16 +279,26 @@ class AuthService:
             return LoginResult("rejected")
         try:
             with self._engine.begin() as connection:
-                existing = connection.execute(
-                    sa.select(AuthIdentity.user_id, AuthUser.status)
-                    .join(AuthUser, AuthUser.id == AuthIdentity.user_id)
-                    .where(AuthIdentity.provider == provider, AuthIdentity.provider_subject == subject)
-                    .with_for_update()
-                ).mappings().one_or_none()
+                existing = (
+                    connection.execute(
+                        sa.select(AuthIdentity.user_id, AuthUser.status)
+                        .join(AuthUser, AuthUser.id == AuthIdentity.user_id)
+                        .where(
+                            AuthIdentity.provider == provider,
+                            AuthIdentity.provider_subject == subject,
+                        )
+                        .with_for_update()
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
                 if existing is not None:
                     if existing["status"] != UserStatus.ACTIVE:
                         return LoginResult("rejected")
-                    return LoginResult("authenticated", self._create_session(connection, user_id=existing["user_id"]))
+                    return LoginResult(
+                        "authenticated",
+                        self._create_session(connection, user_id=existing["user_id"]),
+                    )
 
                 user_id = uuid7()
                 inserted = connection.execute(
@@ -252,9 +326,13 @@ class AuthService:
                         provider_subject=subject,
                     )
                 )
-                return LoginResult("authenticated", self._create_session(connection, user_id=user_id))
+                return LoginResult(
+                    "authenticated", self._create_session(connection, user_id=user_id)
+                )
         except sa.exc.SQLAlchemyError as error:
-            raise AuthenticationUnavailable("Authentication database is unavailable") from error
+            raise AuthenticationUnavailable(
+                "Authentication database is unavailable"
+            ) from error
 
     def refresh(self, *, refresh_token: str) -> LoginResult:
         try:
@@ -263,12 +341,20 @@ class AuthService:
             return LoginResult("rejected")
         try:
             with self._engine.begin() as connection:
-                row = connection.execute(
-                    sa.select(RefreshToken, AuthSession.user_id, AuthSession.revoked_at.label("session_revoked_at"))
-                    .join(AuthSession, AuthSession.id == RefreshToken.session_id)
-                    .where(RefreshToken.token_hash == token_hash)
-                    .with_for_update()
-                ).mappings().one_or_none()
+                row = (
+                    connection.execute(
+                        sa.select(
+                            RefreshToken,
+                            AuthSession.user_id,
+                            AuthSession.revoked_at.label("session_revoked_at"),
+                        )
+                        .join(AuthSession, AuthSession.id == RefreshToken.session_id)
+                        .where(RefreshToken.token_hash == token_hash)
+                        .with_for_update()
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
                 if row is None:
                     return LoginResult("rejected")
                 invalid = (
@@ -280,25 +366,35 @@ class AuthService:
                 if invalid:
                     self._revoke_session(connection, row["session_id"])
                     return LoginResult("rejected")
-                replacement = self._create_session_token(connection, session_id=row["session_id"])
+                replacement = self._create_session_token(
+                    connection, session_id=row["session_id"]
+                )
                 connection.execute(
                     sa.update(RefreshToken)
-                    .where(RefreshToken.id == row["id"], RefreshToken.consumed_at.is_(None))
+                    .where(
+                        RefreshToken.id == row["id"], RefreshToken.consumed_at.is_(None)
+                    )
                     .values(consumed_at=sa.func.now(), replaced_by_id=replacement[0])
                 )
                 connection.execute(
-                    sa.update(AuthSession).where(AuthSession.id == row["session_id"]).values(last_seen_at=sa.func.now())
+                    sa.update(AuthSession)
+                    .where(AuthSession.id == row["session_id"])
+                    .values(last_seen_at=sa.func.now())
                 )
                 return LoginResult(
                     "authenticated",
                     SessionTokens(
-                        access_token=self._jwt.issue(user_id=row["user_id"], session_id=row["session_id"]),
+                        access_token=self._jwt.issue(
+                            user_id=row["user_id"], session_id=row["session_id"]
+                        ),
                         refresh_token=replacement[1],
                         session_id=row["session_id"],
                     ),
                 )
         except sa.exc.SQLAlchemyError as error:
-            raise AuthenticationUnavailable("Authentication database is unavailable") from error
+            raise AuthenticationUnavailable(
+                "Authentication database is unavailable"
+            ) from error
 
     def recover_password(self, *, email: str, destination: str) -> None:
         try:
@@ -309,21 +405,31 @@ class AuthService:
         job_id: UUID | None = None
         try:
             with self._engine.begin() as connection:
-                row = connection.execute(
-                    sa.select(AuthUser.id, AuthUser.email)
-                    .join(PasswordCredential, PasswordCredential.user_id == AuthUser.id)
-                    .where(
-                        sa.func.lower(AuthUser.email) == normalized_email,
-                        AuthUser.status == UserStatus.ACTIVE,
-                        AuthUser.email_confirmed_at.is_not(None),
+                row = (
+                    connection.execute(
+                        sa.select(AuthUser.id, AuthUser.email)
+                        .join(
+                            PasswordCredential,
+                            PasswordCredential.user_id == AuthUser.id,
+                        )
+                        .where(
+                            sa.func.lower(AuthUser.email) == normalized_email,
+                            AuthUser.status == UserStatus.ACTIVE,
+                            AuthUser.email_confirmed_at.is_not(None),
+                        )
+                        .with_for_update()
                     )
-                    .with_for_update()
-                ).mappings().one_or_none()
+                    .mappings()
+                    .one_or_none()
+                )
                 if row is None:
                     return
                 connection.execute(
                     sa.update(PasswordRecoveryToken)
-                    .where(PasswordRecoveryToken.user_id == row["id"], PasswordRecoveryToken.used_at.is_(None))
+                    .where(
+                        PasswordRecoveryToken.user_id == row["id"],
+                        PasswordRecoveryToken.used_at.is_(None),
+                    )
                     .values(used_at=sa.func.now())
                 )
                 connection.execute(
@@ -331,53 +437,78 @@ class AuthService:
                         id=uuid7(),
                         user_id=row["id"],
                         token_hash=self._digest(token, TokenPurpose.PASSWORD_RECOVERY),
-                        expires_at=_now() + timedelta(minutes=self._settings.password_recovery_minutes),
+                        expires_at=_now()
+                        + timedelta(minutes=self._settings.password_recovery_minutes),
                     )
                 )
                 job_id = self._jobs.create(
                     connection,
                     user_id=row["id"],
                     kind=EmailDeliveryKind.PASSWORD_RECOVERY,
-                    payload={"email": row["email"], "token": token, "destination": destination},
+                    payload={
+                        "email": row["email"],
+                        "token": token,
+                        "destination": destination,
+                    },
                     cipher=self._email_cipher,
                 )
         except (sa.exc.SQLAlchemyError, CredentialEncryptionUnavailable) as error:
-            raise AuthenticationUnavailable("Authentication database is unavailable") from error
+            raise AuthenticationUnavailable(
+                "Authentication database is unavailable"
+            ) from error
         self._dispatch(job_id)
 
     def reset_password(self, *, token: str, password: str) -> bool:
         try:
             with self._engine.begin() as connection:
-                row = connection.execute(
-                    sa.select(PasswordRecoveryToken)
-                    .where(
-                        PasswordRecoveryToken.token_hash == self._digest(token, TokenPurpose.PASSWORD_RECOVERY),
-                        PasswordRecoveryToken.used_at.is_(None),
-                        PasswordRecoveryToken.expires_at > _now(),
+                row = (
+                    connection.execute(
+                        sa.select(PasswordRecoveryToken)
+                        .where(
+                            PasswordRecoveryToken.token_hash
+                            == self._digest(token, TokenPurpose.PASSWORD_RECOVERY),
+                            PasswordRecoveryToken.used_at.is_(None),
+                            PasswordRecoveryToken.expires_at > _now(),
+                        )
+                        .with_for_update()
                     )
-                    .with_for_update()
-                ).mappings().one_or_none()
+                    .mappings()
+                    .one_or_none()
+                )
                 if row is None:
                     return False
                 connection.execute(
                     sa.update(PasswordCredential)
                     .where(PasswordCredential.user_id == row["user_id"])
-                    .values(password_hash=hash_password(password), password_changed_at=sa.func.now())
+                    .values(
+                        password_hash=hash_password(password),
+                        password_changed_at=sa.func.now(),
+                    )
                 )
                 connection.execute(
                     sa.update(PasswordRecoveryToken)
-                    .where(PasswordRecoveryToken.user_id == row["user_id"], PasswordRecoveryToken.used_at.is_(None))
+                    .where(
+                        PasswordRecoveryToken.user_id == row["user_id"],
+                        PasswordRecoveryToken.used_at.is_(None),
+                    )
                     .values(used_at=sa.func.now())
                 )
                 connection.execute(
                     sa.update(AuthSession)
-                    .where(AuthSession.user_id == row["user_id"], AuthSession.revoked_at.is_(None))
+                    .where(
+                        AuthSession.user_id == row["user_id"],
+                        AuthSession.revoked_at.is_(None),
+                    )
                     .values(revoked_at=sa.func.now())
                 )
                 connection.execute(
                     sa.update(RefreshToken)
                     .where(
-                        RefreshToken.session_id.in_(sa.select(AuthSession.id).where(AuthSession.user_id == row["user_id"])),
+                        RefreshToken.session_id.in_(
+                            sa.select(AuthSession.id).where(
+                                AuthSession.user_id == row["user_id"]
+                            )
+                        ),
                         RefreshToken.revoked_at.is_(None),
                     )
                     .values(revoked_at=sa.func.now())
@@ -386,7 +517,9 @@ class AuthService:
         except (ValueError, sa.exc.SQLAlchemyError) as error:
             if isinstance(error, ValueError):
                 return False
-            raise AuthenticationUnavailable("Authentication database is unavailable") from error
+            raise AuthenticationUnavailable(
+                "Authentication database is unavailable"
+            ) from error
 
     def logout(self, *, refresh_token: str | None) -> None:
         if not refresh_token:
@@ -398,12 +531,16 @@ class AuthService:
         try:
             with self._engine.begin() as connection:
                 session_id = connection.execute(
-                    sa.select(RefreshToken.session_id).where(RefreshToken.token_hash == token_hash).with_for_update()
+                    sa.select(RefreshToken.session_id)
+                    .where(RefreshToken.token_hash == token_hash)
+                    .with_for_update()
                 ).scalar_one_or_none()
                 if session_id is not None:
                     self._revoke_session(connection, session_id)
         except sa.exc.SQLAlchemyError as error:
-            raise AuthenticationUnavailable("Authentication database is unavailable") from error
+            raise AuthenticationUnavailable(
+                "Authentication database is unavailable"
+            ) from error
 
     def session_id_for_refresh(self, refresh_token: str | None) -> UUID | None:
         if not refresh_token:
@@ -411,26 +548,35 @@ class AuthService:
         try:
             token_hash = self._digest(refresh_token, TokenPurpose.REFRESH)
             with self._engine.connect() as connection:
-                return connection.execute(sa.select(RefreshToken.session_id).where(RefreshToken.token_hash == token_hash)).scalar_one_or_none()
+                return connection.execute(
+                    sa.select(RefreshToken.session_id).where(
+                        RefreshToken.token_hash == token_hash
+                    )
+                ).scalar_one_or_none()
         except (ValueError, sa.exc.SQLAlchemyError):
             return None
 
     def is_session_active(self, *, user_id: UUID, session_id: UUID) -> bool:
         try:
             with self._engine.connect() as connection:
-                return connection.execute(
-                    sa.select(AuthSession.id)
-                    .join(AuthUser, AuthUser.id == AuthSession.user_id)
-                    .where(
-                        AuthSession.id == session_id,
-                        AuthSession.user_id == user_id,
-                        AuthSession.revoked_at.is_(None),
-                        AuthSession.expires_at > _now(),
-                        AuthUser.status == UserStatus.ACTIVE,
-                    )
-                ).scalar_one_or_none() is not None
+                return (
+                    connection.execute(
+                        sa.select(AuthSession.id)
+                        .join(AuthUser, AuthUser.id == AuthSession.user_id)
+                        .where(
+                            AuthSession.id == session_id,
+                            AuthSession.user_id == user_id,
+                            AuthSession.revoked_at.is_(None),
+                            AuthSession.expires_at > _now(),
+                            AuthUser.status == UserStatus.ACTIVE,
+                        )
+                    ).scalar_one_or_none()
+                    is not None
+                )
         except sa.exc.SQLAlchemyError as error:
-            raise AuthenticationUnavailable("Authentication database is unavailable") from error
+            raise AuthenticationUnavailable(
+                "Authentication database is unavailable"
+            ) from error
 
     def access_claims(self, access_token: str | None) -> AccessTokenClaims | None:
         if not access_token:
@@ -439,9 +585,17 @@ class AuthService:
             claims = self._jwt.verify(access_token)
         except ValueError:
             return None
-        return claims if self.is_session_active(user_id=claims.user_id, session_id=claims.session_id) else None
+        return (
+            claims
+            if self.is_session_active(
+                user_id=claims.user_id, session_id=claims.session_id
+            )
+            else None
+        )
 
-    def _create_session(self, connection: sa.Connection, *, user_id: UUID) -> SessionTokens:
+    def _create_session(
+        self, connection: sa.Connection, *, user_id: UUID
+    ) -> SessionTokens:
         session_id = uuid7()
         connection.execute(
             sa.insert(AuthSession).values(
@@ -457,7 +611,9 @@ class AuthService:
             session_id=session_id,
         )
 
-    def _create_session_token(self, connection: sa.Connection, *, session_id: UUID) -> tuple[UUID, str]:
+    def _create_session_token(
+        self, connection: sa.Connection, *, session_id: UUID
+    ) -> tuple[UUID, str]:
         token_id = uuid7()
         raw_token = generate_opaque_token()
         connection.execute(
@@ -472,11 +628,15 @@ class AuthService:
 
     def _revoke_session(self, connection: sa.Connection, session_id: UUID) -> None:
         connection.execute(
-            sa.update(AuthSession).where(AuthSession.id == session_id, AuthSession.revoked_at.is_(None)).values(revoked_at=sa.func.now())
+            sa.update(AuthSession)
+            .where(AuthSession.id == session_id, AuthSession.revoked_at.is_(None))
+            .values(revoked_at=sa.func.now())
         )
         connection.execute(
             sa.update(RefreshToken)
-            .where(RefreshToken.session_id == session_id, RefreshToken.revoked_at.is_(None))
+            .where(
+                RefreshToken.session_id == session_id, RefreshToken.revoked_at.is_(None)
+            )
             .values(revoked_at=sa.func.now())
         )
 

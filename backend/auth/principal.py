@@ -5,7 +5,7 @@ from typing import Protocol
 from uuid import UUID
 
 from auth.errors import AuthError
-from auth.tokens import JWTService, InvalidAccessToken
+from auth.tokens import InvalidAccessToken, JWTService
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,9 @@ async def authenticate_access_token(
     except InvalidAccessToken as error:
         raise _authentication_required() from error
 
-    if not await session_status_reader.is_active(user_id=claims.user_id, session_id=claims.session_id):
+    if not await session_status_reader.is_active(
+        user_id=claims.user_id, session_id=claims.session_id
+    ):
         raise _authentication_required()
 
     return AuthenticatedPrincipal(user_id=claims.user_id, session_id=claims.session_id)

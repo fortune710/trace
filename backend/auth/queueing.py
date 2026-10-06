@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
-from typing import Any, Callable, Protocol
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any, Protocol
 from uuid import UUID
-
 
 try:  # Keeps unit-test imports useful before the optional runtime is constructed.
     import pika
-    from pika.exceptions import AMQPError, AMQPConnectionError
+    from pika.exceptions import AMQPConnectionError, AMQPError
 except ImportError:  # pragma: no cover - exercised only in an incomplete environment
-    pika = None  # type: ignore[assignment]
+    pika = None
     AMQPError = AMQPConnectionError = Exception
 
 
@@ -20,7 +20,11 @@ EMAIL_EXCHANGE = "trace.email"
 EMAIL_MAIN_QUEUE = "trace.email.send"
 EMAIL_DLX = "trace.email.dlx"
 EMAIL_DEAD_LETTER_QUEUE = "trace.email.dead-letter"
-EMAIL_RETRY_QUEUES = ("trace.email.retry.1", "trace.email.retry.2", "trace.email.retry.3")
+EMAIL_RETRY_QUEUES = (
+    "trace.email.retry.1",
+    "trace.email.retry.2",
+    "trace.email.retry.3",
+)
 
 
 class QueueUnavailable(RuntimeError):
@@ -49,13 +53,17 @@ class EmailQueueMessage:
 
     def encode(self) -> bytes:
         return json.dumps(
-            {"job_id": str(self.job_id), "attempt": self.attempt, "version": self.version},
+            {
+                "job_id": str(self.job_id),
+                "attempt": self.attempt,
+                "version": self.version,
+            },
             separators=(",", ":"),
             sort_keys=True,
         ).encode("ascii")
 
     @classmethod
-    def decode(cls, body: bytes) -> "EmailQueueMessage":
+    def decode(cls, body: bytes) -> EmailQueueMessage:
         try:
             decoded = json.loads(body)
             if set(decoded) != {"attempt", "job_id", "version"}:
@@ -72,22 +80,37 @@ class EmailQueueMessage:
         return cls(job_id=job_id, attempt=attempt, version=version)
 
 
-def declare_email_topology(channel: Channel, *, retry_delays_seconds: tuple[int, int, int]) -> None:
+def declare_email_topology(
+    channel: Channel, *, retry_delays_seconds: tuple[int, int, int]
+) -> None:
     """Declare the fixed, durable topology before publish or consume."""
-    if len(retry_delays_seconds) != len(EMAIL_RETRY_QUEUES) or any(delay <= 0 for delay in retry_delays_seconds):
+    if len(retry_delays_seconds) != len(EMAIL_RETRY_QUEUES) or any(
+        delay <= 0 for delay in retry_delays_seconds
+    ):
         raise ValueError("Exactly three positive retry delays are required")
 
-    channel.exchange_declare(exchange=EMAIL_EXCHANGE, exchange_type="direct", durable=True)
+    channel.exchange_declare(
+        exchange=EMAIL_EXCHANGE, exchange_type="direct", durable=True
+    )
     channel.exchange_declare(exchange=EMAIL_DLX, exchange_type="direct", durable=True)
     channel.queue_declare(
         queue=EMAIL_MAIN_QUEUE,
         durable=True,
-        arguments={"x-dead-letter-exchange": EMAIL_DLX, "x-dead-letter-routing-key": "dead"},
+        arguments={
+            "x-dead-letter-exchange": EMAIL_DLX,
+            "x-dead-letter-routing-key": "dead",
+        },
     )
-    channel.queue_bind(queue=EMAIL_MAIN_QUEUE, exchange=EMAIL_EXCHANGE, routing_key="send")
+    channel.queue_bind(
+        queue=EMAIL_MAIN_QUEUE, exchange=EMAIL_EXCHANGE, routing_key="send"
+    )
     channel.queue_declare(queue=EMAIL_DEAD_LETTER_QUEUE, durable=True)
-    channel.queue_bind(queue=EMAIL_DEAD_LETTER_QUEUE, exchange=EMAIL_DLX, routing_key="dead")
-    for retry_queue, delay in zip(EMAIL_RETRY_QUEUES, retry_delays_seconds, strict=True):
+    channel.queue_bind(
+        queue=EMAIL_DEAD_LETTER_QUEUE, exchange=EMAIL_DLX, routing_key="dead"
+    )
+    for retry_queue, delay in zip(
+        EMAIL_RETRY_QUEUES, retry_delays_seconds, strict=True
+    ):
         channel.queue_declare(
             queue=retry_queue,
             durable=True,
@@ -97,7 +120,11 @@ def declare_email_topology(channel: Channel, *, retry_delays_seconds: tuple[int,
                 "x-dead-letter-routing-key": "send",
             },
         )
-        channel.queue_bind(queue=retry_queue, exchange=EMAIL_EXCHANGE, routing_key=retry_queue.rsplit(".", 1)[-1])
+        channel.queue_bind(
+            queue=retry_queue,
+            exchange=EMAIL_EXCHANGE,
+            routing_key=retry_queue.rsplit(".", 1)[-1],
+        )
 
 
 class RabbitMQEmailPublisher:
@@ -116,15 +143,21 @@ class RabbitMQEmailPublisher:
         self._retry_delays_seconds = retry_delays_seconds
         self._connection_factory = connection_factory or _open_connection
 
-    def publish(self, message: EmailQueueMessage, *, retry_index: int | None = None) -> None:
+    def publish(
+        self, message: EmailQueueMessage, *, retry_index: int | None = None
+    ) -> None:
         connection = None
         try:
             connection = self._connection_factory(self._url)
             channel = connection.channel()
-            declare_email_topology(channel, retry_delays_seconds=self._retry_delays_seconds)
+            declare_email_topology(
+                channel, retry_delays_seconds=self._retry_delays_seconds
+            )
             channel.confirm_delivery()
             routing_key = "send" if retry_index is None else str(retry_index + 1)
-            if retry_index is not None and not 0 <= retry_index < len(EMAIL_RETRY_QUEUES):
+            if retry_index is not None and not 0 <= retry_index < len(
+                EMAIL_RETRY_QUEUES
+            ):
                 raise ValueError("Email retry queue does not exist")
             delivered = channel.basic_publish(
                 exchange=EMAIL_EXCHANGE,

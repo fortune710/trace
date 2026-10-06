@@ -4,8 +4,7 @@ import hashlib
 import hmac
 import logging
 import re
-from typing import Mapping
-
+from collections.abc import Mapping
 
 _EVENT_COMPONENT = re.compile(r"^[a-z0-9_]{1,64}$")
 _SAFE_CONTEXT_KEYS = frozenset(

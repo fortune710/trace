@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "20260930_0004"
 down_revision = "20260929_0003"
@@ -13,7 +13,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE TYPE private.credential_encryption_provider AS ENUM ('local', 'vault')")
+    op.execute(
+        "CREATE TYPE private.credential_encryption_provider AS ENUM ('local', 'vault')"
+    )
     op.add_column(
         "credentials",
         sa.Column(
@@ -32,11 +34,20 @@ def upgrade() -> None:
     )
     op.add_column(
         "credentials",
-        sa.Column("key_reference", sa.Text(), nullable=False, server_default=sa.text("'local-v1'")),
+        sa.Column(
+            "key_reference",
+            sa.Text(),
+            nullable=False,
+            server_default=sa.text("'local-v1'"),
+        ),
         schema="private",
     )
-    op.alter_column("credentials", "encryption_provider", server_default=None, schema="private")
-    op.alter_column("credentials", "key_reference", server_default=None, schema="private")
+    op.alter_column(
+        "credentials", "encryption_provider", server_default=None, schema="private"
+    )
+    op.alter_column(
+        "credentials", "key_reference", server_default=None, schema="private"
+    )
 
 
 def downgrade() -> None:

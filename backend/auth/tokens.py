@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import base64
 import binascii
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from enum import StrEnum
 import hashlib
 import hmac
 import secrets
-from typing import Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from uuid import UUID
 
 import jwt
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 
 from auth.config import AuthSettings
 
@@ -57,7 +60,9 @@ def digest_opaque_token(token: str, *, key: bytes, purpose: TokenPurpose) -> byt
     if not token or len(token) > 512:
         raise ValueError("Token is malformed")
 
-    message = b"trace-auth:v1:" + purpose.value.encode("ascii") + b":" + token.encode("ascii")
+    message = (
+        b"trace-auth:v1:" + purpose.value.encode("ascii") + b":" + token.encode("ascii")
+    )
     return hmac.new(key, message, hashlib.sha256).digest()
 
 
@@ -80,7 +85,10 @@ class JWTService:
         self._key_id = key_id
         self._issuer = issuer
         self._audience = audience
-        self._verification_keys = {key_id: signing_key.public_key(), **(verification_keys or {})}
+        self._verification_keys = {
+            key_id: signing_key.public_key(),
+            **(verification_keys or {}),
+        }
 
     @classmethod
     def from_private_key_bytes(
@@ -107,7 +115,9 @@ class JWTService:
             verification_keys=public_keys,
         )
 
-    def issue(self, *, user_id: UUID, session_id: UUID, now: datetime | None = None) -> str:
+    def issue(
+        self, *, user_id: UUID, session_id: UUID, now: datetime | None = None
+    ) -> str:
         issued_at = (now or datetime.now(UTC)).replace(microsecond=0)
         expires_at = issued_at + timedelta(minutes=60)
         payload = {
@@ -121,7 +131,12 @@ class JWTService:
             "exp": expires_at,
             "token_use": "access",
         }
-        return jwt.encode(payload, self._signing_key, algorithm="EdDSA", headers={"kid": self._key_id, "typ": "at+jwt"})
+        return jwt.encode(
+            payload,
+            self._signing_key,
+            algorithm="EdDSA",
+            headers={"kid": self._key_id, "typ": "at+jwt"},
+        )
 
     def verify(self, token: str) -> AccessTokenClaims:
         if not token or len(token) > 8192:
@@ -141,7 +156,9 @@ class JWTService:
                 algorithms=["EdDSA"],
                 audience=self._audience,
                 issuer=self._issuer,
-                options={"require": ["aud", "exp", "iat", "iss", "jti", "nbf", "sid", "sub"]},
+                options={
+                    "require": ["aud", "exp", "iat", "iss", "jti", "nbf", "sid", "sub"]
+                },
             )
             if payload.get("token_use") != "access" or header.get("typ") != "at+jwt":
                 raise InvalidAccessToken("Invalid access token")
@@ -169,7 +186,9 @@ def jwt_service_from_settings(settings: AuthSettings) -> JWTService:
         settings.jwt_private_key.get_secret_value(), name="AUTH_JWT_PRIVATE_KEY"
     )
     verification_keys = {
-        key_id: decode_base64url_key(encoded_key, name=f"AUTH_JWT_VERIFICATION_KEYS[{key_id}]")
+        key_id: decode_base64url_key(
+            encoded_key, name=f"AUTH_JWT_VERIFICATION_KEYS[{key_id}]"
+        )
         for key_id, encoded_key in settings.jwt_verification_keys.items()
     }
     return JWTService.from_private_key_bytes(

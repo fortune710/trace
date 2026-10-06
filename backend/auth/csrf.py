@@ -8,12 +8,20 @@ from uuid import UUID
 
 def issue_csrf_token(*, session_id: UUID, key: bytes) -> str:
     nonce = secrets.token_urlsafe(32)
-    signature = hmac.new(key, f"trace-csrf:v1:{session_id}:{nonce}".encode("ascii"), hashlib.sha256).hexdigest()
+    signature = hmac.new(
+        key, f"trace-csrf:v1:{session_id}:{nonce}".encode("ascii"), hashlib.sha256
+    ).hexdigest()
     return f"{nonce}.{signature}"
 
 
-def validate_csrf_token(*, cookie_token: str | None, header_token: str | None, session_id: UUID, key: bytes) -> bool:
-    if not cookie_token or not header_token or not hmac.compare_digest(cookie_token, header_token):
+def validate_csrf_token(
+    *, cookie_token: str | None, header_token: str | None, session_id: UUID, key: bytes
+) -> bool:
+    if (
+        not cookie_token
+        or not header_token
+        or not hmac.compare_digest(cookie_token, header_token)
+    ):
         return False
 
     nonce, separator, signature = cookie_token.partition(".")

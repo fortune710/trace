@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT_DIRECTORY = Path(__file__).resolve().parents[2]
 
 
@@ -17,9 +16,14 @@ def _read_example_environment() -> dict[str, str]:
 def test_test_database_uses_an_isolated_service_and_database() -> None:
     environment = _read_example_environment()
 
-    assert environment["TEST_MIGRATION_DATABASE_URL"] != environment["MIGRATION_DATABASE_URL"]
+    assert (
+        environment["TEST_MIGRATION_DATABASE_URL"]
+        != environment["MIGRATION_DATABASE_URL"]
+    )
     assert environment["TEST_DATABASE_URL"] != environment["DATABASE_URL"]
-    assert "@postgres-test:5432/trace_test" in environment["TEST_MIGRATION_DATABASE_URL"]
+    assert (
+        "@postgres-test:5432/trace_test" in environment["TEST_MIGRATION_DATABASE_URL"]
+    )
     assert "@postgres-test:5432/trace_test" in environment["TEST_DATABASE_URL"]
 
 

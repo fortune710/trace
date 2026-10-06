@@ -5,7 +5,8 @@ from enum import Enum
 from uuid import UUID
 
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PostgreSQLUUID
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
@@ -72,7 +73,9 @@ class AuthUser(Base):
     __table_args__ = {"schema": "auth"}
 
     id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=sa.text("public.uuidv7()")
+        PostgreSQLUUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("public.uuidv7()"),
     )
     email: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     status: Mapped[UserStatus] = mapped_column(
@@ -80,28 +83,42 @@ class AuthUser(Base):
         nullable=False,
         server_default=sa.text("'active'::auth.user_status"),
     )
-    email_confirmed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    email_confirmed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
     updated_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
-    deleted_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
 
 
 class AuthIdentity(Base):
     __tablename__ = "identities"
     __table_args__ = (
-        sa.UniqueConstraint("provider", "provider_subject", name="auth_identities_provider_subject_key"),
+        sa.UniqueConstraint(
+            "provider", "provider_subject", name="auth_identities_provider_subject_key"
+        ),
         {"schema": "auth"},
     )
 
     id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=sa.text("public.uuidv7()")
+        PostgreSQLUUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("public.uuidv7()"),
     )
     user_id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), sa.ForeignKey("auth.users.id", ondelete="CASCADE"), nullable=False
+        PostgreSQLUUID(as_uuid=True),
+        sa.ForeignKey("auth.users.id", ondelete="CASCADE"),
+        nullable=False,
     )
     provider: Mapped[IdentityProvider] = mapped_column(
         native_enum(IdentityProvider, "identity_provider", "auth"), nullable=False
@@ -111,10 +128,14 @@ class AuthIdentity(Base):
         JSONB, nullable=False, server_default=sa.text("'{}'::jsonb")
     )
     created_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
     updated_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
 
 
@@ -129,10 +150,16 @@ class PasswordCredential(Base):
     )
     password_hash: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     password_changed_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
-    failed_attempt_count: Mapped[int] = mapped_column(sa.Integer(), nullable=False, server_default=sa.text("0"))
-    locked_until: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    failed_attempt_count: Mapped[int] = mapped_column(
+        sa.Integer(), nullable=False, server_default=sa.text("0")
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
 
 
 class AuthSession(Base):
@@ -140,17 +167,29 @@ class AuthSession(Base):
     __table_args__ = {"schema": "auth"}
 
     id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=sa.text("public.uuidv7()")
+        PostgreSQLUUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("public.uuidv7()"),
     )
     user_id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), sa.ForeignKey("auth.users.id", ondelete="CASCADE"), nullable=False
+        PostgreSQLUUID(as_uuid=True),
+        sa.ForeignKey("auth.users.id", ondelete="CASCADE"),
+        nullable=False,
     )
-    expires_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
-    revoked_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
-    last_seen_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
 
 
 class RefreshToken(Base):
@@ -158,24 +197,36 @@ class RefreshToken(Base):
     __table_args__ = {"schema": "auth"}
 
     id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=sa.text("public.uuidv7()")
+        PostgreSQLUUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("public.uuidv7()"),
     )
     session_id: Mapped[UUID] = mapped_column(
         PostgreSQLUUID(as_uuid=True),
         sa.ForeignKey("auth.sessions.id", ondelete="CASCADE"),
         nullable=False,
     )
-    token_hash: Mapped[bytes] = mapped_column(sa.LargeBinary(), nullable=False, unique=True)
-    expires_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
-    consumed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
-    revoked_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    token_hash: Mapped[bytes] = mapped_column(
+        sa.LargeBinary(), nullable=False, unique=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
     replaced_by_id: Mapped[UUID | None] = mapped_column(
         PostgreSQLUUID(as_uuid=True),
         sa.ForeignKey("auth.refresh_tokens.id", ondelete="SET NULL"),
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
 
 
@@ -184,16 +235,28 @@ class EmailVerificationToken(Base):
     __table_args__ = {"schema": "auth"}
 
     id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=sa.text("public.uuidv7()")
+        PostgreSQLUUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("public.uuidv7()"),
     )
     user_id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), sa.ForeignKey("auth.users.id", ondelete="CASCADE"), nullable=False
+        PostgreSQLUUID(as_uuid=True),
+        sa.ForeignKey("auth.users.id", ondelete="CASCADE"),
+        nullable=False,
     )
-    token_hash: Mapped[bytes] = mapped_column(sa.LargeBinary(), nullable=False, unique=True)
-    expires_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
-    used_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    token_hash: Mapped[bytes] = mapped_column(
+        sa.LargeBinary(), nullable=False, unique=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False
+    )
+    used_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
 
 
@@ -202,16 +265,28 @@ class PasswordRecoveryToken(Base):
     __table_args__ = {"schema": "auth"}
 
     id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=sa.text("public.uuidv7()")
+        PostgreSQLUUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("public.uuidv7()"),
     )
     user_id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), sa.ForeignKey("auth.users.id", ondelete="CASCADE"), nullable=False
+        PostgreSQLUUID(as_uuid=True),
+        sa.ForeignKey("auth.users.id", ondelete="CASCADE"),
+        nullable=False,
     )
-    token_hash: Mapped[bytes] = mapped_column(sa.LargeBinary(), nullable=False, unique=True)
-    expires_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
-    used_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    token_hash: Mapped[bytes] = mapped_column(
+        sa.LargeBinary(), nullable=False, unique=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False
+    )
+    used_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
 
 
@@ -220,10 +295,14 @@ class EmailDeliveryJob(Base):
     __table_args__ = {"schema": "auth"}
 
     id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=sa.text("public.uuidv7()")
+        PostgreSQLUUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("public.uuidv7()"),
     )
     user_id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), sa.ForeignKey("auth.users.id", ondelete="CASCADE"), nullable=False
+        PostgreSQLUUID(as_uuid=True),
+        sa.ForeignKey("auth.users.id", ondelete="CASCADE"),
+        nullable=False,
     )
     kind: Mapped[EmailDeliveryKind] = mapped_column(
         native_enum(EmailDeliveryKind, "email_delivery_kind", "auth"), nullable=False
@@ -236,21 +315,38 @@ class EmailDeliveryJob(Base):
     payload_ciphertext: Mapped[bytes] = mapped_column(sa.LargeBinary(), nullable=False)
     payload_nonce: Mapped[bytes] = mapped_column(sa.LargeBinary(), nullable=False)
     payload_key_version: Mapped[str] = mapped_column(sa.Text(), nullable=False)
-    payload_aad_version: Mapped[str] = mapped_column(sa.Text(), nullable=False, server_default=sa.text("'v1'"))
+    payload_aad_version: Mapped[str] = mapped_column(
+        sa.Text(), nullable=False, server_default=sa.text("'v1'")
+    )
     payload_encryption_provider: Mapped[CredentialEncryptionProvider] = mapped_column(
-        native_enum(CredentialEncryptionProvider, "email_payload_encryption_provider", "auth"), nullable=False
+        native_enum(
+            CredentialEncryptionProvider, "email_payload_encryption_provider", "auth"
+        ),
+        nullable=False,
     )
     payload_key_reference: Mapped[str] = mapped_column(sa.Text(), nullable=False)
-    attempt_count: Mapped[int] = mapped_column(sa.Integer(), nullable=False, server_default=sa.text("0"))
-    published_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
-    sent_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
-    failed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(
+        sa.Integer(), nullable=False, server_default=sa.text("0")
+    )
+    published_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    failed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
     failure_reason: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
     updated_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
 
 
@@ -265,10 +361,14 @@ class User(Base):
     )
     display_name: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
     updated_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
 
 
@@ -284,26 +384,40 @@ class Project(Base):
     )
 
     id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=sa.text("public.uuidv7()")
+        PostgreSQLUUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("public.uuidv7()"),
     )
     owner_id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), sa.ForeignKey("public.users.id", ondelete="CASCADE"), nullable=False
+        PostgreSQLUUID(as_uuid=True),
+        sa.ForeignKey("public.users.id", ondelete="CASCADE"),
+        nullable=False,
     )
     name: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     source_type: Mapped[ProjectSourceType] = mapped_column(
         native_enum(ProjectSourceType, "project_source_type", "public"), nullable=False
     )
-    github_repository_id: Mapped[int | None] = mapped_column(sa.BigInteger(), nullable=True)
-    local_path_hash: Mapped[bytes | None] = mapped_column(sa.LargeBinary(), nullable=True)
+    github_repository_id: Mapped[int | None] = mapped_column(
+        sa.BigInteger(), nullable=True
+    )
+    local_path_hash: Mapped[bytes | None] = mapped_column(
+        sa.LargeBinary(), nullable=True
+    )
     source_hash: Mapped[bytes | None] = mapped_column(sa.LargeBinary(), nullable=True)
     current_revision: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
     updated_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
-    archived_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
 
 
 class Credential(Base):
@@ -311,13 +425,18 @@ class Credential(Base):
     __table_args__ = {"schema": "private"}
 
     id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), primary_key=True, server_default=sa.text("public.uuidv7()")
+        PostgreSQLUUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("public.uuidv7()"),
     )
     owner_id: Mapped[UUID] = mapped_column(
-        PostgreSQLUUID(as_uuid=True), sa.ForeignKey("public.users.id", ondelete="CASCADE"), nullable=False
+        PostgreSQLUUID(as_uuid=True),
+        sa.ForeignKey("public.users.id", ondelete="CASCADE"),
+        nullable=False,
     )
     provider: Mapped[CredentialProvider] = mapped_column(
-        native_enum(CredentialProvider, "credential_provider", "private"), nullable=False
+        native_enum(CredentialProvider, "credential_provider", "private"),
+        nullable=False,
     )
     credential_kind: Mapped[CredentialKind] = mapped_column(
         native_enum(CredentialKind, "credential_kind", "private"), nullable=False
@@ -327,17 +446,25 @@ class Credential(Base):
     key_version: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     aad_version: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     encryption_provider: Mapped[CredentialEncryptionProvider] = mapped_column(
-        native_enum(CredentialEncryptionProvider, "credential_encryption_provider", "private"),
+        native_enum(
+            CredentialEncryptionProvider, "credential_encryption_provider", "private"
+        ),
         nullable=False,
     )
     key_reference: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
     updated_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("CURRENT_TIMESTAMP"),
     )
-    revoked_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
 
 
 sa.Index(
@@ -352,15 +479,25 @@ sa.Index(
     EmailDeliveryJob.created_at,
     postgresql_where=EmailDeliveryJob.status == EmailDeliveryStatus.PENDING,
 )
-sa.Index("auth_identities_user_created_idx", AuthIdentity.user_id, AuthIdentity.created_at.desc())
-sa.Index("auth_sessions_user_expires_idx", AuthSession.user_id, AuthSession.expires_at.desc())
+sa.Index(
+    "auth_identities_user_created_idx",
+    AuthIdentity.user_id,
+    AuthIdentity.created_at.desc(),
+)
+sa.Index(
+    "auth_sessions_user_expires_idx", AuthSession.user_id, AuthSession.expires_at.desc()
+)
 sa.Index(
     "auth_sessions_active_user_expires_idx",
     AuthSession.user_id,
     AuthSession.expires_at.desc(),
     postgresql_where=AuthSession.revoked_at.is_(None),
 )
-sa.Index("auth_refresh_tokens_session_expires_idx", RefreshToken.session_id, RefreshToken.expires_at.desc())
+sa.Index(
+    "auth_refresh_tokens_session_expires_idx",
+    RefreshToken.session_id,
+    RefreshToken.expires_at.desc(),
+)
 sa.Index(
     "auth_refresh_tokens_active_session_expires_idx",
     RefreshToken.session_id,

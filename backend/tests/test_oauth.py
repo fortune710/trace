@@ -6,7 +6,14 @@ from fastapi import FastAPI
 from pydantic import SecretStr
 
 from auth.config import AuthSettings
-from auth.oauth import OAUTH_CALLBACK_ROUTE, OAuthRejected, OAuthStateStore, _provider_configuration, install_oauth_routes, oauth_callback_path
+from auth.oauth import (
+    OAUTH_CALLBACK_ROUTE,
+    OAuthRejected,
+    OAuthStateStore,
+    _provider_configuration,
+    install_oauth_routes,
+    oauth_callback_path,
+)
 
 
 class FakeRedis:
@@ -24,7 +31,9 @@ class FakeRedis:
 
 
 @pytest.mark.anyio
-async def test_oauth_state_is_single_use_and_does_not_store_raw_state_as_a_key() -> None:
+async def test_oauth_state_is_single_use_and_does_not_store_raw_state_as_a_key() -> (
+    None
+):
     redis = FakeRedis()
     store = OAuthStateStore(redis_client=redis, state_key=b"a" * 32)
 
@@ -44,7 +53,9 @@ async def test_oauth_state_is_single_use_and_does_not_store_raw_state_as_a_key()
 
 def _example_environment() -> dict[str, str]:
     values: dict[str, str] = {}
-    for line in (Path(__file__).resolve().parents[2] / ".env.example").read_text().splitlines():
+    for line in (
+        (Path(__file__).resolve().parents[2] / ".env.example").read_text().splitlines()
+    ):
         if line and not line.startswith("#") and "=" in line:
             key, value = line.split("=", maxsplit=1)
             values[key] = value
@@ -52,7 +63,9 @@ def _example_environment() -> dict[str, str]:
 
 
 @pytest.mark.parametrize("provider", ("github", "google"))
-def test_documented_oauth_redirect_uri_matches_the_registered_callback_route(provider: str) -> None:
+def test_documented_oauth_redirect_uri_matches_the_registered_callback_route(
+    provider: str,
+) -> None:
     environment = _example_environment()
     settings = AuthSettings(
         github_client_id="github-test-client",
@@ -65,7 +78,9 @@ def test_documented_oauth_redirect_uri_matches_the_registered_callback_route(pro
     app = FastAPI()
     install_oauth_routes(app, settings, audit_hasher=None)
 
-    configured_path = urlparse(_provider_configuration(settings, provider).redirect_uri).path
+    configured_path = urlparse(
+        _provider_configuration(settings, provider).redirect_uri
+    ).path
     registered_paths = {route.path for route in app.routes}
 
     assert configured_path == oauth_callback_path(provider)

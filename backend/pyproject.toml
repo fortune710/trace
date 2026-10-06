@@ -21,9 +21,28 @@ dependencies = [
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "mypy>=2.4.0",
+    "pip-audit>=2.10.1",
     "pytest>=9.1.1",
+    "ruff>=0.16.10",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: requires the isolated PostgreSQL test service",
+]
+
+[tool.ruff.lint]
+per-file-ignores = { "db/models.py" = ["RUF012"] }
+
+[tool.mypy]
+files = ["auth", "db", "main.py", "workers"]
+check_untyped_defs = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["pika", "pika.*"]
+ignore_missing_imports = true

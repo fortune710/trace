@@ -7,9 +7,16 @@ from fastapi.responses import Response
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from auth.config import AuthSettings, AuthenticationConfigurationError, PRODUCTION_FRONTEND_ORIGINS
+from auth.config import (
+    PRODUCTION_FRONTEND_ORIGINS,
+    AuthenticationConfigurationError,
+    AuthSettings,
+)
 from auth.cookies import set_auth_cookies
-from auth.credentials import VaultTransitCredentialCipher, credential_cipher_from_settings
+from auth.credentials import (
+    VaultTransitCredentialCipher,
+    credential_cipher_from_settings,
+)
 from auth.csrf import issue_csrf_token, validate_csrf_token
 from auth.errors import AuthError, install_auth_error_handlers
 from auth.routes import install_auth_routes
@@ -82,7 +89,9 @@ def test_vault_is_a_valid_credential_encryption_provider() -> None:
         audit_hash_key=SecretStr(_encoded_key(b"e")),
     )
 
-    assert isinstance(credential_cipher_from_settings(settings), VaultTransitCredentialCipher)
+    assert isinstance(
+        credential_cipher_from_settings(settings), VaultTransitCredentialCipher
+    )
 
 
 def test_production_rejects_unencrypted_vault_connections() -> None:
@@ -95,6 +104,20 @@ def test_production_rejects_unencrypted_vault_connections() -> None:
         allowed_origins=sorted(PRODUCTION_FRONTEND_ORIGINS),
         jwt_private_key=SecretStr(_encoded_key(b"a")),
         token_hash_key=SecretStr(_encoded_key(b"b")),
+        csrf_hmac_key=SecretStr(_encoded_key(b"d")),
+        audit_hash_key=SecretStr(_encoded_key(b"e")),
+    )
+
+    with pytest.raises(AuthenticationConfigurationError):
+        settings.validate_for_authentication()
+
+
+def test_only_test_environment_can_replace_oauth_provider_endpoints() -> None:
+    settings = AuthSettings(
+        github_authorize_url="http://oauth-stub:9000/github/authorize",
+        jwt_private_key=SecretStr(_encoded_key(b"a")),
+        token_hash_key=SecretStr(_encoded_key(b"b")),
+        credential_encryption_key=SecretStr(_encoded_key(b"c")),
         csrf_hmac_key=SecretStr(_encoded_key(b"d")),
         audit_hash_key=SecretStr(_encoded_key(b"e")),
     )
@@ -135,7 +158,9 @@ def test_authentication_errors_do_not_echo_secret_context() -> None:
             reason="token_invalid",
         )
 
-    response = TestClient(app).get("/protected", headers={"Authorization": "Bearer secret-token"})
+    response = TestClient(app).get(
+        "/protected", headers={"Authorization": "Bearer secret-token"}
+    )
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "authentication_failed"
@@ -145,9 +170,8 @@ def test_authentication_errors_do_not_echo_secret_context() -> None:
 def test_startup_rejects_incomplete_authentication_configuration() -> None:
     application = create_app(AuthSettings())
 
-    with pytest.raises(AuthenticationConfigurationError):
-        with TestClient(application):
-            pass
+    with pytest.raises(AuthenticationConfigurationError), TestClient(application):
+        pass
 
 
 def test_production_cors_allows_only_the_approved_frontends() -> None:
@@ -166,19 +190,42 @@ def test_production_cors_allows_only_the_approved_frontends() -> None:
     )
 
     with TestClient(create_app(settings)) as client:
-        allowed = client.get("/health", headers={"Origin": "https://traceai.vercel.app"})
+        allowed = client.get(
+            "/health", headers={"Origin": "https://traceai.vercel.app"}
+        )
         denied = client.get("/health", headers={"Origin": "https://untrusted.example"})
 
-    assert allowed.headers["access-control-allow-origin"] == "https://traceai.vercel.app"
+    assert (
+        allowed.headers["access-control-allow-origin"] == "https://traceai.vercel.app"
+    )
     assert "access-control-allow-origin" not in denied.headers
 
 
 def test_authentication_response_sets_both_http_only_credentials() -> None:
     response = Response()
-    settings = AuthSettings(cookie_secure=False, access_cookie_name="trace_access", refresh_cookie_name="trace_refresh")
+    settings = AuthSettings(
+        cookie_secure=False,
+        access_cookie_name="trace_access",
+        refresh_cookie_name="trace_refresh",
+    )
 
-    set_auth_cookies(response, access_token="access-token", refresh_token="refresh-token", settings=settings)
+    set_auth_cookies(
+        response,
+        access_token="access-token",
+        refresh_token="refresh-token",
+        settings=settings,
+    )
 
-    cookies = [value.decode("latin-1") for key, value in response.raw_headers if key == b"set-cookie"]
-    assert any(cookie.startswith("trace_access=access-token") and "HttpOnly" in cookie for cookie in cookies)
-    assert any(cookie.startswith("trace_refresh=refresh-token") and "HttpOnly" in cookie for cookie in cookies)
+    cookies = [
+        value.decode("latin-1")
+        for key, value in response.raw_headers
+        if key == b"set-cookie"
+    ]
+    assert any(
+        cookie.startswith("trace_access=access-token") and "HttpOnly" in cookie
+        for cookie in cookies
+    )
+    assert any(
+        cookie.startswith("trace_refresh=refresh-token") and "HttpOnly" in cookie
+        for cookie in cookies
+    )

@@ -5,7 +5,9 @@ from fastapi import Response
 from auth.config import AuthSettings
 
 
-def set_auth_cookies(response: Response, *, access_token: str, refresh_token: str, settings: AuthSettings) -> None:
+def set_auth_cookies(
+    response: Response, *, access_token: str, refresh_token: str, settings: AuthSettings
+) -> None:
     """Set HttpOnly bearer cookies without ever serializing tokens into JSON."""
     response.set_cookie(
         key=settings.access_cookie_name,
@@ -27,7 +29,9 @@ def set_auth_cookies(response: Response, *, access_token: str, refresh_token: st
     )
 
 
-def set_csrf_cookie(response: Response, *, csrf_token: str, settings: AuthSettings) -> None:
+def set_csrf_cookie(
+    response: Response, *, csrf_token: str, settings: AuthSettings
+) -> None:
     response.set_cookie(
         key=settings.csrf_cookie_name,
         value=csrf_token,

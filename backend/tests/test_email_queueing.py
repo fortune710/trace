@@ -2,13 +2,10 @@ from __future__ import annotations
 
 from uuid import UUID
 
-import pytest
-
 from auth.credentials import EncryptedCredential
 from auth.email_delivery import (
     EmailJob,
     EmailJobConsumer,
-    EmailSender,
     RetryableEmailDeliveryError,
 )
 from auth.queueing import (
@@ -21,7 +18,6 @@ from auth.queueing import (
     declare_email_topology,
 )
 from db.models import EmailDeliveryKind, EmailDeliveryStatus
-
 
 JOB_ID = UUID("00000000-0000-7000-8000-000000000001")
 USER_ID = UUID("00000000-0000-7000-8000-000000000002")
@@ -92,12 +88,18 @@ class FakeStore:
 
     def mark_failed(self, job_id: UUID, *, reason: str) -> None:
         self.failed.append((job_id, reason))
-        self.job = EmailJob(**{**self.job.__dict__, "status": EmailDeliveryStatus.FAILED})
+        self.job = EmailJob(
+            **{**self.job.__dict__, "status": EmailDeliveryStatus.FAILED}
+        )
 
 
 class FakeCipher:
     def decrypt_json(self, *_args, **_kwargs):
-        return {"email": "student@example.test", "token": "opaque-token", "destination": "https://traceai.vercel.app"}
+        return {
+            "email": "student@example.test",
+            "token": "opaque-token",
+            "destination": "https://traceai.vercel.app",
+        }
 
 
 class SuccessfulSender:
@@ -118,7 +120,9 @@ class RecordingPublisher:
         self.messages: list[tuple[EmailQueueMessage, int | None]] = []
         self.fail = fail
 
-    def publish(self, message: EmailQueueMessage, *, retry_index: int | None = None) -> None:
+    def publish(
+        self, message: EmailQueueMessage, *, retry_index: int | None = None
+    ) -> None:
         if self.fail:
             raise QueueUnavailable("broker unavailable")
         self.messages.append((message, retry_index))
@@ -130,7 +134,9 @@ def _job(*, attempt_count: int = 0) -> EmailJob:
         user_id=USER_ID,
         kind=EmailDeliveryKind.VERIFICATION,
         status=EmailDeliveryStatus.PENDING,
-        encrypted_payload=EncryptedCredential(ciphertext=b"ciphertext", nonce=b"nonce", key_version="v1"),
+        encrypted_payload=EncryptedCredential(
+            ciphertext=b"ciphertext", nonce=b"nonce", key_version="v1"
+        ),
         attempt_count=attempt_count,
     )
 
@@ -148,7 +154,9 @@ def test_publisher_adds_only_a_persistent_job_identifier_to_the_main_queue() -> 
 
     assert channel.confirmed
     assert channel.published[0]["routing_key"] == "send"
-    assert EmailQueueMessage.decode(channel.published[0]["body"]) == EmailQueueMessage(job_id=JOB_ID)
+    assert EmailQueueMessage.decode(channel.published[0]["body"]) == EmailQueueMessage(
+        job_id=JOB_ID
+    )
     assert connection.closed
 
 
@@ -173,7 +181,9 @@ def test_successful_delivery_marks_the_job_sent_and_acknowledges_it() -> None:
         max_retries=3,
     )
 
-    consumer.consume(delivery_tag=7, body=EmailQueueMessage(job_id=JOB_ID).encode(), channel=channel)
+    consumer.consume(
+        delivery_tag=7, body=EmailQueueMessage(job_id=JOB_ID).encode(), channel=channel
+    )
 
     assert store.sent == [JOB_ID]
     assert channel.acks == [7]
@@ -181,7 +191,9 @@ def test_successful_delivery_marks_the_job_sent_and_acknowledges_it() -> None:
     assert len(sender.sent) == 1
 
 
-def test_transient_failure_requeues_to_the_next_delay_after_confirming_publish() -> None:
+def test_transient_failure_requeues_to_the_next_delay_after_confirming_publish() -> (
+    None
+):
     store = FakeStore(_job())
     publisher = RecordingPublisher()
     channel = FakeChannel()
@@ -193,14 +205,18 @@ def test_transient_failure_requeues_to_the_next_delay_after_confirming_publish()
         max_retries=3,
     )
 
-    consumer.consume(delivery_tag=8, body=EmailQueueMessage(job_id=JOB_ID).encode(), channel=channel)
+    consumer.consume(
+        delivery_tag=8, body=EmailQueueMessage(job_id=JOB_ID).encode(), channel=channel
+    )
 
     assert publisher.messages == [(EmailQueueMessage(job_id=JOB_ID, attempt=1), 0)]
     assert store.retries == [(JOB_ID, 1)]
     assert channel.acks == [8]
 
 
-def test_exhausted_retries_are_removed_from_work_and_sent_to_the_dead_letter_queue() -> None:
+def test_exhausted_retries_are_removed_from_work_and_sent_to_the_dead_letter_queue() -> (
+    None
+):
     store = FakeStore(_job(attempt_count=3))
     channel = FakeChannel()
     consumer = EmailJobConsumer(
@@ -211,7 +227,11 @@ def test_exhausted_retries_are_removed_from_work_and_sent_to_the_dead_letter_que
         max_retries=3,
     )
 
-    consumer.consume(delivery_tag=9, body=EmailQueueMessage(job_id=JOB_ID, attempt=3).encode(), channel=channel)
+    consumer.consume(
+        delivery_tag=9,
+        body=EmailQueueMessage(job_id=JOB_ID, attempt=3).encode(),
+        channel=channel,
+    )
 
     assert store.failed == [(JOB_ID, "retry_limit_exceeded")]
     assert channel.acks == []
@@ -229,7 +249,9 @@ def test_broker_failure_returns_the_original_message_to_the_work_queue() -> None
         max_retries=3,
     )
 
-    consumer.consume(delivery_tag=10, body=EmailQueueMessage(job_id=JOB_ID).encode(), channel=channel)
+    consumer.consume(
+        delivery_tag=10, body=EmailQueueMessage(job_id=JOB_ID).encode(), channel=channel
+    )
 
     assert store.retries == []
     assert channel.acks == []

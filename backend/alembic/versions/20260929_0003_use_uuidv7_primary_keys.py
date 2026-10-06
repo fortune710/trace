@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from alembic import op
 
-
 revision = "20260929_0003"
 down_revision = "20260929_0002"
 branch_labels = None
@@ -47,10 +46,14 @@ def upgrade() -> None:
         """
     )
     for schema, table in _UUIDV7_TABLES:
-        op.execute(f"ALTER TABLE {schema}.{table} ALTER COLUMN id SET DEFAULT public.uuidv7()")
+        op.execute(
+            f"ALTER TABLE {schema}.{table} ALTER COLUMN id SET DEFAULT public.uuidv7()"
+        )
 
 
 def downgrade() -> None:
     for schema, table in _UUIDV7_TABLES:
-        op.execute(f"ALTER TABLE {schema}.{table} ALTER COLUMN id SET DEFAULT gen_random_uuid()")
+        op.execute(
+            f"ALTER TABLE {schema}.{table} ALTER COLUMN id SET DEFAULT gen_random_uuid()"
+        )
     op.execute("DROP FUNCTION IF EXISTS public.uuidv7()")

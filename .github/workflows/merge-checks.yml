@@ -1,0 +1,102 @@
+name: Merge Checks
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened]
+
+permissions:
+  contents: read
+
+jobs:
+  backend-quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --all-groups --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run pytest
+
+  frontend-quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run test
+      - run: bun run build
+
+  migrations-and-integration:
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: trace-ci-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: scripts/ci/write-compose-env.sh .ci.env
+      - run: COMPOSE_ENV_FILE=.ci.env scripts/migrate-test.sh
+      - run: docker compose --env-file .ci.env --profile test run --rm --build backend-tests
+      - if: always()
+        run: docker compose --env-file .ci.env --profile test down --volumes --remove-orphans
+
+  compose-lifecycle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: scripts/ci/write-compose-env.sh .ci.env
+      - run: COMPOSE_PROJECT_NAME=trace-lifecycle scripts/ci/verify-compose-lifecycle.sh .ci.env
+
+  auth-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile --cwd frontend
+      - run: bunx --cwd frontend playwright install --with-deps chromium
+      - run: scripts/ci/write-compose-env.sh .ci.env
+      - run: docker compose --project-name trace-e2e --env-file .ci.env -f compose.yaml -f compose.e2e.yaml --profile e2e up --build --wait backend email-worker
+      - run: E2E_AUTH_STACK=1 E2E_API_BASE_URL=http://127.0.0.1:18000 E2E_MAILPIT_URL=http://127.0.0.1:18025 CI=1 bun run --cwd frontend test:e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/test-results
+      - if: always()
+        run: docker compose --project-name trace-e2e --env-file .ci.env -f compose.yaml -f compose.e2e.yaml --profile e2e down --volumes --remove-orphans
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - uses: oven-sh/setup-bun@v2
+      - run: uv sync --all-groups --locked --directory backend
+      - run: uv run --directory backend pip-audit --strict
+      - run: bun install --frozen-lockfile --cwd frontend
+      - run: bun audit --cwd frontend --audit-level high
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+      - run: docker build --tag trace-backend:phase5 ./backend
+      - uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: trace-backend:phase5
+          severity: HIGH,CRITICAL
+          exit-code: '1'

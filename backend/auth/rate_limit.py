@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import hmac
 import math
-from typing import Protocol, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 from redis.exceptions import RedisError
 
@@ -12,7 +12,6 @@ from auth.config import AuthSettings
 from auth.errors import AuthError, RateLimitExceeded
 from auth.tokens import decode_base64url_key
 from db.session import get_redis_client
-
 
 TOKEN_BUCKET_SCRIPT = """
 local key = KEYS[1]
@@ -41,10 +40,6 @@ return {1, 0, math.floor(tokens)}
 """
 
 
-class RedisScriptClient(Protocol):
-    async def eval(self, script: str, numkeys: int, *keys_and_args: str) -> Sequence[int]: ...
-
-
 class RateLimiterUnavailable(RuntimeError):
     """Raised when Redis cannot enforce a security-sensitive limit."""
 
@@ -57,8 +52,15 @@ class RateLimitPolicy:
     refill_period_seconds: int
 
     def __post_init__(self) -> None:
-        if not self.name or self.capacity <= 0 or self.refill_tokens <= 0 or self.refill_period_seconds <= 0:
-            raise ValueError("Rate-limit policies require positive capacity and refill values")
+        if (
+            not self.name
+            or self.capacity <= 0
+            or self.refill_tokens <= 0
+            or self.refill_period_seconds <= 0
+        ):
+            raise ValueError(
+                "Rate-limit policies require positive capacity and refill values"
+            )
 
     @property
     def refill_per_millisecond(self) -> float:
@@ -85,18 +87,24 @@ class RateLimitKeyFactory:
     def create(self, policy: RateLimitPolicy, subject: str) -> str:
         if not subject or len(subject) > 1024:
             raise ValueError("Rate-limit subject is malformed")
-        digest = hmac.new(self._secret, subject.encode("utf-8"), hashlib.sha256).hexdigest()
+        digest = hmac.new(
+            self._secret, subject.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
         return f"trace:rate-limit:v1:{policy.name}:{digest}"
 
 
 class TokenBucketRateLimiter:
-    def __init__(self, client: RedisScriptClient, key_factory: RateLimitKeyFactory) -> None:
+    def __init__(self, client: Any, key_factory: RateLimitKeyFactory) -> None:
         self._client = client
         self._key_factory = key_factory
 
-    async def check(self, policy: RateLimitPolicy, subject: str, *, cost: int = 1) -> RateLimitResult:
+    async def check(
+        self, policy: RateLimitPolicy, subject: str, *, cost: int = 1
+    ) -> RateLimitResult:
         if cost <= 0 or cost > policy.capacity:
-            raise ValueError("Rate-limit cost must be between one and the policy capacity")
+            raise ValueError(
+                "Rate-limit cost must be between one and the policy capacity"
+            )
 
         key = self._key_factory.create(policy, subject)
         try:
@@ -115,22 +123,49 @@ class TokenBucketRateLimiter:
         if len(result) != 3:
             raise RateLimiterUnavailable("Rate limiter returned an invalid response")
 
-        allowed, retry_after_milliseconds, remaining_tokens = (int(value) for value in result)
+        allowed, retry_after_milliseconds, remaining_tokens = (
+            int(value) for value in result
+        )
         return RateLimitResult(
             allowed=allowed == 1,
-            retry_after_seconds=max(1, math.ceil(retry_after_milliseconds / 1000)) if not allowed else 0,
+            retry_after_seconds=max(1, math.ceil(retry_after_milliseconds / 1000))
+            if not allowed
+            else 0,
             remaining_tokens=max(0, remaining_tokens),
         )
 
 
 AUTH_RATE_LIMIT_POLICIES = {
-    "auth.login.ip": RateLimitPolicy("auth.login.ip", capacity=20, refill_tokens=20, refill_period_seconds=900),
-    "auth.login.identity": RateLimitPolicy("auth.login.identity", capacity=5, refill_tokens=5, refill_period_seconds=900),
-    "auth.registration.ip": RateLimitPolicy("auth.registration.ip", capacity=10, refill_tokens=10, refill_period_seconds=3600),
-    "auth.password_recovery.ip": RateLimitPolicy("auth.password_recovery.ip", capacity=5, refill_tokens=5, refill_period_seconds=3600),
-    "auth.password_recovery.identity": RateLimitPolicy("auth.password_recovery.identity", capacity=3, refill_tokens=3, refill_period_seconds=3600),
-    "auth.oauth_start.ip": RateLimitPolicy("auth.oauth_start.ip", capacity=10, refill_tokens=10, refill_period_seconds=600),
-    "auth.refresh.session": RateLimitPolicy("auth.refresh.session", capacity=30, refill_tokens=30, refill_period_seconds=300),
+    "auth.login.ip": RateLimitPolicy(
+        "auth.login.ip", capacity=20, refill_tokens=20, refill_period_seconds=900
+    ),
+    "auth.login.identity": RateLimitPolicy(
+        "auth.login.identity", capacity=5, refill_tokens=5, refill_period_seconds=900
+    ),
+    "auth.registration.ip": RateLimitPolicy(
+        "auth.registration.ip",
+        capacity=10,
+        refill_tokens=10,
+        refill_period_seconds=3600,
+    ),
+    "auth.password_recovery.ip": RateLimitPolicy(
+        "auth.password_recovery.ip",
+        capacity=5,
+        refill_tokens=5,
+        refill_period_seconds=3600,
+    ),
+    "auth.password_recovery.identity": RateLimitPolicy(
+        "auth.password_recovery.identity",
+        capacity=3,
+        refill_tokens=3,
+        refill_period_seconds=3600,
+    ),
+    "auth.oauth_start.ip": RateLimitPolicy(
+        "auth.oauth_start.ip", capacity=10, refill_tokens=10, refill_period_seconds=600
+    ),
+    "auth.refresh.session": RateLimitPolicy(
+        "auth.refresh.session", capacity=30, refill_tokens=30, refill_period_seconds=300
+    ),
 }
 
 
@@ -140,7 +175,9 @@ def rate_limiter_from_settings(settings: AuthSettings) -> TokenBucketRateLimiter
     return TokenBucketRateLimiter(
         get_redis_client(),
         RateLimitKeyFactory(
-            decode_base64url_key(settings.token_hash_key.get_secret_value(), name="AUTH_TOKEN_HASH_KEY")
+            decode_base64url_key(
+                settings.token_hash_key.get_secret_value(), name="AUTH_TOKEN_HASH_KEY"
+            )
         ),
     )
 

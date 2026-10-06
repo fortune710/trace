@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import base64
 import binascii
 import json
 import secrets
-import socket
+from dataclasses import dataclass
 from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -54,7 +53,9 @@ class CredentialCipher:
         self._key_version = key_version
 
     @staticmethod
-    def _aad(*, credential_id: UUID, owner_id: UUID, provider: str, credential_kind: str) -> bytes:
+    def _aad(
+        *, credential_id: UUID, owner_id: UUID, provider: str, credential_kind: str
+    ) -> bytes:
         return json.dumps(
             {
                 "credential_id": str(credential_id),
@@ -76,7 +77,9 @@ class CredentialCipher:
         provider: str,
         credential_kind: str,
     ) -> EncryptedCredential:
-        plaintext = json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        plaintext = json.dumps(value, separators=(",", ":"), sort_keys=True).encode(
+            "utf-8"
+        )
         nonce = secrets.token_bytes(12)
         ciphertext = self._cipher.encrypt(
             nonce,
@@ -152,31 +155,43 @@ class VaultTransitClient:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=self._timeout_seconds) as response:  # noqa: S310 -- endpoint validated at startup
+            with urlopen(request, timeout=self._timeout_seconds) as response:
                 body = response.read()
-        except (HTTPError, URLError, TimeoutError, socket.timeout) as error:
-            raise CredentialEncryptionUnavailable("Credential encryption service is unavailable") from error
+        except (HTTPError, URLError, TimeoutError) as error:
+            raise CredentialEncryptionUnavailable(
+                "Credential encryption service is unavailable"
+            ) from error
 
         try:
             decoded = json.loads(body)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise CredentialEncryptionUnavailable("Credential encryption service is unavailable") from error
+            raise CredentialEncryptionUnavailable(
+                "Credential encryption service is unavailable"
+            ) from error
         if not isinstance(decoded, dict):
-            raise CredentialEncryptionUnavailable("Credential encryption service is unavailable")
+            raise CredentialEncryptionUnavailable(
+                "Credential encryption service is unavailable"
+            )
         return decoded
 
     def write(self, path: str, payload: dict[str, str]) -> dict[str, object]:
         decoded = self._request(path, payload)
         data = decoded.get("data")
         if not isinstance(data, dict):
-            raise CredentialEncryptionUnavailable("Credential encryption service is unavailable")
+            raise CredentialEncryptionUnavailable(
+                "Credential encryption service is unavailable"
+            )
         return data
 
     def renew_self(self) -> None:
         decoded = self._request("auth/token/renew-self", {})
         auth = decoded.get("auth")
-        if not isinstance(auth, dict) or not isinstance(auth.get("lease_duration"), int):
-            raise CredentialEncryptionUnavailable("Credential encryption service is unavailable")
+        if not isinstance(auth, dict) or not isinstance(
+            auth.get("lease_duration"), int
+        ):
+            raise CredentialEncryptionUnavailable(
+                "Credential encryption service is unavailable"
+            )
 
 
 class VaultTransitCredentialCipher:
@@ -193,7 +208,9 @@ class VaultTransitCredentialCipher:
         self._key = key
 
     @staticmethod
-    def _aad(*, credential_id: UUID, owner_id: UUID, provider: str, credential_kind: str) -> bytes:
+    def _aad(
+        *, credential_id: UUID, owner_id: UUID, provider: str, credential_kind: str
+    ) -> bytes:
         return CredentialCipher._aad(
             credential_id=credential_id,
             owner_id=owner_id,
@@ -202,7 +219,12 @@ class VaultTransitCredentialCipher:
         )
 
     def _context(
-        self, *, credential_id: UUID, owner_id: UUID, provider: str, credential_kind: str
+        self,
+        *,
+        credential_id: UUID,
+        owner_id: UUID,
+        provider: str,
+        credential_kind: str,
     ) -> str:
         return base64.b64encode(
             self._aad(
@@ -239,7 +261,9 @@ class VaultTransitCredentialCipher:
         )
         ciphertext = response.get("ciphertext")
         if not isinstance(ciphertext, str) or not ciphertext.startswith("vault:v"):
-            raise CredentialEncryptionUnavailable("Credential encryption service is unavailable")
+            raise CredentialEncryptionUnavailable(
+                "Credential encryption service is unavailable"
+            )
         key_version = ciphertext.split(":", 2)[1]
         return EncryptedCredential(
             ciphertext=ciphertext.encode("ascii"),
@@ -300,7 +324,9 @@ class VaultTransitCredentialCipher:
         return decoded
 
 
-def credential_cipher_from_settings(settings: AuthSettings) -> CredentialCipher | VaultTransitCredentialCipher:
+def credential_cipher_from_settings(
+    settings: AuthSettings,
+) -> CredentialCipher | VaultTransitCredentialCipher:
     settings.validate_for_authentication()
     if settings.credential_encryption_provider == "vault":
         assert settings.vault_addr is not None
@@ -317,13 +343,16 @@ def credential_cipher_from_settings(settings: AuthSettings) -> CredentialCipher 
     assert settings.credential_encryption_key is not None
     return CredentialCipher(
         key=decode_base64url_key(
-            settings.credential_encryption_key.get_secret_value(), name="AUTH_CREDENTIAL_ENCRYPTION_KEY"
+            settings.credential_encryption_key.get_secret_value(),
+            name="AUTH_CREDENTIAL_ENCRYPTION_KEY",
         ),
         key_version=settings.credential_encryption_key_version,
     )
 
 
-def email_payload_cipher_from_settings(settings: AuthSettings) -> CredentialCipher | VaultTransitCredentialCipher:
+def email_payload_cipher_from_settings(
+    settings: AuthSettings,
+) -> CredentialCipher | VaultTransitCredentialCipher:
     """Create the distinct cipher used for durable email job payloads.
 
     The type is intentionally the same as the provider-credential cipher: both
@@ -344,10 +373,13 @@ def email_payload_cipher_from_settings(settings: AuthSettings) -> CredentialCiph
             key=settings.vault_email_transit_key,
         )
     if settings.credential_encryption_key is None:
-        raise CredentialEncryptionUnavailable("Email payload encryption configuration is incomplete")
+        raise CredentialEncryptionUnavailable(
+            "Email payload encryption configuration is incomplete"
+        )
     return CredentialCipher(
         key=decode_base64url_key(
-            settings.credential_encryption_key.get_secret_value(), name="AUTH_CREDENTIAL_ENCRYPTION_KEY"
+            settings.credential_encryption_key.get_secret_value(),
+            name="AUTH_CREDENTIAL_ENCRYPTION_KEY",
         ),
         key_version=settings.credential_encryption_key_version,
     )

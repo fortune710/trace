@@ -1,6 +1,6 @@
 import asyncio
-from contextlib import asynccontextmanager, suppress
 import logging
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
@@ -20,7 +20,6 @@ from auth.tokens import decode_base64url_key
 from auth.uuids import uuid7
 from db.session import close_redis_client, get_engine, get_redis_client
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -33,11 +32,16 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
 
 def _audit_hasher(settings: AuthSettings) -> AuditHasher | None:
-    if settings.audit_hash_key is None or not settings.audit_hash_key.get_secret_value():
+    if (
+        settings.audit_hash_key is None
+        or not settings.audit_hash_key.get_secret_value()
+    ):
         return None
     try:
         return AuditHasher(
-            decode_base64url_key(settings.audit_hash_key.get_secret_value(), name="AUTH_AUDIT_HASH_KEY")
+            decode_base64url_key(
+                settings.audit_hash_key.get_secret_value(), name="AUTH_AUDIT_HASH_KEY"
+            )
         )
     except ValueError:
         return None
@@ -53,7 +57,9 @@ def _vault_client(settings: AuthSettings) -> VaultTransitClient:
     )
 
 
-async def _renew_vault_token_forever(client: VaultTransitClient, interval_seconds: int) -> None:
+async def _renew_vault_token_forever(
+    client: VaultTransitClient, interval_seconds: int
+) -> None:
     while True:
         await asyncio.sleep(interval_seconds)
         try:
@@ -73,7 +79,9 @@ def create_app(settings: AuthSettings | None = None) -> FastAPI:
             vault_client = _vault_client(auth_settings)
             await asyncio.to_thread(vault_client.renew_self)
             vault_renewal_task = asyncio.create_task(
-                _renew_vault_token_forever(vault_client, auth_settings.vault_token_renewal_seconds)
+                _renew_vault_token_forever(
+                    vault_client, auth_settings.vault_token_renewal_seconds
+                )
             )
         try:
             yield
@@ -107,7 +115,10 @@ def create_app(settings: AuthSettings | None = None) -> FastAPI:
             with get_engine().connect() as connection:
                 connection.execute(text("SELECT 1"))
         except (RuntimeError, RedisError, SQLAlchemyError):
-            return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"status": "unavailable"})
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"status": "unavailable"},
+            )
 
         return {"status": "ok"}
 

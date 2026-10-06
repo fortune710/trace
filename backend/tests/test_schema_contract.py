@@ -11,7 +11,6 @@ from db.models import (
     PasswordRecoveryToken,
     Project,
     RefreshToken,
-    User,
 )
 
 
@@ -69,4 +68,7 @@ def test_generated_primary_keys_use_the_uuidv7_database_default() -> None:
         Credential,
     )
 
-    assert all(str(model.__table__.c.id.server_default.arg) == "public.uuidv7()" for model in generated_models)
+    assert all(
+        str(model.__table__.c.id.server_default.arg) == "public.uuidv7()"
+        for model in generated_models
+    )

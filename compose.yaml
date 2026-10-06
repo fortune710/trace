@@ -49,7 +49,7 @@ services:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${BACKEND_HTTP_PORT:-8000}:8000"
     volumes:
       - ./backend:/app:ro
       - vault_runtime:/run/vault:ro
@@ -137,6 +137,38 @@ services:
     depends_on:
       postgres-test:
         condition: service_healthy
+    networks:
+      - data
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    restart: "no"
+
+  backend-tests:
+    profiles:
+      - test
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: test
+    command: ["uv", "run", "--offline", "--no-sync", "--locked", "pytest", "-p", "no:cacheprovider", "-m", "integration"]
+    environment:
+      DATABASE_URL: ${TEST_DATABASE_URL:?Set TEST_DATABASE_URL in .env}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./backend:/app:ro
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      migrate-test:
+        condition: service_completed_successfully
     networks:
       - data
     init: true
@@ -294,7 +326,7 @@ services:
       MP_MAX_MESSAGES: "500"
       MP_MAX_MESSAGE_SIZE: "10485760"
     ports:
-      - "127.0.0.1:8025:8025"
+      - "127.0.0.1:${MAILPIT_HTTP_PORT:-8025}:8025"
     networks:
       - edge
       - mail

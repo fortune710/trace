@@ -15,7 +15,9 @@ class ScriptedRedis:
 
 def test_token_bucket_returns_remaining_capacity_for_an_allowed_request() -> None:
     redis = ScriptedRedis([1, 0, 4])
-    policy = RateLimitPolicy("auth.login.identity", capacity=5, refill_tokens=5, refill_period_seconds=900)
+    policy = RateLimitPolicy(
+        "auth.login.identity", capacity=5, refill_tokens=5, refill_period_seconds=900
+    )
     limiter = TokenBucketRateLimiter(redis, RateLimitKeyFactory(b"d" * 32))
 
     result = asyncio.run(limiter.check(policy, "identity-fingerprint"))
@@ -28,7 +30,9 @@ def test_token_bucket_returns_remaining_capacity_for_an_allowed_request() -> Non
 
 def test_token_bucket_returns_retry_after_for_a_rejected_request() -> None:
     redis = ScriptedRedis([0, 2_500, 0])
-    policy = RateLimitPolicy("auth.login.identity", capacity=5, refill_tokens=5, refill_period_seconds=900)
+    policy = RateLimitPolicy(
+        "auth.login.identity", capacity=5, refill_tokens=5, refill_period_seconds=900
+    )
     limiter = TokenBucketRateLimiter(redis, RateLimitKeyFactory(b"d" * 32))
 
     result = asyncio.run(limiter.check(policy, "identity-fingerprint"))
@@ -40,7 +44,9 @@ def test_token_bucket_returns_retry_after_for_a_rejected_request() -> None:
 
 def test_rate_limit_keys_do_not_include_the_raw_subject() -> None:
     key = RateLimitKeyFactory(b"d" * 32).create(
-        RateLimitPolicy("auth.login.ip", capacity=20, refill_tokens=20, refill_period_seconds=900),
+        RateLimitPolicy(
+            "auth.login.ip", capacity=20, refill_tokens=20, refill_period_seconds=900
+        ),
         "198.51.100.10",
     )
 
