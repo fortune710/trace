@@ -160,7 +160,14 @@ def upgrade() -> None:
     )
     op.execute("CREATE UNIQUE INDEX credentials_active_owner_provider_kind_key ON private.credentials (owner_id, provider, credential_kind) WHERE revoked_at IS NULL")
 
-    op.execute("GRANT CONNECT ON DATABASE trace TO trace_app")
+    op.execute(
+        """
+        DO $$
+        BEGIN
+          EXECUTE format('GRANT CONNECT ON DATABASE %I TO trace_app', current_database());
+        END $$;
+        """
+    )
     op.execute("GRANT USAGE ON SCHEMA auth, public, private TO trace_app")
     op.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA auth, public, private TO trace_app")
     op.execute("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA auth, public, private TO trace_app")
@@ -176,7 +183,14 @@ def downgrade() -> None:
     op.execute("ALTER DEFAULT PRIVILEGES FOR ROLE trace IN SCHEMA public REVOKE ALL ON TABLES FROM trace_app")
     op.execute("ALTER DEFAULT PRIVILEGES FOR ROLE trace IN SCHEMA private REVOKE ALL ON TABLES FROM trace_app")
     op.execute("REVOKE USAGE ON SCHEMA auth, public, private FROM trace_app")
-    op.execute("REVOKE CONNECT ON DATABASE trace FROM trace_app")
+    op.execute(
+        """
+        DO $$
+        BEGIN
+          EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM trace_app', current_database());
+        END $$;
+        """
+    )
     op.execute("DROP SCHEMA IF EXISTS private CASCADE")
     op.execute("DROP TABLE IF EXISTS public.projects")
     op.execute("DROP TABLE IF EXISTS public.users")

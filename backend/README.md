@@ -31,3 +31,13 @@ Run migrations through Docker Compose from the repository root:
 ```
 
 The command waits for PostgreSQL, then runs Alembic in the dedicated migration container. FastAPI startup never applies migrations automatically.
+
+## Test database migrations
+
+Run the isolated test-database migration from the repository root:
+
+```bash
+./scripts/migrate-test.sh
+```
+
+This starts only the `postgres-test` service in the Compose `test` profile and migrates `trace_test`. Integration tests must use `TEST_DATABASE_URL`, never the development `DATABASE_URL`.

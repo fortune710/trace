@@ -30,19 +30,21 @@ On a high level, Trace will operate with the client-server model, with the serve
 
 ## Local services
 
-Phase 1 runs the FastAPI backend, PostgreSQL, Redis, Mailpit, and a local Vault Transit service with Docker Compose.
+Docker Compose runs the FastAPI backend, email worker, PostgreSQL, Redis, RabbitMQ, Mailpit, and a local Vault Transit service.
 
-1. Copy `.env.example` to `.env` and replace the local PostgreSQL password in both `POSTGRES_PASSWORD` and `DATABASE_URL` with the same URL-safe value.
-2. Generate distinct values for the four required `AUTH_*_KEY` entries and `VAULT_DEV_ROOT_TOKEN_ID` using the commands in `.env.example`. The backend refuses to start without them.
-3. Start the stack and wait for all service health checks:
+1. Copy `.env.example` to `.env`.
+2. Replace `POSTGRES_PASSWORD` and `TRACE_APP_PASSWORD`, then update `MIGRATION_DATABASE_URL` and `DATABASE_URL`. Set `RABBITMQ_PASSWORD`. The example derives `AUTH_RABBITMQ_URL` from the RabbitMQ credentials, so use URL-safe values.
+3. Generate a different 32-byte base64url value for each required `AUTH_*_KEY`. Set a development-only value for `VAULT_DEV_ROOT_TOKEN_ID`.
+4. Add the GitHub and Google client credentials when you want to test OAuth.
+5. Start the stack and wait for each health check:
 
    ```bash
    docker compose up --build --wait
    ```
 
-4. Open the FastAPI health endpoint at [http://localhost:8000/health](http://localhost:8000/health) and the Mailpit inbox at [http://localhost:8025](http://localhost:8025).
+6. Open the FastAPI health endpoint at [http://localhost:8000/health](http://localhost:8000/health) and the Mailpit inbox at [http://localhost:8025](http://localhost:8025).
 
-PostgreSQL, Redis, Mailpit SMTP, and Vault are available only on private Docker networks. The backend connects to them as `postgres`, `redis`, `mailpit`, and `vault` respectively.
+PostgreSQL, Redis, RabbitMQ, Mailpit SMTP, and Vault stay on private Docker networks. The backend and worker connect to them as `postgres`, `redis`, `rabbitmq`, `mailpit`, and `vault`.
 
 Stop the stack cleanly with:
 
@@ -50,7 +52,7 @@ Stop the stack cleanly with:
 docker compose down
 ```
 
-This preserves PostgreSQL data. Use `docker compose down -v` only when you intentionally want to delete local database data.
+This preserves PostgreSQL and RabbitMQ data. Use `docker compose down -v` only when you want to delete local data.
 
 The backend container runs [start.sh](backend/start.sh) with locked dependencies and without runtime downloads. It is non-root, has a read-only filesystem, cannot gain new privileges, and exposes only the API port on localhost. Service images are pinned to immutable digests; update them deliberately as part of maintenance.
 
@@ -82,3 +84,15 @@ After copying `.env.example` to `.env`, apply migrations with:
 ```
 
 This waits for PostgreSQL and runs Alembic in a separate migration-only container. FastAPI startup never changes the database schema automatically.
+
+## Test database
+
+The `test` Compose profile uses a separate PostgreSQL service, `postgres-test`, and the `trace_test` database. It has its own volume and credentials, so integration migrations cannot modify the development database.
+
+Set `TEST_POSTGRES_PASSWORD` and `TEST_TRACE_APP_PASSWORD` in `.env`, then run:
+
+```bash
+./scripts/migrate-test.sh
+```
+
+Use `TEST_DATABASE_URL` for integration tests. It targets `postgres-test:5432/trace_test` inside the Compose network; do not substitute `DATABASE_URL` or `MIGRATION_DATABASE_URL` in test commands.

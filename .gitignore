@@ -1,6 +1,6 @@
 .env
 node_modules
-backend/.venv
+.venv
 
 tmp
 __pycache__

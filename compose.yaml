@@ -56,6 +56,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       mailpit:
@@ -92,8 +94,6 @@ services:
       start_period: 10s
 
   migrate:
-    profiles:
-      - tools
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -106,6 +106,37 @@ services:
       PYTHONUNBUFFERED: "1"
     volumes:
       - ./backend:/app:ro
+    networks:
+      - data
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    restart: "no"
+
+  migrate-test:
+    profiles:
+      - test
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command:
+      - ./migrate.sh
+    environment:
+      MIGRATION_DATABASE_URL: ${TEST_MIGRATION_DATABASE_URL:?Set TEST_MIGRATION_DATABASE_URL in .env}
+      TRACE_APP_PASSWORD: ${TEST_TRACE_APP_PASSWORD:?Set TEST_TRACE_APP_PASSWORD in .env}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./backend:/app:ro
+    depends_on:
+      postgres-test:
+        condition: service_healthy
     networks:
       - data
     init: true
@@ -150,6 +181,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       mailpit:
         condition: service_healthy
       rabbitmq:
@@ -193,6 +226,33 @@ services:
         - trace
         - -d
         - trace
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres-test:
+    profiles:
+      - test
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    environment:
+      POSTGRES_DB: trace_test
+      POSTGRES_USER: trace
+      POSTGRES_PASSWORD: ${TEST_POSTGRES_PASSWORD:?Set TEST_POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    networks:
+      - data
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - pg_isready
+        - -U
+        - trace
+        - -d
+        - trace_test
       interval: 5s
       timeout: 3s
       retries: 10
@@ -340,6 +400,7 @@ services:
 
 volumes:
   postgres_data:
+  postgres_test_data:
   vault_runtime:
   rabbitmq_data:
 
