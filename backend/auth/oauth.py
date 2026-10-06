@@ -41,6 +41,7 @@ _GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
 _GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 _GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
+OAUTH_CALLBACK_ROUTE = "/auth/oauth/{provider}/callback"
 
 
 class OAuthUnavailable(RuntimeError):
@@ -188,7 +189,7 @@ def install_oauth_routes(app: FastAPI, settings: AuthSettings, audit_hasher: Aud
         audit(request, event="oauth", outcome="accepted", reason="authorization_started", status_code=302, provider=provider)
         return RedirectResponse(f"{provider_config.authorize_url}?{urlencode(parameters)}", status_code=302)
 
-    @app.get("/auth/oauth/{provider}/callback")
+    @app.get(OAUTH_CALLBACK_ROUTE)
     async def oauth_callback(request: FastAPIRequest, provider: str, state: str | None = None, code: str | None = None, error: str | None = None):
         request_id = getattr(request.state, "request_id", "unavailable")
         fallback_destination = settings.frontend_url.rstrip("/")
@@ -238,9 +239,13 @@ def _provider_configuration(settings: AuthSettings, provider: str) -> ProviderCo
     else:
         raise _invalid_request()
     parsed = urlparse(config.redirect_uri)
-    if not config.client_id or not config.client_secret or parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.path != f"/auth/oauth/{provider}/callback":
+    if not config.client_id or not config.client_secret or parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.path != oauth_callback_path(provider):
         raise _unavailable()
     return config
+
+
+def oauth_callback_path(provider: str) -> str:
+    return OAUTH_CALLBACK_ROUTE.format(provider=provider)
 
 
 def _provider_identity(config: ProviderConfiguration, code: str, transaction: OAuthTransaction) -> tuple[str, str]:

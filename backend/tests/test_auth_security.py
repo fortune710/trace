@@ -12,11 +12,33 @@ from auth.cookies import set_auth_cookies
 from auth.credentials import VaultTransitCredentialCipher, credential_cipher_from_settings
 from auth.csrf import issue_csrf_token, validate_csrf_token
 from auth.errors import AuthError, install_auth_error_handlers
+from auth.routes import install_auth_routes
 from main import create_app
 
 
 def _encoded_key(byte: bytes) -> str:
     return urlsafe_b64encode(byte * 32).decode("ascii").rstrip("=")
+
+
+def test_auth_routes_bind_the_configured_cookie_names() -> None:
+    app = FastAPI()
+    settings = AuthSettings(
+        access_cookie_name="test_access",
+        refresh_cookie_name="test_refresh",
+        csrf_cookie_name="test_csrf",
+    )
+
+    install_auth_routes(app, settings, audit_hasher=None)
+
+    cookie_parameters = {
+        route.path: {field.alias for field in route.dependant.cookie_params}
+        for route in app.routes
+        if hasattr(route, "dependant")
+    }
+
+    assert cookie_parameters["/auth/session"] == {"test_access"}
+    assert cookie_parameters["/auth/refresh"] == {"test_refresh", "test_csrf"}
+    assert cookie_parameters["/auth/logout"] == {"test_refresh", "test_csrf"}
 
 
 def test_approved_authentication_configuration_is_accepted() -> None:

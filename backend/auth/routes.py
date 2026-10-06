@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from functools import lru_cache
-from typing import Annotated
 from urllib.parse import urlparse
 
 from fastapi import Cookie, FastAPI, Request, Response
@@ -125,8 +124,8 @@ def install_auth_routes(app: FastAPI, settings: AuthSettings, audit_hasher: Audi
     async def refresh(
         request: Request,
         response: Response,
-        refresh_token: Annotated[str | None, Cookie(alias=settings.refresh_cookie_name)] = None,
-        csrf_cookie: Annotated[str | None, Cookie(alias=settings.csrf_cookie_name)] = None,
+        refresh_token: str | None = Cookie(default=None, alias=settings.refresh_cookie_name),
+        csrf_cookie: str | None = Cookie(default=None, alias=settings.csrf_cookie_name),
     ) -> dict[str, str]:
         session_id = await asyncio.to_thread(service().session_id_for_refresh, refresh_token)
         _require_csrf(request, csrf_cookie, session_id, settings)
@@ -146,8 +145,8 @@ def install_auth_routes(app: FastAPI, settings: AuthSettings, audit_hasher: Audi
     async def logout(
         request: Request,
         response: Response,
-        refresh_token: Annotated[str | None, Cookie(alias=settings.refresh_cookie_name)] = None,
-        csrf_cookie: Annotated[str | None, Cookie(alias=settings.csrf_cookie_name)] = None,
+        refresh_token: str | None = Cookie(default=None, alias=settings.refresh_cookie_name),
+        csrf_cookie: str | None = Cookie(default=None, alias=settings.csrf_cookie_name),
     ) -> Response:
         session_id = await asyncio.to_thread(service().session_id_for_refresh, refresh_token)
         if session_id is not None:
@@ -163,7 +162,7 @@ def install_auth_routes(app: FastAPI, settings: AuthSettings, audit_hasher: Audi
     @app.get("/auth/session")
     async def session(
         request: Request,
-        access_token: Annotated[str | None, Cookie(alias=settings.access_cookie_name)] = None,
+        access_token: str | None = Cookie(default=None, alias=settings.access_cookie_name),
     ) -> dict[str, str]:
         try:
             claims = await asyncio.to_thread(service().access_claims, access_token)
