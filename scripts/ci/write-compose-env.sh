@@ -8,13 +8,21 @@ umask 077
 cat >"$target_file" <<'EOF'
 POSTGRES_PASSWORD=trace-ci-postgres-password
 TRACE_APP_PASSWORD=trace-ci-app-password
+TRACE_INTERNAL_PASSWORD=trace-ci-internal-password
+TRACE_CREDENTIAL_MAINTENANCE_PASSWORD=trace-ci-credential-maintenance-password
 MIGRATION_DATABASE_URL=postgresql://trace:trace-ci-postgres-password@postgres:5432/trace
 DATABASE_URL=postgresql://trace_app:trace-ci-app-password@postgres:5432/trace
+INTERNAL_DATABASE_URL=postgresql://trace_internal:trace-ci-internal-password@postgres:5432/trace
+MAINTENANCE_DATABASE_URL=postgresql://trace_credential_maintenance:trace-ci-credential-maintenance-password@postgres:5432/trace
 BACKEND_HTTP_PORT=18000
 TEST_POSTGRES_PASSWORD=trace-ci-test-postgres-password
 TEST_TRACE_APP_PASSWORD=trace-ci-test-app-password
+TEST_TRACE_INTERNAL_PASSWORD=trace-ci-test-internal-password
+TEST_TRACE_CREDENTIAL_MAINTENANCE_PASSWORD=trace-ci-test-credential-maintenance-password
 TEST_MIGRATION_DATABASE_URL=postgresql://trace:trace-ci-test-postgres-password@postgres-test:5432/trace_test
 TEST_DATABASE_URL=postgresql://trace_app:trace-ci-test-app-password@postgres-test:5432/trace_test
+TEST_INTERNAL_DATABASE_URL=postgresql://trace_internal:trace-ci-test-internal-password@postgres-test:5432/trace_test
+TEST_MAINTENANCE_DATABASE_URL=postgresql://trace_credential_maintenance:trace-ci-test-credential-maintenance-password@postgres-test:5432/trace_test
 REDIS_URL=redis://redis:6379/0
 SMTP_HOST=mailpit
 SMTP_PORT=1025

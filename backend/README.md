@@ -22,6 +22,17 @@ Email verification and recovery work is delivered by the separate `email-worker`
 
 The shared Redis token-bucket limiter is registered in `auth.rate_limit.AUTH_RATE_LIMIT_POLICIES`. Authentication routes will apply its named policies through the same utility rather than defining per-route counters.
 
+## Credential key rotation
+
+Credential re-encryption is a maintenance operation, not an API request. After setting `MAINTENANCE_DATABASE_URL` and migrating the database, run the dedicated maintenance profile:
+
+```bash
+docker compose --profile maintenance run --rm credential-maintenance \
+  --batch-size 100 --max-attempts 5
+```
+
+The command records durable run/item checkpoints, retries transient encryption failures with a generic error code, and supports `--run-id` to resume an interrupted run. Local encryption rewraps in the maintenance process; Vault Transit uses `rewrap` so provider-token plaintext stays in Vault. Reads also repair stale key versions opportunistically.
+
 ## Database migrations
 
 Run migrations through Docker Compose from the repository root:

@@ -25,6 +25,7 @@ services:
       AUTH_CREDENTIAL_ENCRYPTION_PROVIDER: ${AUTH_CREDENTIAL_ENCRYPTION_PROVIDER:-vault}
       AUTH_CREDENTIAL_ENCRYPTION_KEY: ${AUTH_CREDENTIAL_ENCRYPTION_KEY:-}
       AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION: ${AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION:-local-v1}
+      AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS: ${AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS:-{}}
       AUTH_VAULT_ADDR: ${AUTH_VAULT_ADDR:-http://vault:8200}
       AUTH_VAULT_TOKEN_FILE: /run/vault/trace-backend-token
       AUTH_VAULT_TRANSIT_MOUNT: ${AUTH_VAULT_TRANSIT_MOUNT:-transit}
@@ -93,6 +94,50 @@ services:
       retries: 5
       start_period: 10s
 
+  credential-maintenance:
+    profiles:
+      - maintenance
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["./start-credential-maintenance.sh"]
+    environment:
+      MAINTENANCE_DATABASE_URL: ${MAINTENANCE_DATABASE_URL:?Set MAINTENANCE_DATABASE_URL in .env}
+      AUTH_CREDENTIAL_ENCRYPTION_PROVIDER: ${AUTH_CREDENTIAL_ENCRYPTION_PROVIDER:-vault}
+      AUTH_CREDENTIAL_ENCRYPTION_KEY: ${AUTH_CREDENTIAL_ENCRYPTION_KEY:-}
+      AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION: ${AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION:-local-v1}
+      AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS: ${AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS:-{}}
+      AUTH_VAULT_ADDR: ${AUTH_VAULT_ADDR:-http://vault:8200}
+      AUTH_VAULT_TOKEN_FILE: /run/vault/trace-backend-token
+      AUTH_VAULT_TRANSIT_MOUNT: ${AUTH_VAULT_TRANSIT_MOUNT:-transit}
+      AUTH_VAULT_TRANSIT_KEY: ${AUTH_VAULT_TRANSIT_KEY:-trace-provider-credentials}
+      AUTH_VAULT_REQUEST_TIMEOUT_SECONDS: ${AUTH_VAULT_REQUEST_TIMEOUT_SECONDS:-3}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./backend:/app:ro
+      - vault_runtime:/run/vault:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      vault-bootstrap:
+        condition: service_completed_successfully
+    networks:
+      - data
+      - secrets
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    restart: "no"
+
   migrate:
     build:
       context: ./backend
@@ -102,6 +147,8 @@ services:
     environment:
       MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?Set MIGRATION_DATABASE_URL in .env}
       TRACE_APP_PASSWORD: ${TRACE_APP_PASSWORD:?Set TRACE_APP_PASSWORD in .env}
+      TRACE_INTERNAL_PASSWORD: ${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD in .env}
+      TRACE_CREDENTIAL_MAINTENANCE_PASSWORD: ${TRACE_CREDENTIAL_MAINTENANCE_PASSWORD:?Set TRACE_CREDENTIAL_MAINTENANCE_PASSWORD in .env}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
     volumes:
@@ -130,6 +177,8 @@ services:
     environment:
       MIGRATION_DATABASE_URL: ${TEST_MIGRATION_DATABASE_URL:?Set TEST_MIGRATION_DATABASE_URL in .env}
       TRACE_APP_PASSWORD: ${TEST_TRACE_APP_PASSWORD:?Set TEST_TRACE_APP_PASSWORD in .env}
+      TRACE_INTERNAL_PASSWORD: ${TEST_TRACE_INTERNAL_PASSWORD:?Set TEST_TRACE_INTERNAL_PASSWORD in .env}
+      TRACE_CREDENTIAL_MAINTENANCE_PASSWORD: ${TEST_TRACE_CREDENTIAL_MAINTENANCE_PASSWORD:?Set TEST_TRACE_CREDENTIAL_MAINTENANCE_PASSWORD in .env}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
     volumes:
@@ -160,6 +209,8 @@ services:
     command: ["uv", "run", "--offline", "--no-sync", "--locked", "pytest", "-p", "no:cacheprovider", "-m", "integration"]
     environment:
       DATABASE_URL: ${TEST_DATABASE_URL:?Set TEST_DATABASE_URL in .env}
+      INTERNAL_DATABASE_URL: ${TEST_INTERNAL_DATABASE_URL:?Set TEST_INTERNAL_DATABASE_URL in .env}
+      MAINTENANCE_DATABASE_URL: ${TEST_MAINTENANCE_DATABASE_URL:?Set TEST_MAINTENANCE_DATABASE_URL in .env}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
     volumes:
@@ -188,13 +239,14 @@ services:
       dockerfile: Dockerfile
     command: ["./start-email-worker.sh"]
     environment:
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      DATABASE_URL: ${INTERNAL_DATABASE_URL:?Set INTERNAL_DATABASE_URL in .env}
       SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST in .env}
       SMTP_PORT: ${SMTP_PORT:?Set SMTP_PORT in .env}
       AUTH_ENVIRONMENT: ${AUTH_ENVIRONMENT:-development}
       AUTH_CREDENTIAL_ENCRYPTION_PROVIDER: ${AUTH_CREDENTIAL_ENCRYPTION_PROVIDER:-vault}
       AUTH_CREDENTIAL_ENCRYPTION_KEY: ${AUTH_CREDENTIAL_ENCRYPTION_KEY:-}
       AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION: ${AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION:-local-v1}
+      AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS: ${AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS:-{}}
       AUTH_VAULT_ADDR: ${AUTH_VAULT_ADDR:-http://vault:8200}
       AUTH_VAULT_TOKEN_FILE: /run/vault/trace-backend-token
       AUTH_VAULT_TRANSIT_MOUNT: ${AUTH_VAULT_TRANSIT_MOUNT:-transit}

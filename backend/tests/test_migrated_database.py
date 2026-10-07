@@ -22,5 +22,10 @@ def test_isolated_database_is_migrated_to_the_schema_contract() -> None:
         assert {"users", "projects"}.issubset(
             set(inspector.get_table_names(schema="public"))
         )
+        assert {
+            "credentials",
+            "credential_reencryption_runs",
+            "credential_reencryption_items",
+        }.issubset(set(inspector.get_table_names(schema="private")))
     finally:
         engine.dispose()

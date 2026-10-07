@@ -45,3 +45,31 @@ Set `AUTH_ENVIRONMENT=production`, `AUTH_CREDENTIAL_ENCRYPTION_PROVIDER=vault`, 
 The backend uses the Vault Transit HTTP API, so the application transition is configuration-led: provision the same Transit mount/key and policy in HCP Vault, then change the Vault address and workload authentication.
 
 Existing ciphertext cannot be read by a new Transit key. Migrate it with a controlled dual-provider job: decrypt each credential using the old Vault, encrypt it with HCP Vault, update `encryption_provider`, `key_reference`, and `key_version`, verify reads, then revoke the old backend policy. Do not export a production Transit key merely to avoid this migration.
+
+For rotation within the same Transit key, use the Transit `rewrap` operation. Vault receives the ciphertext and authenticated context, returns ciphertext under the active key version, and the application updates only the encrypted metadata. The application does not decrypt the credential during this operation. Rewrap jobs must be owner/context-bound, idempotent, retryable, and verify that the new ciphertext can be decrypted before marking the record complete.
+
+## Credential re-encryption runbook
+
+The migration creates a separate `trace_credential_maintenance` database role and durable run tables. It is the only runtime role allowed to enumerate and update credential ciphertext for rotation; the API remains connected as `trace_app`. Supply its URL as `MAINTENANCE_DATABASE_URL` and keep `TRACE_CREDENTIAL_MAINTENANCE_PASSWORD` available to the migration container, but never expose either value to the API response surface.
+
+Run a rotation from the dedicated Compose maintenance profile, or from an equivalent one-off production job:
+
+```bash
+docker compose --profile maintenance run --rm credential-maintenance \
+  --batch-size 100 --max-attempts 5
+```
+
+The maintenance container receives only the encryption configuration, Vault runtime token, and `MAINTENANCE_DATABASE_URL`; it does not receive the API database URL or the general authentication signing secrets.
+
+The command discovers the configured active key version. `--target-key-version` may be used as an explicit assertion, but it must equal the active version. For local AES-GCM keys, each credential is decrypted and re-encrypted in process using the active key and the retired verification keys. For Vault Transit, each credential uses Transit `rewrap`; plaintext is not returned to the application. The job stores only credential IDs, ciphertext metadata, bounded counters, and the generic error code `credential_rewrap_failed`.
+
+Each credential is checkpointed in `private.credential_reencryption_items`, while `private.credential_reencryption_runs` stores progress and the last ordered credential ID. A failed or interrupted run can be resumed without starting over:
+
+```bash
+docker compose --profile maintenance run --rm credential-maintenance \
+  --run-id <run-id> --max-attempts 5
+```
+
+Retries use bounded backoff and `FOR UPDATE SKIP LOCKED`, so multiple maintenance processes do not rewrap the same item concurrently. The job emits only run IDs, statuses, counts, and generic failure metrics. It never logs credential payloads, access tokens, ciphertext, Vault tokens, or exception text.
+
+Provider reads also perform best-effort conditional read repair when the stored key version is older than the configured active version. The provider call continues using the old ciphertext while that retired key remains valid; the batch job remains the authoritative completion and retirement check. Retire an old local key or Vault version only after the run is complete, failures have been resolved, and the end-to-end decrypt test has passed.
