@@ -39,6 +39,9 @@ class AuthSettings(BaseSettings):
     credential_encryption_provider: Literal["local", "vault"] = "local"
     credential_encryption_key: SecretStr | None = None
     credential_encryption_key_version: str = "local-v1"
+    credential_encryption_verification_keys: dict[str, str] = Field(
+        default_factory=dict
+    )
     vault_addr: str | None = None
     vault_token: SecretStr | None = None
     vault_transit_mount: str = "transit"
@@ -130,6 +133,23 @@ class AuthSettings(BaseSettings):
                     "Authentication security configuration is invalid"
                 )
 
+        for version, encoded in self.credential_encryption_verification_keys.items():
+            if not version or version == self.credential_encryption_key_version:
+                raise AuthenticationConfigurationError(
+                    "Authentication security configuration is invalid"
+                )
+            try:
+                padded = encoded + "=" * (-len(encoded) % 4)
+                decoded = base64.b64decode(padded, altchars=b"-_", validate=True)
+            except (ValueError, binascii.Error) as error:
+                raise AuthenticationConfigurationError(
+                    "Authentication security configuration is invalid"
+                ) from error
+            if len(decoded) != 32:
+                raise AuthenticationConfigurationError(
+                    "Authentication security configuration is invalid"
+                )
+
         if self.access_token_minutes != 60 or self.refresh_token_days != 7:
             raise AuthenticationConfigurationError(
                 "Configured token lifetimes do not match the approved security policy"
@@ -165,6 +185,14 @@ class AuthSettings(BaseSettings):
 
         if self.credential_encryption_provider == "vault":
             self._validate_vault_settings()
+
+        if (
+            self.environment == "production"
+            and self.credential_encryption_provider != "vault"
+        ):
+            raise AuthenticationConfigurationError(
+                "Production credential encryption must use Vault Transit"
+            )
 
         if self.environment == "production":
             if not self.cookie_secure:

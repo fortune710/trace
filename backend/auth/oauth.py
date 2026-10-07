@@ -8,6 +8,8 @@ import hashlib
 import hmac
 import json
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
@@ -23,20 +25,27 @@ from redis.exceptions import RedisError
 from auth.audit import AuditHasher, log_auth_event
 from auth.config import AuthSettings
 from auth.cookies import set_auth_cookies, set_csrf_cookie
-from auth.csrf import issue_csrf_token
+from auth.credential_service import CredentialService, CredentialServiceError
+from auth.credentials import credential_cipher_from_settings
+from auth.csrf import issue_csrf_token, validate_csrf_token
 from auth.errors import AuthError
+from auth.principal import AuthenticatedPrincipal, CurrentPrincipal
 from auth.rate_limit import (
     AUTH_RATE_LIMIT_POLICIES,
     enforce_rate_limit,
     rate_limiter_from_settings,
 )
-from auth.service import AuthenticationUnavailable, AuthService
-from auth.tokens import decode_base64url_key, generate_opaque_token
-from db.models import IdentityProvider
+from auth.service import AuthenticationUnavailable, AuthService, SessionTokens
+from auth.tokens import (
+    decode_base64url_key,
+    generate_opaque_token,
+)
+from db.models import CredentialKind, CredentialProvider, IdentityProvider
 from db.session import get_engine, get_redis_client
 
 _STATE_TTL_SECONDS = 600
 OAUTH_CALLBACK_ROUTE = "/auth/oauth/{provider}/callback"
+GITHUB_CONNECT_START_ROUTE = "/auth/oauth/github/connect/start"
 
 
 class OAuthUnavailable(RuntimeError):
@@ -47,6 +56,11 @@ class OAuthRejected(ValueError):
     pass
 
 
+class OAuthPurpose(StrEnum):
+    LOGIN = "login"
+    REPOSITORY_CONNECTION = "repository_connection"
+
+
 @dataclass(frozen=True)
 class OAuthTransaction:
     provider: str
@@ -54,6 +68,16 @@ class OAuthTransaction:
     nonce: str | None
     destination: str
     user_agent_hash: str
+    purpose: OAuthPurpose = OAuthPurpose.LOGIN
+    user_id: str | None = None
+    session_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ProviderIdentity:
+    subject: str
+    email: str
+    credential_payload: dict[str, object] | None = None
 
 
 class OAuthStateStore:
@@ -62,8 +86,23 @@ class OAuthStateStore:
         self._state_key = state_key
 
     async def create(
-        self, *, provider: str, destination: str, user_agent: str | None
+        self,
+        *,
+        provider: str,
+        destination: str,
+        user_agent: str | None,
+        purpose: OAuthPurpose = OAuthPurpose.LOGIN,
+        user_id: UUID | None = None,
+        session_id: UUID | None = None,
     ) -> tuple[str, str, str | None]:
+        if purpose == OAuthPurpose.REPOSITORY_CONNECTION and (
+            user_id is None or session_id is None
+        ):
+            raise ValueError("OAuth connection owner and session are required")
+        if purpose == OAuthPurpose.LOGIN and (
+            user_id is not None or session_id is not None
+        ):
+            raise ValueError("OAuth login cannot carry a connection owner")
         state = generate_opaque_token()
         verifier = generate_opaque_token()
         nonce = (
@@ -77,6 +116,9 @@ class OAuthStateStore:
             nonce=nonce,
             destination=destination,
             user_agent_hash=self._digest(user_agent or ""),
+            purpose=purpose,
+            user_id=str(user_id) if user_id is not None else None,
+            session_id=str(session_id) if session_id is not None else None,
         )
         try:
             created = await self._redis.set(
@@ -102,15 +144,39 @@ class OAuthStateStore:
             raise OAuthRejected("OAuth state is invalid")
         try:
             decoded = json.loads(raw)
-            transaction = OAuthTransaction(**decoded)
+            transaction = OAuthTransaction(
+                provider=decoded["provider"],
+                verifier=decoded["verifier"],
+                nonce=decoded.get("nonce"),
+                destination=decoded["destination"],
+                user_agent_hash=decoded["user_agent_hash"],
+                purpose=OAuthPurpose(decoded.get("purpose", OAuthPurpose.LOGIN)),
+                user_id=decoded.get("user_id"),
+                session_id=decoded.get("session_id"),
+            )
             if (
                 transaction.provider
                 not in {IdentityProvider.GITHUB.value, IdentityProvider.GOOGLE.value}
                 or not transaction.verifier
                 or not transaction.destination
+                or (
+                    transaction.purpose == OAuthPurpose.REPOSITORY_CONNECTION
+                    and (
+                        transaction.provider != IdentityProvider.GITHUB.value
+                        or not transaction.user_id
+                        or not transaction.session_id
+                    )
+                )
+                or (
+                    transaction.purpose == OAuthPurpose.LOGIN
+                    and (
+                        transaction.user_id is not None
+                        or transaction.session_id is not None
+                    )
+                )
             ):
                 raise ValueError
-        except (TypeError, ValueError, json.JSONDecodeError) as error:
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
             raise OAuthRejected("OAuth state is invalid") from error
         return transaction
 
@@ -127,6 +193,7 @@ def install_oauth_routes(
     app: FastAPI, settings: AuthSettings, audit_hasher: AuditHasher | None
 ) -> None:
     service: AuthService | None = None
+    credentials: CredentialService | None = None
     limiter = None
     store = None
 
@@ -141,6 +208,14 @@ def install_oauth_routes(
         if limiter is None:
             limiter = rate_limiter_from_settings(settings)
         return limiter
+
+    def credential_service() -> CredentialService:
+        nonlocal credentials
+        if credentials is None:
+            credentials = CredentialService(
+                engine=get_engine(), cipher=credential_cipher_from_settings(settings)
+            )
+        return credentials
 
     def state_store() -> OAuthStateStore:
         nonlocal store
@@ -181,7 +256,9 @@ def install_oauth_routes(
     async def oauth_start(
         request: FastAPIRequest, provider: str, return_to: str | None = None
     ):
-        provider_config = _provider_configuration(settings, provider)
+        provider_config = _provider_configuration(
+            settings, provider, purpose=OAuthPurpose.LOGIN
+        )
         try:
             await enforce_rate_limit(
                 rate_limiter(),
@@ -222,6 +299,57 @@ def install_oauth_routes(
             f"{provider_config.authorize_url}?{urlencode(parameters)}", status_code=302
         )
 
+    @app.post(GITHUB_CONNECT_START_ROUTE)
+    async def github_connect_start(
+        request: FastAPIRequest,
+        principal: CurrentPrincipal,
+        return_to: str | None = None,
+    ):
+        _require_connection_csrf(request, principal, settings)
+        provider = IdentityProvider.GITHUB.value
+        provider_config = _provider_configuration(
+            settings, provider, purpose=OAuthPurpose.REPOSITORY_CONNECTION
+        )
+        try:
+            await enforce_rate_limit(
+                rate_limiter(),
+                policy=AUTH_RATE_LIMIT_POLICIES["auth.oauth_start.ip"],
+                subject=request.client.host if request.client else "unknown",
+            )
+            destination = _destination(settings, return_to)
+            state, verifier, _nonce = await state_store().create(
+                provider=provider,
+                destination=destination,
+                user_agent=request.headers.get("user-agent"),
+                purpose=OAuthPurpose.REPOSITORY_CONNECTION,
+                user_id=principal.user_id,
+                session_id=principal.session_id,
+            )
+        except OAuthUnavailable as error:
+            raise _unavailable() from error
+        except ValueError as error:
+            raise _invalid_request() from error
+        parameters = {
+            "client_id": provider_config.client_id,
+            "redirect_uri": provider_config.redirect_uri,
+            "response_type": "code",
+            "scope": provider_config.scope,
+            "state": state,
+            "code_challenge": _pkce_challenge(verifier),
+            "code_challenge_method": "S256",
+        }
+        audit(
+            request,
+            event="oauth",
+            outcome="accepted",
+            reason="repository_authorization_started",
+            status_code=302,
+            provider=provider,
+        )
+        return {
+            "authorization_url": f"{provider_config.authorize_url}?{urlencode(parameters)}"
+        }
+
     @app.get(OAUTH_CALLBACK_ROUTE)
     async def oauth_callback(
         request: FastAPIRequest,
@@ -242,22 +370,46 @@ def install_oauth_routes(
                 provider=provider,
             )
             return _oauth_failure_redirect(fallback_destination, request_id)
+        session_tokens: SessionTokens | None = None
         try:
             transaction = await state_store().consume(state)
             if transaction.provider != provider:
                 raise OAuthRejected("OAuth state is invalid")
-            configuration = _provider_configuration(settings, provider)
-            subject, email = await asyncio.to_thread(
+            configuration = _provider_configuration(
+                settings, provider, purpose=transaction.purpose
+            )
+            identity = await asyncio.to_thread(
                 _provider_identity, configuration, code, transaction
             )
-            result = await asyncio.to_thread(
-                auth_service().oauth_login,
-                provider=IdentityProvider(provider),
-                subject=subject,
-                email=email,
-            )
-            if result.tokens is None:
-                raise OAuthRejected("OAuth account is not eligible")
+            if transaction.purpose == OAuthPurpose.REPOSITORY_CONNECTION:
+                if (
+                    not transaction.user_id
+                    or not transaction.session_id
+                    or identity.credential_payload is None
+                    or not await asyncio.to_thread(
+                        auth_service().is_session_active,
+                        user_id=UUID(transaction.user_id),
+                        session_id=UUID(transaction.session_id),
+                    )
+                ):
+                    raise OAuthRejected("OAuth connection is invalid")
+                await asyncio.to_thread(
+                    credential_service().create_or_replace,
+                    owner_id=UUID(transaction.user_id),
+                    provider=CredentialProvider.GITHUB,
+                    kind=CredentialKind.OAUTH,
+                    payload=identity.credential_payload,
+                )
+            else:
+                result = await asyncio.to_thread(
+                    auth_service().oauth_login,
+                    provider=IdentityProvider(provider),
+                    subject=identity.subject,
+                    email=identity.email,
+                )
+                if result.tokens is None:
+                    raise OAuthRejected("OAuth account is not eligible")
+                session_tokens = result.tokens
         except (OAuthRejected, ValueError, AuthError):
             audit(
                 request,
@@ -268,7 +420,11 @@ def install_oauth_routes(
                 provider=provider,
             )
             return _oauth_failure_redirect(fallback_destination, request_id)
-        except (OAuthUnavailable, AuthenticationUnavailable):
+        except (
+            OAuthUnavailable,
+            AuthenticationUnavailable,
+            CredentialServiceError,
+        ):
             audit(
                 request,
                 event="oauth",
@@ -279,14 +435,30 @@ def install_oauth_routes(
             )
             return _oauth_failure_redirect(fallback_destination, request_id)
 
+        if transaction.purpose == OAuthPurpose.REPOSITORY_CONNECTION:
+            response = RedirectResponse(
+                f"{transaction.destination.rstrip('/')}/auth/github/callback?{urlencode({'connected': 'github', 'request_id': request_id})}",
+                status_code=303,
+            )
+            audit(
+                request,
+                event="oauth",
+                outcome="accepted",
+                reason="repository_connected",
+                status_code=303,
+                provider=provider,
+            )
+            return response
+
         response = RedirectResponse(
             f"{transaction.destination.rstrip('/')}/auth/callback", status_code=303
         )
+        assert session_tokens is not None
         _set_session(
             response,
-            result.tokens.access_token,
-            result.tokens.refresh_token,
-            result.tokens.session_id,
+            session_tokens.access_token,
+            session_tokens.refresh_token,
+            session_tokens.session_id,
             settings,
         )
         audit(
@@ -315,7 +487,10 @@ class ProviderConfiguration:
 
 
 def _provider_configuration(
-    settings: AuthSettings, provider: str
+    settings: AuthSettings,
+    provider: str,
+    *,
+    purpose: OAuthPurpose = OAuthPurpose.LOGIN,
 ) -> ProviderConfiguration:
     if provider == IdentityProvider.GITHUB.value:
         client_id, secret, redirect_uri = (
@@ -330,7 +505,9 @@ def _provider_configuration(
             redirect_uri or "",
             settings.github_authorize_url,
             settings.github_token_url,
-            "read:user user:email",
+            "read:user user:email"
+            if purpose == OAuthPurpose.LOGIN
+            else "read:user user:email repo",
             github_user_url=settings.github_user_url,
             github_emails_url=settings.github_emails_url,
         )
@@ -370,7 +547,7 @@ def oauth_callback_path(provider: str) -> str:
 
 def _provider_identity(
     config: ProviderConfiguration, code: str, transaction: OAuthTransaction
-) -> tuple[str, str]:
+) -> ProviderIdentity:
     if len(code) > 2048:
         raise OAuthRejected("OAuth callback is invalid")
     token = _post_form(
@@ -410,7 +587,13 @@ def _provider_identity(
         )
         if not isinstance(email, str):
             raise OAuthRejected("GitHub email is unavailable")
-        return str(subject), email
+        return ProviderIdentity(
+            subject=str(subject),
+            email=email,
+            credential_payload=_github_credential_payload(token)
+            if transaction.purpose == OAuthPurpose.REPOSITORY_CONNECTION
+            else None,
+        )
     id_token = token.get("id_token")
     if not isinstance(id_token, str) or not transaction.nonce:
         raise OAuthRejected("Google identity is invalid")
@@ -437,7 +620,77 @@ def _provider_identity(
     subject, email = claims.get("sub"), claims.get("email")
     if not isinstance(subject, str) or not subject or not isinstance(email, str):
         raise OAuthRejected("Google identity is invalid")
-    return subject, email
+    return ProviderIdentity(subject=subject, email=email)
+
+
+def _github_credential_payload(token: dict[str, object]) -> dict[str, object]:
+    access_token = token.get("access_token")
+    if (
+        not isinstance(access_token, str)
+        or not access_token
+        or len(access_token) > 8192
+    ):
+        raise OAuthRejected("OAuth exchange failed")
+
+    payload: dict[str, object] = {"access_token": access_token}
+    for field in ("refresh_token", "token_type", "scope"):
+        value = token.get(field)
+        if isinstance(value, str) and value and len(value) <= 8192:
+            payload[field] = value
+    for field in ("expires_in", "refresh_token_expires_in"):
+        value = token.get(field)
+        if isinstance(value, int) and 0 < value <= 31_536_000:
+            payload[field] = value
+    expires_in = payload.get("expires_in")
+    if isinstance(expires_in, int):
+        payload["access_token_expires_at"] = (
+            datetime.now(UTC) + timedelta(seconds=expires_in)
+        ).isoformat()
+    refresh_expires_in = payload.get("refresh_token_expires_in")
+    if isinstance(refresh_expires_in, int):
+        payload["refresh_token_expires_at"] = (
+            datetime.now(UTC) + timedelta(seconds=refresh_expires_in)
+        ).isoformat()
+    return payload
+
+
+def refresh_github_credential(
+    *,
+    service: CredentialService,
+    settings: AuthSettings,
+    owner_id: UUID,
+    credential_id: UUID,
+) -> dict[str, object]:
+    """Refresh and atomically replace one owner's GitHub OAuth payload."""
+    payload = service.decrypt_for_provider_call(
+        owner_id=owner_id, credential_id=credential_id
+    )
+    refresh_token = payload.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token:
+        raise OAuthRejected("GitHub credential cannot be refreshed")
+    configuration = _provider_configuration(
+        settings,
+        IdentityProvider.GITHUB.value,
+        purpose=OAuthPurpose.REPOSITORY_CONNECTION,
+    )
+    token = _post_form(
+        configuration.token_url,
+        {
+            "client_id": configuration.client_id,
+            "client_secret": configuration.client_secret,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        },
+    )
+    refreshed = _github_credential_payload(token)
+    if "refresh_token" not in refreshed:
+        refreshed["refresh_token"] = refresh_token
+    service.replace_payload(
+        owner_id=owner_id,
+        credential_id=credential_id,
+        payload=refreshed,
+    )
+    return refreshed
 
 
 def _post_form(url: str, values: dict[str, str]) -> dict[str, object]:
@@ -555,3 +808,28 @@ def _invalid_request() -> AuthError:
         event="request",
         reason="invalid_input",
     )
+
+
+def _require_connection_csrf(
+    request: FastAPIRequest,
+    principal: AuthenticatedPrincipal,
+    settings: AuthSettings,
+) -> None:
+    if settings.csrf_hmac_key is None:
+        raise _unavailable()
+    key = decode_base64url_key(
+        settings.csrf_hmac_key.get_secret_value(), name="AUTH_CSRF_HMAC_KEY"
+    )
+    if not validate_csrf_token(
+        cookie_token=request.cookies.get(settings.csrf_cookie_name),
+        header_token=request.headers.get("X-CSRF-Token"),
+        session_id=principal.session_id,
+        key=key,
+    ):
+        raise AuthError(
+            code="csrf_validation_failed",
+            message="The request could not be validated.",
+            status_code=403,
+            event="csrf",
+            reason="csrf_invalid",
+        )

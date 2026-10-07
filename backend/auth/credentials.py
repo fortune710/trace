@@ -43,7 +43,13 @@ class CredentialCipher:
     alongside the encrypted credential.
     """
 
-    def __init__(self, *, key: bytes, key_version: str) -> None:
+    def __init__(
+        self,
+        *,
+        key: bytes,
+        key_version: str,
+        verification_keys: dict[str, bytes] | None = None,
+    ) -> None:
         if len(key) != 32:
             raise ValueError("Credential encryption keys must contain exactly 32 bytes")
         if not key_version:
@@ -51,6 +57,14 @@ class CredentialCipher:
 
         self._cipher = AESGCM(key)
         self._key_version = key_version
+        self._verification_keys = {
+            key_version: key,
+            **(verification_keys or {}),
+        }
+
+    @property
+    def active_key_version(self) -> str:
+        return self._key_version
 
     @staticmethod
     def _aad(
@@ -110,13 +124,17 @@ class CredentialCipher:
         if (
             encrypted.aad_version != "v1"
             or encrypted.encryption_provider != "local"
-            or encrypted.key_version != self._key_version
-            or encrypted.key_reference != self._key_version
+            or encrypted.key_version not in self._verification_keys
+            or encrypted.key_reference != encrypted.key_version
         ):
             raise CredentialDecryptionError("Credential cannot be decrypted")
 
+        key = self._verification_keys.get(encrypted.key_version)
+        if key is None:
+            raise CredentialDecryptionError("Credential cannot be decrypted")
+
         try:
-            plaintext = self._cipher.decrypt(
+            plaintext = AESGCM(key).decrypt(
                 encrypted.nonce,
                 encrypted.ciphertext,
                 self._aad(
@@ -134,9 +152,36 @@ class CredentialCipher:
             raise CredentialDecryptionError("Credential cannot be decrypted")
         return decoded
 
+    def rewrap_json(
+        self,
+        encrypted: EncryptedCredential,
+        *,
+        credential_id: UUID,
+        owner_id: UUID,
+        provider: str,
+        credential_kind: str,
+    ) -> EncryptedCredential:
+        return self.encrypt_json(
+            self.decrypt_json(
+                encrypted,
+                credential_id=credential_id,
+                owner_id=owner_id,
+                provider=provider,
+                credential_kind=credential_kind,
+            ),
+            credential_id=credential_id,
+            owner_id=owner_id,
+            provider=provider,
+            credential_kind=credential_kind,
+        )
+
 
 class VaultTransitTransport(Protocol):
     def write(self, path: str, payload: dict[str, str]) -> dict[str, object]: ...
+
+    def rewrap(self, *, mount: str, key: str, ciphertext: str, context: str) -> str: ...
+
+    def latest_version(self, *, mount: str, key: str) -> str: ...
 
 
 class VaultTransitClient:
@@ -193,6 +238,44 @@ class VaultTransitClient:
                 "Credential encryption service is unavailable"
             )
 
+    def rewrap(self, *, mount: str, key: str, ciphertext: str, context: str) -> str:
+        response = self.write(
+            f"{mount}/rewrap/{key}",
+            {"ciphertext": ciphertext, "context": context},
+        )
+        updated = response.get("ciphertext")
+        if not isinstance(updated, str) or not updated.startswith("vault:v"):
+            raise CredentialEncryptionUnavailable(
+                "Credential encryption service is unavailable"
+            )
+        return updated
+
+    def latest_version(self, *, mount: str, key: str) -> str:
+        request = Request(
+            f"{self._address}/v1/{quote(f'{mount}/keys/{key}', safe='/')}",
+            headers={"X-Vault-Token": self._token},
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=self._timeout_seconds) as response:
+                body = response.read()
+        except (HTTPError, URLError, TimeoutError) as error:
+            raise CredentialEncryptionUnavailable(
+                "Credential encryption service is unavailable"
+            ) from error
+        try:
+            decoded = json.loads(body)
+            latest = decoded["data"]["latest_version"]
+        except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise CredentialEncryptionUnavailable(
+                "Credential encryption service is unavailable"
+            ) from error
+        if not isinstance(latest, int) or latest < 1:
+            raise CredentialEncryptionUnavailable(
+                "Credential encryption service is unavailable"
+            )
+        return f"v{latest}"
+
 
 class VaultTransitCredentialCipher:
     """Vault Transit encryption for retained provider credentials.
@@ -206,6 +289,10 @@ class VaultTransitCredentialCipher:
         self._client = client
         self._mount = mount
         self._key = key
+
+    @property
+    def active_key_version(self) -> str:
+        return self._client.latest_version(mount=self._mount, key=self._key)
 
     @staticmethod
     def _aad(
@@ -323,11 +410,56 @@ class VaultTransitCredentialCipher:
             raise CredentialDecryptionError("Credential cannot be decrypted")
         return decoded
 
+    def rewrap_json(
+        self,
+        encrypted: EncryptedCredential,
+        *,
+        credential_id: UUID,
+        owner_id: UUID,
+        provider: str,
+        credential_kind: str,
+    ) -> EncryptedCredential:
+        if (
+            encrypted.aad_version != "v1"
+            or encrypted.encryption_provider != "vault"
+            or encrypted.key_reference != f"{self._mount}/{self._key}"
+        ):
+            raise CredentialDecryptionError("Credential cannot be decrypted")
+        try:
+            ciphertext = encrypted.ciphertext.decode("ascii")
+        except UnicodeDecodeError as error:
+            raise CredentialDecryptionError("Credential cannot be decrypted") from error
+        if not ciphertext.startswith("vault:v"):
+            raise CredentialDecryptionError("Credential cannot be decrypted")
+        updated = self._client.rewrap(
+            mount=self._mount,
+            key=self._key,
+            ciphertext=ciphertext,
+            context=self._context(
+                credential_id=credential_id,
+                owner_id=owner_id,
+                provider=provider,
+                credential_kind=credential_kind,
+            ),
+        )
+        return EncryptedCredential(
+            ciphertext=updated.encode("ascii"),
+            nonce=b"",
+            key_version=updated.split(":", 2)[1],
+            encryption_provider="vault",
+            key_reference=f"{self._mount}/{self._key}",
+        )
+
 
 def credential_cipher_from_settings(
     settings: AuthSettings,
+    *,
+    validate_authentication: bool = True,
 ) -> CredentialCipher | VaultTransitCredentialCipher:
-    settings.validate_for_authentication()
+    if validate_authentication:
+        settings.validate_for_authentication()
+    elif settings.credential_encryption_provider == "vault":
+        settings._validate_vault_settings()
     if settings.credential_encryption_provider == "vault":
         assert settings.vault_addr is not None
         assert settings.vault_token is not None
@@ -340,13 +472,23 @@ def credential_cipher_from_settings(
             mount=settings.vault_transit_mount,
             key=settings.vault_transit_key,
         )
-    assert settings.credential_encryption_key is not None
+    if settings.credential_encryption_key is None:
+        raise CredentialEncryptionUnavailable(
+            "Credential encryption configuration is incomplete"
+        )
     return CredentialCipher(
         key=decode_base64url_key(
             settings.credential_encryption_key.get_secret_value(),
             name="AUTH_CREDENTIAL_ENCRYPTION_KEY",
         ),
         key_version=settings.credential_encryption_key_version,
+        verification_keys={
+            version: decode_base64url_key(
+                encoded,
+                name=f"AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS[{version}]",
+            )
+            for version, encoded in settings.credential_encryption_verification_keys.items()
+        },
     )
 
 
@@ -382,4 +524,11 @@ def email_payload_cipher_from_settings(
             name="AUTH_CREDENTIAL_ENCRYPTION_KEY",
         ),
         key_version=settings.credential_encryption_key_version,
+        verification_keys={
+            version: decode_base64url_key(
+                encoded,
+                name=f"AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS[{version}]",
+            )
+            for version, encoded in settings.credential_encryption_verification_keys.items()
+        },
     )
