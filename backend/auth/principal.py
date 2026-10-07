@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Annotated, Protocol
 from uuid import UUID
+
+from fastapi import Depends, Request
 
 from auth.errors import AuthError
 from auth.tokens import InvalidAccessToken, JWTService
@@ -16,6 +19,47 @@ class AuthenticatedPrincipal:
 
 class SessionStatusReader(Protocol):
     async def is_active(self, *, user_id: UUID, session_id: UUID) -> bool: ...
+
+
+@dataclass(frozen=True)
+class PrincipalDependencyContext:
+    """Runtime dependencies used by the FastAPI principal dependency."""
+
+    access_cookie_name: str
+    jwt_service_factory: Callable[[], JWTService]
+    session_status_reader_factory: Callable[[], SessionStatusReader]
+
+
+def install_principal_context(
+    app,
+    *,
+    access_cookie_name: str,
+    jwt_service_factory: Callable[[], JWTService],
+    session_status_reader_factory: Callable[[], SessionStatusReader],
+) -> None:
+    """Install the application-owned dependencies used by get_current_principal."""
+
+    app.state.principal_context = PrincipalDependencyContext(
+        access_cookie_name=access_cookie_name,
+        jwt_service_factory=jwt_service_factory,
+        session_status_reader_factory=session_status_reader_factory,
+    )
+
+
+async def get_current_principal(request: Request) -> AuthenticatedPrincipal:
+    """Resolve the authenticated browser session or raise the generic 401 error."""
+
+    context = getattr(request.app.state, "principal_context", None)
+    if not isinstance(context, PrincipalDependencyContext):
+        raise TypeError("The principal dependency is not configured")
+    return await authenticate_access_token(
+        request.cookies.get(context.access_cookie_name),
+        jwt_service=context.jwt_service_factory(),
+        session_status_reader=context.session_status_reader_factory(),
+    )
+
+
+CurrentPrincipal = Annotated[AuthenticatedPrincipal, Depends(get_current_principal)]
 
 
 async def authenticate_access_token(

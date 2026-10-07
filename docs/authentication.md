@@ -4,6 +4,36 @@
 
 Trace supports GitHub OAuth, Google OpenID Connect, and verified email/password accounts. Authentication is browser-cookie based. The API is the only issuer and verifier of Trace session credentials; provider credentials are never returned to the browser.
 
+## Authorization and database isolation
+
+Protected FastAPI routes use the shared `get_current_principal` dependency. It reads
+only the configured access cookie, verifies the Ed25519 access-token contract, and
+checks that the referenced session is still active. Missing, malformed, expired, or
+revoked access tokens all produce the same `401 authentication_required` response.
+
+Owner-scoped services must include the authenticated `user_id` directly in every
+resource predicate. PostgreSQL adds a second enforcement layer for `public.projects`
+and `private.credentials`: each authenticated transaction sets the transaction-local
+`trace.current_user_id` setting, and forced RLS policies allow only rows whose
+`owner_id` matches that setting. Missing or malformed context fails closed.
+
+The transaction context is established with `principal_transaction(engine, user_id)`;
+connection-level identity variables and connection checkout hooks are not used because
+connections are pooled. OAuth repository callbacks use the owner from the validated,
+single-use OAuth state before writing credentials.
+
+Object authorization failures use the generic `authorization_denied` error shape. A
+resource service may distinguish a foreign-owned resource from an absent resource only
+through a restricted boolean-only `SECURITY DEFINER` existence function; those
+functions return no row data and are executable only by `trace_app`.
+
+The API runs as `trace_app`, which is not allowed to bypass RLS. The trusted email
+worker uses a separate `trace_internal` role with narrowly scoped table grants and
+`BYPASSRLS`; migrations continue to use the existing privileged migration connection.
+Future owner-scoped tables, including agents, reviews, and artifacts, must define a
+non-null `owner_id`, owner predicates, an owner index, and forced RLS policies using the
+same convention before they are exposed by an endpoint.
+
 ## Session contract
 
 An authenticated browser receives two HttpOnly cookies:
@@ -38,14 +68,16 @@ GitHub and Google use authorization-code flow with PKCE `S256`.
 
 | Provider | Local callback | Requested identity scopes |
 | --- | --- | --- |
-| GitHub | `http://localhost:8000/auth/oauth/github/callback` | `read:user`, `user:email` |
+| GitHub login | `http://localhost:8000/auth/oauth/github/callback` | `read:user`, `user:email` |
 | Google | `http://localhost:8000/auth/oauth/google/callback` | `openid`, `email`, `profile` |
 
 At OAuth start, Trace generates a 256-bit state value, PKCE verifier, and, for Google, an OIDC nonce. Redis stores the transaction under an HMAC-derived state key for ten minutes: provider, PKCE verifier, nonce, user-agent hash, and an allowlisted post-login destination. The callback atomically consumes the transaction before exchanging its authorization code.
 
 Google ID tokens must be verified against the provider JWKS with the expected signature, issuer, audience, expiry, nonce, subject, and verified email. GitHub identity is read only from the provider API after a successful code exchange. A provider identity is never automatically linked to an existing password account based solely on matching email. Linking requires an already authenticated account owner.
 
-Provider access or refresh tokens are discarded after sign-in unless Trace needs to call that provider later. Retained tokens use Vault Transit AES-256-GCM encryption by default. Vault retains the encryption key; Trace stores only Vault ciphertext, the Vault key version, the encryption provider, and a key reference in `private.credentials`. Vault Transit receives authenticated context bound to credential ID, owner ID, provider, and credential kind, so ciphertext cannot be moved between those records.
+The GitHub login flow is identity-only: its provider access token is discarded after the identity lookup. Repository access uses the separate authenticated `POST /auth/oauth/github/connect/start` flow with the current session's CSRF header. The response contains only the provider authorization URL. The OAuth transaction is bound to the initiating account and session, requests repository permissions, and stores the returned GitHub access/refresh credential only when Trace needs to access the repository after the browser callback.
+
+Retained tokens use Vault Transit AES-256-GCM encryption by default. Vault retains the encryption key; Trace stores only Vault ciphertext, the Vault key version, the encryption provider, and a key reference in `private.credentials`. Vault Transit receives authenticated context bound to credential ID, owner ID, provider, and credential kind, so ciphertext cannot be moved between those records. Refresh and rewrap operations replace ciphertext atomically and never send tokens through queues or API responses.
 
 `AUTH_CREDENTIAL_ENCRYPTION_PROVIDER=local` is an explicit offline-development fallback only. It uses a versioned AES-256-GCM key from `AUTH_CREDENTIAL_ENCRYPTION_KEY`; it must not be selected for a production deployment. The Vault setup, local-only constraints, and eventual HCP migration path are documented in [Vault Transit](vault-transit.md).
 
@@ -113,6 +145,6 @@ Before serving requests, the application validates base64url-encoded 32-byte val
 - `AUTH_CSRF_HMAC_KEY`
 - `AUTH_AUDIT_HASH_KEY`
 
-When `AUTH_CREDENTIAL_ENCRYPTION_PROVIDER=local`, it additionally requires `AUTH_CREDENTIAL_ENCRYPTION_KEY`. When the provider is `vault`, it instead requires `AUTH_VAULT_ADDR` and `AUTH_VAULT_TOKEN`; production requires an HTTPS Vault address.
+When `AUTH_CREDENTIAL_ENCRYPTION_PROVIDER=local`, it additionally requires `AUTH_CREDENTIAL_ENCRYPTION_KEY` and may temporarily accept retired keys through `AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS`. When the provider is `vault`, it instead requires `AUTH_VAULT_ADDR` and `AUTH_VAULT_TOKEN`; production requires Vault Transit and an HTTPS Vault address.
 
 Production additionally requires secure cookies, the approved cookie prefixes, `SameSite=None`, and exactly the two production frontend origins above. The service deliberately refuses to start on an incomplete or insecure configuration.

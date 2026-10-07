@@ -14,6 +14,7 @@ from auth.config import AuthSettings
 from auth.cookies import clear_auth_cookies, set_auth_cookies, set_csrf_cookie
 from auth.csrf import issue_csrf_token, validate_csrf_token
 from auth.errors import AuthError
+from auth.principal import CurrentPrincipal
 from auth.rate_limit import (
     AUTH_RATE_LIMIT_POLICIES,
     enforce_rate_limit,
@@ -255,25 +256,7 @@ def install_auth_routes(
         return response
 
     @app.get("/auth/session")
-    async def session(
-        request: Request,
-        access_token: str | None = Cookie(
-            default=None, alias=settings.access_cookie_name
-        ),
-    ) -> dict[str, str]:
-        try:
-            claims = await asyncio.to_thread(service().access_claims, access_token)
-        except AuthenticationUnavailable as error:
-            raise _unavailable() from error
-        if claims is None:
-            raise AuthError(
-                code="authentication_required",
-                message="Authentication is required to access this resource.",
-                status_code=401,
-                event="access",
-                reason="token_invalid",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+    async def session(request: Request, principal: CurrentPrincipal) -> dict[str, str]:
         audit(
             request,
             event="access",
@@ -281,7 +264,10 @@ def install_auth_routes(
             reason="session_active",
             status_code=200,
         )
-        return {"user_id": str(claims.user_id), "session_id": str(claims.session_id)}
+        return {
+            "user_id": str(principal.user_id),
+            "session_id": str(principal.session_id),
+        }
 
     @app.post("/auth/password-recovery", status_code=202)
     async def password_recovery(

@@ -42,6 +42,19 @@ class RateLimitExceeded(AuthError):
         self.policy = policy
 
 
+class AuthorizationDenied(AuthError):
+    """Generic authorization failure that does not disclose resource ownership."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            code="authorization_denied",
+            message="You are not authorized to access this resource.",
+            status_code=status.HTTP_403_FORBIDDEN,
+            event="authorization",
+            reason="owner_mismatch",
+        )
+
+
 def _request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "unavailable")
 

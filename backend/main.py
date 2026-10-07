@@ -15,8 +15,10 @@ from auth.credentials import CredentialEncryptionUnavailable, VaultTransitClient
 from auth.errors import install_auth_error_handlers
 from auth.http import install_auth_cors
 from auth.oauth import install_oauth_routes
+from auth.principal import SessionStatusReader, install_principal_context
 from auth.routes import install_auth_routes
-from auth.tokens import decode_base64url_key
+from auth.service import AuthService
+from auth.tokens import decode_base64url_key, jwt_service_from_settings
 from auth.uuids import uuid7
 from db.session import close_redis_client, get_engine, get_redis_client
 
@@ -93,6 +95,37 @@ def create_app(settings: AuthSettings | None = None) -> FastAPI:
             await close_redis_client()
 
     application = FastAPI(title="Trace API", lifespan=lifespan)
+    principal_service: AuthService | None = None
+    principal_jwt_service = None
+
+    def get_principal_service() -> AuthService:
+        nonlocal principal_service
+        if principal_service is None:
+            principal_service = AuthService.from_settings(
+                engine=get_engine(), settings=auth_settings
+            )
+        return principal_service
+
+    def get_principal_jwt_service():
+        nonlocal principal_jwt_service
+        if principal_jwt_service is None:
+            principal_jwt_service = jwt_service_from_settings(auth_settings)
+        return principal_jwt_service
+
+    class _PrincipalSessionStatusReader(SessionStatusReader):
+        async def is_active(self, *, user_id, session_id) -> bool:
+            return await asyncio.to_thread(
+                get_principal_service().is_session_active,
+                user_id=user_id,
+                session_id=session_id,
+            )
+
+    install_principal_context(
+        application,
+        access_cookie_name=auth_settings.access_cookie_name,
+        jwt_service_factory=get_principal_jwt_service,
+        session_status_reader_factory=_PrincipalSessionStatusReader,
+    )
     install_auth_cors(application, auth_settings)
     application.add_middleware(RequestIdMiddleware)
     audit_hasher = _audit_hasher(auth_settings)
