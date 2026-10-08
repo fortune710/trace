@@ -64,39 +64,51 @@ class AuditDeliveryWorker:
         now = datetime.now(UTC)
         stale_before = now - timedelta(minutes=5)
         with self._engine.begin() as connection:
-            job = connection.execute(
-                sa.select(AuditDeliveryJob)
-                .where(
-                    sa.or_(
-                        sa.and_(
-                            AuditDeliveryJob.status == AuditDeliveryStatus.PENDING,
-                            sa.or_(
-                                AuditDeliveryJob.next_attempt_at.is_(None),
-                                AuditDeliveryJob.next_attempt_at <= now,
+            job = (
+                connection.execute(
+                    sa.select(AuditDeliveryJob.__table__)
+                    .where(
+                        sa.or_(
+                            sa.and_(
+                                AuditDeliveryJob.status == AuditDeliveryStatus.PENDING,
+                                sa.or_(
+                                    AuditDeliveryJob.next_attempt_at.is_(None),
+                                    AuditDeliveryJob.next_attempt_at <= now,
+                                ),
                             ),
-                        ),
-                        sa.and_(
-                            AuditDeliveryJob.status == AuditDeliveryStatus.PROCESSING,
-                            AuditDeliveryJob.updated_at <= stale_before,
-                        ),
+                            sa.and_(
+                                AuditDeliveryJob.status
+                                == AuditDeliveryStatus.PROCESSING,
+                                AuditDeliveryJob.updated_at <= stale_before,
+                            ),
+                        )
                     )
+                    .order_by(AuditDeliveryJob.created_at, AuditDeliveryJob.event_id)
+                    .with_for_update(skip_locked=True)
+                    .limit(1)
                 )
-                .order_by(AuditDeliveryJob.created_at, AuditDeliveryJob.event_id)
-                .with_for_update(skip_locked=True)
-                .limit(1)
-            ).scalar_one_or_none()
+                .mappings()
+                .one_or_none()
+            )
             if job is None:
                 return None
-            job.status = AuditDeliveryStatus.PROCESSING
-            job.attempt_count += 1
-            job.next_attempt_at = None
-            job.updated_at = now
+            attempt_count = job["attempt_count"] + 1
+            connection.execute(
+                sa.update(AuditDeliveryJob)
+                .where(AuditDeliveryJob.event_id == job["event_id"])
+                .values(
+                    status=AuditDeliveryStatus.PROCESSING,
+                    attempt_count=attempt_count,
+                    next_attempt_at=None,
+                    updated_at=now,
+                )
+            )
             return _Claim(
-                event_id=job.event_id,
-                owner_id=job.owner_id,
-                canonical_json=job.canonical_json,
-                event_hash=job.event_hash,
-                attempt_count=job.attempt_count,
+                event_id=job["event_id"],
+                owner_id=job["owner_id"],
+                canonical_json=job["canonical_json"],
+                event_hash=job["event_hash"],
+                attempt_count=attempt_count,
             )
 
     def run_once(self) -> bool:
