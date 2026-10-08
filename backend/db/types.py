@@ -24,6 +24,10 @@ class RepositorySource(str, Enum):
     LOCAL = "local"
 
 
+class RepositoryProvider(str, Enum):
+    GITHUB = "github"
+
+
 class ReviewCategory(str, Enum):
     SECURITY = "security"
     ENGINEERING = "engineering"
