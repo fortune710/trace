@@ -1,0 +1,1 @@
+"""Agent resource package."""

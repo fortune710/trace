@@ -5,6 +5,45 @@ description = "Backend APIs for Trace API endpoints"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.20.0",
+    "argon2-cffi>=25.1.0",
+    "cryptography>=50.0.1",
     "fastapi>=0.141.1",
+    "psycopg>=3.3.6",
+    "pydantic-settings>=2.15.0",
+    "pika>=1.3.2",
+    "pyjwt[crypto]>=2.10.1",
+    "redis>=7.1.0",
+    "sqlalchemy>=2.1.1",
     "uvicorn[standard]>=0.53.0",
 ]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "mypy>=2.4.0",
+    "pip-audit>=2.10.1",
+    "pytest>=9.1.1",
+    "ruff>=0.16.10",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: requires the isolated PostgreSQL test service",
+    "security: secret-redaction and security-boundary regression tests",
+]
+
+[tool.ruff.lint]
+per-file-ignores = { "db/models.py" = ["RUF012"] }
+
+[tool.mypy]
+files = ["auth", "db", "main.py", "workers"]
+check_untyped_defs = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["pika", "pika.*"]
+ignore_missing_imports = true
