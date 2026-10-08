@@ -8,6 +8,7 @@ services:
   backend:
     profiles: ["e2e"]
     environment:
+      AUDIT_ENABLED: "true"
       AUTH_ENVIRONMENT: test
       AUTH_CREDENTIAL_ENCRYPTION_PROVIDER: local
       AUTH_CREDENTIAL_ENCRYPTION_KEY: a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s

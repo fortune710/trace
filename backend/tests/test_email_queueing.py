@@ -8,6 +8,7 @@ from auth.email_delivery import (
     EmailJobConsumer,
     RetryableEmailDeliveryError,
 )
+from auth.models import EmailDeliveryKind, EmailDeliveryStatus
 from auth.queueing import (
     EMAIL_DEAD_LETTER_QUEUE,
     EMAIL_MAIN_QUEUE,
@@ -17,7 +18,6 @@ from auth.queueing import (
     RabbitMQEmailPublisher,
     declare_email_topology,
 )
-from db.models import EmailDeliveryKind, EmailDeliveryStatus
 
 JOB_ID = UUID("00000000-0000-7000-8000-000000000001")
 USER_ID = UUID("00000000-0000-7000-8000-000000000002")

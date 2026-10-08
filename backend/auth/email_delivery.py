@@ -19,6 +19,7 @@ from auth.credentials import (
     EncryptedCredential,
     VaultTransitCredentialCipher,
 )
+from auth.models import EmailDeliveryJob, EmailDeliveryKind, EmailDeliveryStatus
 from auth.queueing import (
     EmailQueueMessage,
     QueueMessageInvalid,
@@ -26,7 +27,6 @@ from auth.queueing import (
     RabbitMQEmailPublisher,
 )
 from auth.uuids import uuid7
-from db.models import EmailDeliveryJob, EmailDeliveryKind, EmailDeliveryStatus
 
 logger = logging.getLogger("trace.auth")
 _PAYLOAD_PROVIDER = "email"

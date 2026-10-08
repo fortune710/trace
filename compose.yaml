@@ -47,6 +47,13 @@ services:
       AUTH_EMAIL_MAX_RETRIES: ${AUTH_EMAIL_MAX_RETRIES:-3}
       AUTH_EMAIL_RETRY_DELAYS_SECONDS: ${AUTH_EMAIL_RETRY_DELAYS_SECONDS:-[30,300,1800]}
       AUTH_RABBITMQ_URL: ${AUTH_RABBITMQ_URL:?Set AUTH_RABBITMQ_URL in .env}
+      AUDIT_ENABLED: ${AUDIT_ENABLED:-true}
+      AUDIT_HOST: ${AUDIT_HOST:-immudb}
+      AUDIT_PORT: ${AUDIT_PORT:-3322}
+      AUDIT_DATABASE: ${AUDIT_DATABASE:-trace_audit}
+      AUDIT_USERNAME: ${AUDIT_USERNAME:-trace_audit}
+      AUDIT_PASSWORD: ${AUDIT_PASSWORD:-TraceAudit1!}
+      AUDIT_ROOT_STATE_DIR: ${AUDIT_ROOT_STATE_DIR:-/tmp/trace-audit}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
     ports:
@@ -126,6 +133,7 @@ services:
         condition: service_completed_successfully
     networks:
       - data
+      - audit
       - secrets
     init: true
     read_only: true
@@ -209,8 +217,16 @@ services:
     command: ["uv", "run", "--offline", "--no-sync", "--locked", "pytest", "-p", "no:cacheprovider", "-m", "integration"]
     environment:
       DATABASE_URL: ${TEST_DATABASE_URL:?Set TEST_DATABASE_URL in .env}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       INTERNAL_DATABASE_URL: ${TEST_INTERNAL_DATABASE_URL:?Set TEST_INTERNAL_DATABASE_URL in .env}
       MAINTENANCE_DATABASE_URL: ${TEST_MAINTENANCE_DATABASE_URL:?Set TEST_MAINTENANCE_DATABASE_URL in .env}
+      AUDIT_ENABLED: ${AUDIT_ENABLED:-false}
+      AUDIT_HOST: ${AUDIT_HOST:-immudb}
+      AUDIT_PORT: ${AUDIT_PORT:-3322}
+      AUDIT_DATABASE: ${AUDIT_DATABASE:-trace_audit}
+      AUDIT_USERNAME: ${AUDIT_USERNAME:-trace_audit}
+      AUDIT_PASSWORD: ${AUDIT_PASSWORD:-TraceAudit1!}
+      AUDIT_ROOT_STATE_DIR: /tmp/trace-audit
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
     volumes:
@@ -220,8 +236,13 @@ services:
         condition: service_healthy
       migrate-test:
         condition: service_completed_successfully
+      immudb-bootstrap:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     networks:
       - data
+      - audit
     init: true
     read_only: true
     tmpfs:
@@ -289,6 +310,51 @@ services:
     pids_limit: 128
     stop_grace_period: 30s
 
+  audit-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["./start-audit-worker.sh"]
+    environment:
+      DATABASE_URL: ${INTERNAL_DATABASE_URL:?Set INTERNAL_DATABASE_URL in .env}
+      AUDIT_ENABLED: "true"
+      AUDIT_HOST: ${AUDIT_HOST:-immudb}
+      AUDIT_PORT: ${AUDIT_PORT:-3322}
+      AUDIT_DATABASE: ${AUDIT_DATABASE:-trace_audit}
+      AUDIT_USERNAME: ${AUDIT_USERNAME:-trace_audit}
+      AUDIT_PASSWORD: ${AUDIT_PASSWORD:-TraceAudit1!}
+      AUDIT_ROOT_STATE_DIR: /var/lib/trace-audit
+      AUDIT_MAX_ATTEMPTS: ${AUDIT_MAX_ATTEMPTS:-8}
+      AUDIT_RETRY_BASE_SECONDS: ${AUDIT_RETRY_BASE_SECONDS:-5}
+      AUDIT_RETRY_MAX_SECONDS: ${AUDIT_RETRY_MAX_SECONDS:-900}
+      AUDIT_OUTBOX_RETENTION_DAYS: ${AUDIT_OUTBOX_RETENTION_DAYS:-30}
+      AUDIT_DEAD_LETTER_RETENTION_DAYS: ${AUDIT_DEAD_LETTER_RETENTION_DAYS:-90}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./backend:/app:ro
+      - audit_state:/var/lib/trace-audit
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      immudb-bootstrap:
+        condition: service_completed_successfully
+    networks:
+      - data
+      - audit
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    stop_grace_period: 30s
+
   postgres:
     image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
     environment:
@@ -340,6 +406,54 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  immudb:
+    image: codenotary/immudb:1.10.0@sha256:54f1fb4722034fe6531beed9616284d8e6766b831f18a7b288fc169fa27c6898
+    environment:
+      IMMUDB_ADMIN_PASSWORD: ${AUDIT_IMMUDB_ADMIN_PASSWORD:-TraceImmuAdmin1!}
+    volumes:
+      - immudb_data:/var/lib/immudb
+    networks:
+      - audit
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "immuadmin", "status", "-a", "127.0.0.1", "-p", "3322"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  immudb-bootstrap:
+    image: trace-backend-audit-bootstrap
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runtime
+    command: ["uv", "run", "--offline", "--no-sync", "--locked", "python", "-m", "audit.bootstrap"]
+    environment:
+      AUDIT_IMMUDB_HOST: immudb
+      AUDIT_IMMUDB_PORT: 3322
+      AUDIT_IMMUDB_DATABASE: ${AUDIT_DATABASE:-trace_audit}
+      AUDIT_IMMUDB_ADMIN_USER: immudb
+      AUDIT_IMMUDB_ADMIN_PASSWORD: ${AUDIT_IMMUDB_ADMIN_PASSWORD:-TraceImmuAdmin1!}
+      AUDIT_IMMUDB_USERNAME: ${AUDIT_USERNAME:-trace_audit}
+      AUDIT_IMMUDB_PASSWORD: ${AUDIT_PASSWORD:-TraceAudit1!}
+    depends_on:
+      immudb:
+        condition: service_healthy
+    networks:
+      - audit
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    restart: "no"
 
   redis:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
@@ -487,6 +601,8 @@ volumes:
   postgres_test_data:
   vault_runtime:
   rabbitmq_data:
+  immudb_data:
+  audit_state:
 
 networks:
   edge:
@@ -497,4 +613,6 @@ networks:
   secrets:
     internal: true
   queue:
+    internal: true
+  audit:
     internal: true
