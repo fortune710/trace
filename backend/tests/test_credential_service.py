@@ -9,15 +9,14 @@ import sqlalchemy as sa
 from auth.credential_service import CredentialService
 from auth.credentials import CredentialCipher
 from auth.errors import AuthorizationDenied
-from db.models import (
-    AuthUser,
+from auth.models import AuthUser, UserStatus
+from credentials.models import (
     Credential,
     CredentialKind,
     CredentialProvider,
-    User,
-    UserStatus,
 )
 from db.rls import principal_transaction
+from users.models import User
 
 
 @pytest.mark.integration

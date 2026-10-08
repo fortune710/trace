@@ -33,6 +33,7 @@ testpaths = ["tests"]
 addopts = "-m 'not integration'"
 markers = [
     "integration: requires the isolated PostgreSQL test service",
+    "security: secret-redaction and security-boundary regression tests",
 ]
 
 [tool.ruff.lint]

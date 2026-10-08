@@ -26,6 +26,7 @@ def test_isolated_database_is_migrated_to_the_schema_contract() -> None:
             "credentials",
             "credential_reencryption_runs",
             "credential_reencryption_items",
+            "audit_delivery_jobs",
         }.issubset(set(inspector.get_table_names(schema="private")))
     finally:
         engine.dispose()

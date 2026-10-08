@@ -6,6 +6,8 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from audit.emit import enqueue_audit
+from audit.outbox import AuditRecorder
 from auth.audit import AuditHasher, log_auth_event
 
 
@@ -55,6 +57,45 @@ class AuthorizationDenied(AuthError):
         )
 
 
+class ResourceNotFound(AuthError):
+    """Safe absence response for owner-scoped resources."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            code="resource_not_found",
+            message="The requested resource was not found.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            event="resource",
+            reason="not_found",
+        )
+
+
+class ResourceConflict(AuthError):
+    """Safe response for a valid request that conflicts with resource state."""
+
+    def __init__(self, reason: str = "state_conflict") -> None:
+        super().__init__(
+            code="resource_conflict",
+            message="The requested resource operation conflicts with its current state.",
+            status_code=status.HTTP_409_CONFLICT,
+            event="resource",
+            reason=reason,
+        )
+
+
+class ResourceUnavailable(AuthError):
+    """Safe response when a required downstream resource is unavailable."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            code="resource_unavailable",
+            message="The resource operation is temporarily unavailable.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            event="resource",
+            reason="dependency_unavailable",
+        )
+
+
 def _request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "unavailable")
 
@@ -75,7 +116,9 @@ def _error_response(
 
 
 def install_auth_error_handlers(
-    app: FastAPI, audit_hasher: AuditHasher | None = None
+    app: FastAPI,
+    audit_hasher: AuditHasher | None = None,
+    audit_recorder: AuditRecorder | None = None,
 ) -> None:
     @app.exception_handler(AuthError)
     async def auth_error_handler(request: Request, error: AuthError) -> JSONResponse:
@@ -93,6 +136,18 @@ def install_auth_error_handlers(
             audit_hasher=audit_hasher,
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
+        )
+        enqueue_audit(
+            audit_recorder,
+            event_type=f"{error.event}.rejected",
+            request_id=_request_id(request),
+            owner_id=getattr(request.state, "principal_user_id", None),
+            fields={
+                "outcome": "rejected",
+                "reason": error.reason,
+                "route": request.url.path,
+                "status_code": str(error.status_code),
+            },
         )
         return _error_response(
             code=error.code,
@@ -116,6 +171,18 @@ def install_auth_error_handlers(
             audit_hasher=audit_hasher,
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
+        )
+        enqueue_audit(
+            audit_recorder,
+            event_type="request.rejected",
+            request_id=_request_id(request),
+            owner_id=getattr(request.state, "principal_user_id", None),
+            fields={
+                "outcome": "rejected",
+                "reason": "invalid_input",
+                "route": request.url.path,
+                "status_code": str(status.HTTP_400_BAD_REQUEST),
+            },
         )
         return _error_response(
             code="invalid_request",

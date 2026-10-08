@@ -166,6 +166,24 @@ AUTH_RATE_LIMIT_POLICIES = {
     "auth.refresh.session": RateLimitPolicy(
         "auth.refresh.session", capacity=30, refill_tokens=30, refill_period_seconds=300
     ),
+    "resource.project_write.user": RateLimitPolicy(
+        "resource.project_write.user",
+        capacity=60,
+        refill_tokens=60,
+        refill_period_seconds=900,
+    ),
+    "resource.review_submit.user": RateLimitPolicy(
+        "resource.review_submit.user",
+        capacity=20,
+        refill_tokens=20,
+        refill_period_seconds=900,
+    ),
+    "resource.credential_write.user": RateLimitPolicy(
+        "resource.credential_write.user",
+        capacity=20,
+        refill_tokens=20,
+        refill_period_seconds=900,
+    ),
 }
 
 

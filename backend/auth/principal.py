@@ -52,11 +52,13 @@ async def get_current_principal(request: Request) -> AuthenticatedPrincipal:
     context = getattr(request.app.state, "principal_context", None)
     if not isinstance(context, PrincipalDependencyContext):
         raise TypeError("The principal dependency is not configured")
-    return await authenticate_access_token(
+    principal = await authenticate_access_token(
         request.cookies.get(context.access_cookie_name),
         jwt_service=context.jwt_service_factory(),
         session_status_reader=context.session_status_reader_factory(),
     )
+    request.state.principal_user_id = principal.user_id
+    return principal
 
 
 CurrentPrincipal = Annotated[AuthenticatedPrincipal, Depends(get_current_principal)]

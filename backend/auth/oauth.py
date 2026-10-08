@@ -22,6 +22,8 @@ from fastapi.responses import RedirectResponse
 from jwt import PyJWKClient
 from redis.exceptions import RedisError
 
+from audit.emit import enqueue_audit
+from audit.outbox import AuditRecorder
 from auth.audit import AuditHasher, log_auth_event
 from auth.config import AuthSettings
 from auth.cookies import set_auth_cookies, set_csrf_cookie
@@ -29,6 +31,7 @@ from auth.credential_service import CredentialService, CredentialServiceError
 from auth.credentials import credential_cipher_from_settings
 from auth.csrf import issue_csrf_token, validate_csrf_token
 from auth.errors import AuthError
+from auth.models import IdentityProvider
 from auth.principal import AuthenticatedPrincipal, CurrentPrincipal
 from auth.rate_limit import (
     AUTH_RATE_LIMIT_POLICIES,
@@ -40,8 +43,9 @@ from auth.tokens import (
     decode_base64url_key,
     generate_opaque_token,
 )
-from db.models import CredentialKind, CredentialProvider, IdentityProvider
+from credentials.models import CredentialKind, CredentialProvider
 from db.session import get_engine, get_redis_client
+from external_repositories.service import provision_external_repository
 
 _STATE_TTL_SECONDS = 600
 OAUTH_CALLBACK_ROUTE = "/auth/oauth/{provider}/callback"
@@ -190,7 +194,10 @@ class OAuthStateStore:
 
 
 def install_oauth_routes(
-    app: FastAPI, settings: AuthSettings, audit_hasher: AuditHasher | None
+    app: FastAPI,
+    settings: AuthSettings,
+    audit_hasher: AuditHasher | None,
+    audit_recorder: AuditRecorder | None = None,
 ) -> None:
     service: AuthService | None = None
     credentials: CredentialService | None = None
@@ -250,6 +257,19 @@ def install_oauth_routes(
             audit_hasher=audit_hasher,
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
+        )
+        enqueue_audit(
+            audit_recorder,
+            event_type=f"oauth.{event}",
+            request_id=getattr(request.state, "request_id", "unavailable"),
+            owner_id=getattr(request.state, "principal_user_id", None),
+            fields={
+                "outcome": outcome,
+                "reason": reason,
+                "provider": provider,
+                "route": request.url.path,
+                "status_code": str(status_code),
+            },
         )
 
     @app.get("/auth/oauth/{provider}/start")
@@ -393,12 +413,19 @@ def install_oauth_routes(
                     )
                 ):
                     raise OAuthRejected("OAuth connection is invalid")
-                await asyncio.to_thread(
+                credential_metadata = await asyncio.to_thread(
                     credential_service().create_or_replace,
                     owner_id=UUID(transaction.user_id),
                     provider=CredentialProvider.GITHUB,
                     kind=CredentialKind.OAUTH,
                     payload=identity.credential_payload,
+                )
+                await asyncio.to_thread(
+                    provision_external_repository,
+                    engine=get_engine(),
+                    owner_id=UUID(transaction.user_id),
+                    credential_id=credential_metadata.id,
+                    external_user_id=identity.subject,
                 )
             else:
                 result = await asyncio.to_thread(

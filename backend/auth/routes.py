@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 from fastapi import Cookie, FastAPI, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from audit.emit import enqueue_audit
+from audit.outbox import AuditRecorder
 from auth.audit import AuditHasher, log_auth_event
 from auth.config import AuthSettings
 from auth.cookies import clear_auth_cookies, set_auth_cookies, set_csrf_cookie
@@ -55,7 +57,10 @@ class PasswordResetRequest(TokenRequest):
 
 
 def install_auth_routes(
-    app: FastAPI, settings: AuthSettings, audit_hasher: AuditHasher | None
+    app: FastAPI,
+    settings: AuthSettings,
+    audit_hasher: AuditHasher | None,
+    audit_recorder: AuditRecorder | None = None,
 ) -> None:
     @lru_cache
     def service() -> AuthService:
@@ -90,6 +95,18 @@ def install_auth_routes(
             identity=identity,
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
+        )
+        enqueue_audit(
+            audit_recorder,
+            event_type=f"auth.{event}",
+            request_id=getattr(request.state, "request_id", "unavailable"),
+            owner_id=getattr(request.state, "principal_user_id", None),
+            fields={
+                "outcome": outcome,
+                "reason": reason,
+                "route": request.url.path,
+                "status_code": str(status_code),
+            },
         )
 
     @app.post("/auth/register", status_code=202)

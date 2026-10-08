@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from audit.runtime import get_audit_recorder
 from auth.audit import AuditHasher
 from auth.config import AuthSettings, get_auth_settings
 from auth.credentials import CredentialEncryptionUnavailable, VaultTransitClient
@@ -20,7 +21,10 @@ from auth.routes import install_auth_routes
 from auth.service import AuthService
 from auth.tokens import decode_base64url_key, jwt_service_from_settings
 from auth.uuids import uuid7
+from core.v1 import configure_router
+from core.v1 import router as v1_router
 from db.session import close_redis_client, get_engine, get_redis_client
+from reviews.service import ReviewDispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +74,11 @@ async def _renew_vault_token_forever(
             logger.error("vault_token_renewal_failed")
 
 
-def create_app(settings: AuthSettings | None = None) -> FastAPI:
+def create_app(
+    settings: AuthSettings | None = None,
+    *,
+    review_dispatcher: ReviewDispatcher | None = None,
+) -> FastAPI:
     auth_settings = settings or get_auth_settings()
 
     @asynccontextmanager
@@ -129,9 +137,17 @@ def create_app(settings: AuthSettings | None = None) -> FastAPI:
     install_auth_cors(application, auth_settings)
     application.add_middleware(RequestIdMiddleware)
     audit_hasher = _audit_hasher(auth_settings)
-    install_auth_error_handlers(application, audit_hasher)
-    install_auth_routes(application, auth_settings, audit_hasher)
-    install_oauth_routes(application, auth_settings, audit_hasher)
+    audit_recorder = get_audit_recorder()
+    install_auth_error_handlers(application, audit_hasher, audit_recorder)
+    install_auth_routes(application, auth_settings, audit_hasher, audit_recorder)
+    install_oauth_routes(application, auth_settings, audit_hasher, audit_recorder)
+    configure_router(
+        auth_settings,
+        audit_hasher,
+        dispatcher=review_dispatcher,
+        audit_recorder=audit_recorder,
+    )
+    application.include_router(v1_router)
 
     @application.get("/")
     def read_root() -> dict[str, str]:

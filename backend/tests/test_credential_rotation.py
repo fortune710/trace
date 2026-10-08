@@ -8,18 +8,17 @@ import sqlalchemy as sa
 
 from auth.credential_service import CredentialService
 from auth.credentials import CredentialCipher
-from db.models import (
-    AuthUser,
+from auth.models import AuthUser, UserStatus
+from credentials.models import (
     Credential,
     CredentialEncryptionProvider,
     CredentialKind,
     CredentialProvider,
     CredentialReencryptionRun,
-    User,
-    UserStatus,
 )
 from db.rls import principal_transaction
 from maintenance.credential_rotation import CredentialRotationJob
+from users.models import User
 
 
 @pytest.mark.integration

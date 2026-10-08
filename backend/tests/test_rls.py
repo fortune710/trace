@@ -6,8 +6,11 @@ from uuid import uuid4
 import pytest
 import sqlalchemy as sa
 
-from db.models import AuthUser, Project, ProjectSourceType, User, UserStatus
+from auth.models import AuthUser, UserStatus
 from db.rls import principal_transaction
+from db.types import ProjectSourceType
+from projects.models import Project
+from users.models import User
 
 
 @pytest.mark.integration
@@ -41,7 +44,7 @@ def test_owner_rls_isolation_and_transaction_local_context() -> None:
                     id=owner_project_id,
                     owner_id=owner_id,
                     name="owner project",
-                    source_type=ProjectSourceType.LOCAL,
+                    source=ProjectSourceType.LOCAL,
                     local_path_hash=b"owner-path",
                 )
             )
@@ -55,7 +58,7 @@ def test_owner_rls_isolation_and_transaction_local_context() -> None:
                     id=other_project_id,
                     owner_id=other_owner_id,
                     name="other project",
-                    source_type=ProjectSourceType.LOCAL,
+                    source=ProjectSourceType.LOCAL,
                     local_path_hash=b"other-path",
                 )
             )
@@ -88,7 +91,7 @@ def test_owner_rls_isolation_and_transaction_local_context() -> None:
                         id=uuid4(),
                         owner_id=other_owner_id,
                         name="cross-account insert",
-                        source_type=ProjectSourceType.LOCAL,
+                        source=ProjectSourceType.LOCAL,
                         local_path_hash=b"cross-account-path",
                     )
                 )

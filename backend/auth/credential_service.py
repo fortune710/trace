@@ -21,7 +21,7 @@ from auth.credentials import (
 )
 from auth.errors import AuthorizationDenied
 from auth.uuids import uuid7
-from db.models import (
+from credentials.models import (
     Credential,
     CredentialEncryptionProvider,
     CredentialKind,
@@ -43,7 +43,7 @@ class CredentialNotFound(CredentialServiceError):
 
 
 class CredentialConflict(CredentialServiceError):
-    """Raised when an owner already has an active credential of the same type."""
+    """Raised when a credential mutation conflicts with current resource state."""
 
 
 class CredentialPayloadError(ValueError):
@@ -96,7 +96,7 @@ class CredentialService:
         with principal_transaction(self._engine, owner_id) as connection:
             row = (
                 connection.execute(
-                    sa.select(Credential)
+                    sa.select(Credential.__table__)
                     .where(
                         Credential.owner_id == owner_id,
                         Credential.provider == provider,
@@ -138,11 +138,15 @@ class CredentialService:
                         Credential.credential_kind == kind,
                         Credential.revoked_at.is_(None),
                     )
-                    .values(**values, updated_at=sa.func.now())
+                    .values(
+                        **values,
+                        mutation_version=Credential.mutation_version + 1,
+                        updated_at=sa.func.now(),
+                    )
                 )
             refreshed = (
                 connection.execute(
-                    sa.select(Credential).where(
+                    sa.select(Credential.__table__).where(
                         Credential.id == credential_id,
                         Credential.owner_id == owner_id,
                     )
@@ -153,8 +157,47 @@ class CredentialService:
         return _metadata(refreshed)
 
     def metadata(self, *, owner_id: UUID, credential_id: UUID) -> CredentialMetadata:
-        row = self._owned_row(owner_id=owner_id, credential_id=credential_id)
+        with principal_transaction(self._engine, owner_id) as connection:
+            row = (
+                connection.execute(
+                    sa.select(Credential.__table__).where(
+                        Credential.id == credential_id,
+                        Credential.owner_id == owner_id,
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                _raise_credential_access_error(connection, credential_id)
         return _metadata(row)
+
+    def list_metadata(
+        self,
+        *,
+        owner_id: UUID,
+        include_revoked: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[CredentialMetadata], int | None]:
+        with principal_transaction(self._engine, owner_id) as connection:
+            query = sa.select(Credential.__table__).where(
+                Credential.owner_id == owner_id
+            )
+            if not include_revoked:
+                query = query.where(Credential.revoked_at.is_(None))
+            rows = (
+                connection.execute(
+                    query.order_by(Credential.created_at.desc(), Credential.id.desc())
+                    .offset(offset)
+                    .limit(limit + 1)
+                )
+                .mappings()
+                .all()
+            )
+        selected = rows[:limit]
+        next_offset = offset + limit if len(rows) > limit else None
+        return [_metadata(row) for row in selected], next_offset
 
     def replace_payload(
         self,
@@ -164,15 +207,25 @@ class CredentialService:
         payload: dict[str, object],
     ) -> CredentialMetadata:
         _validate_payload(payload)
+        observed = self._mutation_row(owner_id=owner_id, credential_id=credential_id)
+        if observed["revoked_at"] is not None:
+            raise CredentialConflict("credential_revoked")
         cipher = self._get_cipher()
+        encrypted = _encrypt(
+            cipher,
+            payload,
+            credential_id=observed["id"],
+            owner_id=observed["owner_id"],
+            provider=_provider_enum(observed["provider"]),
+            kind=_kind_enum(observed["credential_kind"]),
+        )
         with principal_transaction(self._engine, owner_id) as connection:
             row = (
                 connection.execute(
-                    sa.select(Credential)
+                    sa.select(Credential.__table__)
                     .where(
                         Credential.id == credential_id,
                         Credential.owner_id == owner_id,
-                        Credential.revoked_at.is_(None),
                     )
                     .with_for_update()
                 )
@@ -181,26 +234,29 @@ class CredentialService:
             )
             if row is None:
                 _raise_credential_access_error(connection, credential_id)
-            encrypted = _encrypt(
-                cipher,
-                payload,
-                credential_id=row["id"],
-                owner_id=row["owner_id"],
-                provider=_provider_enum(row["provider"]),
-                kind=_kind_enum(row["credential_kind"]),
-            )
-            connection.execute(
+            if row["revoked_at"] is not None:
+                raise CredentialConflict("credential_revoked")
+            if row["mutation_version"] != observed["mutation_version"]:
+                raise CredentialConflict("credential_conflict")
+            result = connection.execute(
                 sa.update(Credential)
                 .where(
                     Credential.id == credential_id,
                     Credential.owner_id == owner_id,
+                    Credential.mutation_version == observed["mutation_version"],
                     Credential.revoked_at.is_(None),
                 )
-                .values(**_encrypted_values(encrypted), updated_at=sa.func.now())
+                .values(
+                    **_encrypted_values(encrypted),
+                    mutation_version=Credential.mutation_version + 1,
+                    updated_at=sa.func.now(),
+                )
             )
+            if result.rowcount != 1:
+                raise CredentialConflict("credential_conflict")
             refreshed = (
                 connection.execute(
-                    sa.select(Credential).where(
+                    sa.select(Credential.__table__).where(
                         Credential.id == credential_id,
                         Credential.owner_id == owner_id,
                     )
@@ -265,7 +321,11 @@ class CredentialService:
                         Credential.ciphertext == encrypted.ciphertext,
                         Credential.revoked_at.is_(None),
                     )
-                    .values(**_encrypted_values(updated), updated_at=sa.func.now())
+                    .values(
+                        **_encrypted_values(updated),
+                        mutation_version=Credential.mutation_version + 1,
+                        updated_at=sa.func.now(),
+                    )
                 )
             return updated if result.rowcount == 1 else encrypted
         except (CredentialDecryptionError, CredentialEncryptionUnavailable):
@@ -301,11 +361,15 @@ class CredentialService:
                     Credential.owner_id == owner_id,
                     Credential.revoked_at.is_(None),
                 )
-                .values(**_encrypted_values(updated), updated_at=sa.func.now())
+                .values(
+                    **_encrypted_values(updated),
+                    mutation_version=Credential.mutation_version + 1,
+                    updated_at=sa.func.now(),
+                )
             )
             refreshed = (
                 connection.execute(
-                    sa.select(Credential).where(
+                    sa.select(Credential.__table__).where(
                         Credential.id == credential_id,
                         Credential.owner_id == owner_id,
                     )
@@ -316,25 +380,66 @@ class CredentialService:
         return _metadata(refreshed)
 
     def revoke(self, *, owner_id: UUID, credential_id: UUID) -> None:
+        observed = self._mutation_row(owner_id=owner_id, credential_id=credential_id)
+        if observed["revoked_at"] is not None:
+            raise CredentialConflict("credential_already_revoked")
         with principal_transaction(self._engine, owner_id) as connection:
+            row = (
+                connection.execute(
+                    sa.select(Credential.__table__)
+                    .where(
+                        Credential.id == credential_id,
+                        Credential.owner_id == owner_id,
+                    )
+                    .with_for_update()
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                _raise_credential_access_error(connection, credential_id)
+            if row["revoked_at"] is not None:
+                raise CredentialConflict("credential_already_revoked")
+            if row["mutation_version"] != observed["mutation_version"]:
+                raise CredentialConflict("credential_conflict")
             result = connection.execute(
                 sa.update(Credential)
                 .where(
                     Credential.id == credential_id,
                     Credential.owner_id == owner_id,
+                    Credential.mutation_version == observed["mutation_version"],
                     Credential.revoked_at.is_(None),
                 )
-                .values(revoked_at=sa.func.now(), updated_at=sa.func.now())
+                .values(
+                    revoked_at=sa.func.now(),
+                    mutation_version=Credential.mutation_version + 1,
+                    updated_at=sa.func.now(),
+                )
             )
-        if result.rowcount != 1:
-            with self._engine.connect() as connection:
+            if result.rowcount != 1:
+                raise CredentialConflict("credential_conflict")
+
+    def _mutation_row(self, *, owner_id: UUID, credential_id: UUID) -> sa.RowMapping:
+        with principal_transaction(self._engine, owner_id) as connection:
+            row = (
+                connection.execute(
+                    sa.select(Credential.__table__).where(
+                        Credential.id == credential_id,
+                        Credential.owner_id == owner_id,
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
                 _raise_credential_access_error(connection, credential_id)
+        return row
 
     def _owned_row(self, *, owner_id: UUID, credential_id: UUID) -> sa.RowMapping:
         with principal_transaction(self._engine, owner_id) as connection:
             row = (
                 connection.execute(
-                    sa.select(Credential).where(
+                    sa.select(Credential.__table__).where(
                         Credential.id == credential_id,
                         Credential.owner_id == owner_id,
                         Credential.revoked_at.is_(None),

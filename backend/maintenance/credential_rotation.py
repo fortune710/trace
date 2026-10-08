@@ -23,7 +23,7 @@ from auth.credentials import (
     credential_cipher_from_settings,
 )
 from auth.uuids import uuid7
-from db.models import (
+from credentials.models import (
     Credential,
     CredentialEncryptionProvider,
     CredentialReencryptionItem,
@@ -381,6 +381,7 @@ class CredentialRotationJob:
                     aad_version=updated.aad_version,
                     encryption_provider=updated.encryption_provider,
                     key_reference=updated.key_reference,
+                    mutation_version=Credential.mutation_version + 1,
                     updated_at=sa.func.now(),
                 )
             )

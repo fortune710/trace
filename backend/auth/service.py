@@ -19,6 +19,18 @@ from auth.credentials import (
     email_payload_cipher_from_settings,
 )
 from auth.email_delivery import EmailJobDispatcher, EmailJobStore
+from auth.models import (
+    AuthIdentity,
+    AuthSession,
+    AuthUser,
+    EmailDeliveryKind,
+    EmailVerificationToken,
+    IdentityProvider,
+    PasswordCredential,
+    PasswordRecoveryToken,
+    RefreshToken,
+    UserStatus,
+)
 from auth.passwords import hash_password, password_needs_rehash, verify_password
 from auth.queueing import RabbitMQEmailPublisher
 from auth.tokens import (
@@ -31,19 +43,7 @@ from auth.tokens import (
     jwt_service_from_settings,
 )
 from auth.uuids import uuid7
-from db.models import (
-    AuthIdentity,
-    AuthSession,
-    AuthUser,
-    EmailDeliveryKind,
-    EmailVerificationToken,
-    IdentityProvider,
-    PasswordCredential,
-    PasswordRecoveryToken,
-    RefreshToken,
-    User,
-    UserStatus,
-)
+from users.models import User
 
 
 class AuthenticationUnavailable(RuntimeError):
