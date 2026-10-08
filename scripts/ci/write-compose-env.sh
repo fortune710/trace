@@ -15,6 +15,20 @@ csrf_hmac_key="$(base64url_key)"
 audit_hash_key="$(base64url_key)"
 credential_encryption_key="$(base64url_key)"
 
+pick_free_port() {
+  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+}
+
+if [[ "${COMPOSE_DYNAMIC_PORTS:-false}" == "true" ]]; then
+  backend_http_port="$(pick_free_port)"
+  mailpit_http_port="$(pick_free_port)"
+  oauth_stub_http_port="$(pick_free_port)"
+else
+  backend_http_port="${BACKEND_HTTP_PORT:-18000}"
+  mailpit_http_port="${MAILPIT_HTTP_PORT:-18025}"
+  oauth_stub_http_port="${OAUTH_STUB_HTTP_PORT:-19000}"
+fi
+
 cat >"$target_file" <<EOF
 POSTGRES_PASSWORD=trace-ci-postgres-password
 TRACE_APP_PASSWORD=trace-ci-app-password
@@ -24,7 +38,7 @@ MIGRATION_DATABASE_URL=postgresql://trace:trace-ci-postgres-password@postgres:54
 DATABASE_URL=postgresql://trace_app:trace-ci-app-password@postgres:5432/trace
 INTERNAL_DATABASE_URL=postgresql://trace_internal:trace-ci-internal-password@postgres:5432/trace
 MAINTENANCE_DATABASE_URL=postgresql://trace_credential_maintenance:trace-ci-credential-maintenance-password@postgres:5432/trace
-BACKEND_HTTP_PORT=18000
+BACKEND_HTTP_PORT=$backend_http_port
 TEST_POSTGRES_PASSWORD=trace-ci-test-postgres-password
 TEST_TRACE_APP_PASSWORD=trace-ci-test-app-password
 TEST_TRACE_INTERNAL_PASSWORD=trace-ci-test-internal-password
@@ -36,7 +50,8 @@ TEST_MAINTENANCE_DATABASE_URL=postgresql://trace_credential_maintenance:trace-ci
 REDIS_URL=redis://redis:6379/0
 SMTP_HOST=mailpit
 SMTP_PORT=1025
-MAILPIT_HTTP_PORT=18025
+MAILPIT_HTTP_PORT=$mailpit_http_port
+OAUTH_STUB_HTTP_PORT=$oauth_stub_http_port
 RABBITMQ_USER=trace
 RABBITMQ_PASSWORD=trace-ci-rabbitmq-password
 AUTH_RABBITMQ_URL=amqp://trace:trace-ci-rabbitmq-password@rabbitmq:5672/%2F

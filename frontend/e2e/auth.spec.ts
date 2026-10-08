@@ -69,7 +69,8 @@ test.describe('isolated authentication stack', () => {
   }
 
   test('a provider denial returns to the client without credentials', async ({ page }) => {
-    await page.goto('http://127.0.0.1:18000/auth/oauth/github/callback?error=access_denied')
+    const apiBaseUrl = process.env.E2E_API_BASE_URL ?? 'http://127.0.0.1:18000'
+    await page.goto(`${apiBaseUrl}/auth/oauth/github/callback?error=access_denied`)
     await expect(page.getByRole('heading', { name: 'Sign-in was not completed' })).toBeVisible()
     await expect(page.getByRole('link', { name: 'Return to sign in' })).toBeVisible()
   })

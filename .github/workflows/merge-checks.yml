@@ -42,7 +42,7 @@ jobs:
       COMPOSE_PROJECT_NAME: trace-ci-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v5
-      - run: scripts/ci/write-compose-env.sh .ci.env
+      - run: COMPOSE_DYNAMIC_PORTS=true scripts/ci/write-compose-env.sh .ci.env
       - run: COMPOSE_ENV_FILE=.ci.env scripts/migrate-test.sh
       - run: docker compose --env-file .ci.env --profile test run --rm --build backend-tests
       - if: always()
@@ -52,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: scripts/ci/write-compose-env.sh .ci.env
+      - run: COMPOSE_DYNAMIC_PORTS=true scripts/ci/write-compose-env.sh .ci.env
       - run: COMPOSE_PROJECT_NAME=trace-lifecycle scripts/ci/verify-compose-lifecycle.sh .ci.env
 
   auth-e2e:
@@ -61,17 +61,24 @@ jobs:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile --cwd frontend
-      - run: bunx --cwd frontend playwright install --with-deps chromium
-      - run: scripts/ci/write-compose-env.sh .ci.env
+      - run: bun run --cwd frontend playwright install --with-deps chromium
+      - run: COMPOSE_DYNAMIC_PORTS=true scripts/ci/write-compose-env.sh .ci.env
       - run: docker compose --project-name trace-e2e --env-file .ci.env -f compose.yaml -f compose.e2e.yaml --profile e2e up --build --wait backend email-worker
-      - run: E2E_AUTH_STACK=1 E2E_API_BASE_URL=http://127.0.0.1:18000 E2E_MAILPIT_URL=http://127.0.0.1:18025 CI=1 bun run --cwd frontend test:e2e
+      - run: |
+          set -a
+          . .ci.env
+          set +a
+          E2E_AUTH_STACK=1 E2E_API_BASE_URL="http://127.0.0.1:${BACKEND_HTTP_PORT}" E2E_MAILPIT_URL="http://127.0.0.1:${MAILPIT_HTTP_PORT}" CI=1 bun run --cwd frontend test:e2e
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: frontend/test-results
       - if: always()
-        run: docker compose --project-name trace-e2e --env-file .ci.env -f compose.yaml -f compose.e2e.yaml --profile e2e down --volumes --remove-orphans
+        run: |
+          if [[ -f .ci.env ]]; then
+            docker compose --project-name trace-e2e --env-file .ci.env -f compose.yaml -f compose.e2e.yaml --profile e2e down --volumes --remove-orphans
+          fi
 
   security:
     runs-on: ubuntu-latest
@@ -85,19 +92,18 @@ jobs:
       - run: uv run --directory backend pip-audit --strict
       - run: bun install --frozen-lockfile --cwd frontend
       - run: bun audit --cwd frontend --audit-level high
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: aquasecurity/trivy-action@0.33.1
-        with:
-          scan-type: fs
-          scan-ref: .
-          severity: HIGH,CRITICAL
-          exit-code: '1'
+      - name: Scan for secrets
+        run: docker run --rm -v "${{ github.workspace }}:/repo:ro" zricethezav/gitleaks:v8.28.0 detect --source /repo --no-banner --redact
+      - name: Scan the repository with Trivy
+        run: >-
+          docker run --rm
+          -v "${{ github.workspace }}:/repo:ro"
+          aquasec/trivy:0.65.0
+          fs --severity HIGH,CRITICAL --exit-code 1 /repo
       - run: docker build --tag trace-backend:phase5 ./backend
-      - uses: aquasecurity/trivy-action@0.33.1
-        with:
-          image-ref: trace-backend:phase5
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '1'
+      - name: Scan the backend image with Trivy
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          aquasec/trivy:0.65.0
+          image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 trace-backend:phase5
