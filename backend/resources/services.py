@@ -140,6 +140,11 @@ def _project_response(project: Project) -> dict[str, object]:
         "source": project.source,
         "external_repository_id": project.external_repository_id,
         "external_repository_connection_id": project.external_repository_connection_id,
+        "repository_owner": project.repository_owner,
+        "repository_name": project.repository_name,
+        "branch_name": project.branch_name,
+        "repository_visibility": project.repository_visibility,
+        "imported_at": project.imported_at,
         "source_hash": _hash_text(project.source_hash),
         "current_revision": project.current_revision,
         "category": project.category,
@@ -155,9 +160,11 @@ class ProjectService:
         self,
         engine: Engine,
         repository_name_resolver: Callable[[UUID, UUID, str], str | None] | None = None,
+        repository_service: Any | None = None,
     ) -> None:
         self._engine = engine
         self._repository_name_resolver = repository_name_resolver
+        self._repository_service = repository_service
 
     def list(
         self,
@@ -218,14 +225,19 @@ class ProjectService:
         github_external_id: str | None = None
         if source is RepositorySource.GITHUB:
             if (
-                not isinstance(connection_id, UUID)
-                or not isinstance(external_id, str)
+                not isinstance(external_id, str)
                 or local_hash is not None
+                or (
+                    connection_id is not None
+                    and not isinstance(connection_id, UUID)
+                )
+                or (connection_id is None and not values.get("branch_name"))
             ):
                 raise ValueError("GitHub project fields are invalid")
-            assert isinstance(connection_id, UUID)
             assert isinstance(external_id, str)
-            github_connection_id = connection_id
+            github_connection_id = (
+                connection_id if isinstance(connection_id, UUID) else None
+            )
             github_external_id = external_id
         elif (
             connection_id is not None
@@ -233,6 +245,24 @@ class ProjectService:
             or not isinstance(local_hash, str)
         ):
             raise ValueError("Local project fields are invalid")
+
+        repository_metadata = None
+        branch_metadata = None
+        if source is RepositorySource.GITHUB and values.get("branch_name"):
+            if self._repository_service is None:
+                raise ValueError("Repository service is unavailable")
+            repository_metadata, branch_metadata = (
+                self._repository_service.resolve_branch(
+                    owner_id=owner_id,
+                    source=RepositorySource.GITHUB.value,
+                    repository_identifier=github_external_id,
+                    branch_name=values["branch_name"],
+                )
+            )
+            github_connection_id = self._repository_service.connection_id(
+                owner_id=owner_id,
+                source=RepositorySource.GITHUB.value,
+            )
 
         try:
             with principal_transaction(self._engine, owner_id) as connection:
@@ -255,11 +285,15 @@ class ProjectService:
                     name = values.get("name")
                     if not isinstance(name, str):
                         name = (
-                            self._repository_name_resolver(
-                                owner_id, github_connection_id, github_external_id
+                            repository_metadata.name
+                            if repository_metadata is not None
+                            else (
+                                self._repository_name_resolver(
+                                    owner_id, github_connection_id, github_external_id
+                                )
+                                if self._repository_name_resolver is not None
+                                else None
                             )
-                            if self._repository_name_resolver is not None
-                            else None
                         )
                     name = name or github_external_id
                 else:
@@ -280,17 +314,42 @@ class ProjectService:
                         external_repository_connection_id=github_connection_id
                         if source is RepositorySource.GITHUB
                         else None,
+                        repository_owner=(
+                            repository_metadata.owner_login
+                            if repository_metadata is not None
+                            else None
+                        ),
+                        repository_name=(
+                            repository_metadata.name
+                            if repository_metadata is not None
+                            else None
+                        ),
+                        branch_name=(
+                            branch_metadata.name if branch_metadata is not None else None
+                        ),
+                        repository_visibility=(
+                            repository_metadata.visibility
+                            if repository_metadata is not None
+                            else None
+                        ),
                         local_path_hash=_hash_bytes(cast(str, local_hash))
                         if isinstance(local_hash, str)
                         else None,
                         source_hash=_hash_bytes(cast(str, values.get("source_hash")))
                         if isinstance(values.get("source_hash"), str)
                         else None,
-                        current_revision=values.get("current_revision"),
+                        current_revision=(
+                            branch_metadata.commit_sha
+                            if branch_metadata is not None
+                            else values.get("current_revision")
+                        ),
                         category=values.get("category", ProjectCategory.OTHER),
                         auto_create_pull_requests=bool(
                             values.get("auto_create_pull_requests", False)
                         ),
+                        imported_at=sa.func.current_timestamp()
+                        if repository_metadata is not None
+                        else None,
                     )
                 )
                 project = cast(

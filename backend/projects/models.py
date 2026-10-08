@@ -69,6 +69,15 @@ class Project(Base):
     external_repository_connection_id: Mapped[UUID | None] = mapped_column(
         PostgreSQLUUID(as_uuid=True), nullable=True
     )
+    repository_owner: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+    repository_name: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+    branch_name: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+    repository_visibility: Mapped[str | None] = mapped_column(
+        sa.Text(), nullable=True
+    )
+    imported_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
     local_path_hash: Mapped[bytes | None] = mapped_column(
         sa.LargeBinary(), nullable=True
     )
@@ -101,6 +110,7 @@ sa.Index("projects_owner_created_idx", Project.owner_id, Project.created_at.desc
 sa.Index(
     "projects_owner_external_repository_key",
     Project.owner_id,
+    Project.source,
     Project.external_repository_id,
     unique=True,
     postgresql_where=sa.text("source = 'github' AND archived_at IS NULL"),

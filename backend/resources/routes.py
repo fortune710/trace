@@ -33,6 +33,7 @@ from auth.rate_limit import (
 from auth.tokens import decode_base64url_key
 from db.session import get_engine
 from db.types import RepositorySource
+from external_repositories.service import RepositoryService
 from findings.models import FindingSeverity, FindingStatus
 from projects.models import ProjectCategory
 from remediations.models import RemediationStatus
@@ -79,8 +80,19 @@ def install_resource_routes(
     audit_recorder: AuditRecorder | None = None,
 ) -> None:
     @lru_cache
+    def repository_service() -> RepositoryService:
+        return RepositoryService(
+            engine=get_engine(),
+            credential_service=CredentialService(
+                engine=get_engine(),
+                cipher=credential_cipher_from_settings(settings),
+            ),
+            settings=settings,
+        )
+
+    @lru_cache
     def project_service() -> ProjectService:
-        return ProjectService(get_engine())
+        return ProjectService(get_engine(), repository_service=repository_service())
 
     @lru_cache
     def agent_service() -> AgentService:
