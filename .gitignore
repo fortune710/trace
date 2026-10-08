@@ -6,6 +6,7 @@ node_modules
 .ruff_cache
 .mypy_cache
 .pytest_cache
+frontend/test-results/
 
 tmp
 __pycache__
