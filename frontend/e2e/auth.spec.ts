@@ -17,7 +17,9 @@ async function latestEmailLink(request: APIRequestContext, recipient: string, pa
     const message = inbox.messages?.find((candidate) => candidate.To?.some((address) => address.Address === recipient))
     if (!message?.ID) return undefined
     const content = await request.get(`${mailpitUrl}/api/v1/message/${message.ID}`)
-    const match = JSON.stringify(await content.json()).match(new RegExp(`http://127\\.0\\.0\\.1:5173${path}#[^"\\s]+`))
+    const messageBody = await content.json() as { Text?: string; HTML?: string }
+    const searchableBody = `${messageBody.Text ?? ''}\n${messageBody.HTML ?? ''}`
+    const match = searchableBody.match(new RegExp(`http://127\\.0\\.0\\.1:5173${path}#[^\\s<]+`))
     link = match?.[0]
     return link
   }, { timeout: 30_000 }).toBeTruthy()

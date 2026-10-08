@@ -5,7 +5,17 @@ set -euo pipefail
 target_file="${1:?Usage: write-compose-env.sh PATH}"
 umask 077
 
-cat >"$target_file" <<'EOF'
+base64url_key() {
+  python3 -c 'import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii"))'
+}
+
+jwt_private_key="$(base64url_key)"
+token_hash_key="$(base64url_key)"
+csrf_hmac_key="$(base64url_key)"
+audit_hash_key="$(base64url_key)"
+credential_encryption_key="$(base64url_key)"
+
+cat >"$target_file" <<EOF
 POSTGRES_PASSWORD=trace-ci-postgres-password
 TRACE_APP_PASSWORD=trace-ci-app-password
 TRACE_INTERNAL_PASSWORD=trace-ci-internal-password
@@ -30,11 +40,22 @@ MAILPIT_HTTP_PORT=18025
 RABBITMQ_USER=trace
 RABBITMQ_PASSWORD=trace-ci-rabbitmq-password
 AUTH_RABBITMQ_URL=amqp://trace:trace-ci-rabbitmq-password@rabbitmq:5672/%2F
-AUTH_JWT_PRIVATE_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY
-AUTH_TOKEN_HASH_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY
-AUTH_CSRF_HMAC_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY
-AUTH_AUDIT_HASH_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY
-AUTH_CREDENTIAL_ENCRYPTION_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY
+AUDIT_ENABLED=true
+AUDIT_HOST=immudb
+AUDIT_PORT=3322
+AUDIT_DATABASE=trace_audit
+AUDIT_USERNAME=trace_audit
+AUDIT_PASSWORD=TraceAudit1!
+AUDIT_IMMUDB_ADMIN_PASSWORD=TraceImmuAdmin1!
+AUDIT_ROOT_STATE_DIR=/var/lib/trace-audit
+AUDIT_MAX_ATTEMPTS=3
+AUDIT_RETRY_BASE_SECONDS=1
+AUDIT_RETRY_MAX_SECONDS=10
+AUTH_JWT_PRIVATE_KEY=$jwt_private_key
+AUTH_TOKEN_HASH_KEY=$token_hash_key
+AUTH_CSRF_HMAC_KEY=$csrf_hmac_key
+AUTH_AUDIT_HASH_KEY=$audit_hash_key
+AUTH_CREDENTIAL_ENCRYPTION_KEY=$credential_encryption_key
 VAULT_DEV_ROOT_TOKEN_ID=trace-ci-development-root-token
 AUTH_ALLOWED_ORIGINS=[]
 EOF

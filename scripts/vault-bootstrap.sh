@@ -53,12 +53,24 @@ path "$VAULT_TRANSIT_MOUNT/decrypt/$VAULT_TRANSIT_KEY" {
   capabilities = ["update"]
 }
 
+path "$VAULT_TRANSIT_MOUNT/keys/$VAULT_TRANSIT_KEY" {
+  capabilities = ["read"]
+}
+
+path "$VAULT_TRANSIT_MOUNT/rewrap/$VAULT_TRANSIT_KEY" {
+  capabilities = ["update"]
+}
+
 path "$VAULT_TRANSIT_MOUNT/encrypt/$VAULT_EMAIL_TRANSIT_KEY" {
   capabilities = ["update"]
 }
 
 path "$VAULT_TRANSIT_MOUNT/decrypt/$VAULT_EMAIL_TRANSIT_KEY" {
   capabilities = ["update"]
+}
+
+path "$VAULT_TRANSIT_MOUNT/keys/$VAULT_EMAIL_TRANSIT_KEY" {
+  capabilities = ["read"]
 }
 POLICY
 

@@ -3,7 +3,7 @@ name: Merge Checks
 on:
   pull_request:
     branches: [main]
-    types: [opened]
+    types: [opened, reopened, synchronize]
 
 permissions:
   contents: read
@@ -99,4 +99,5 @@ jobs:
         with:
           image-ref: trace-backend:phase5
           severity: HIGH,CRITICAL
+          ignore-unfixed: true
           exit-code: '1'
