@@ -5,7 +5,6 @@ from typing import Annotated
 from uuid import UUID
 
 from pydantic import (
-    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -50,46 +49,52 @@ class PageQuery(RequestModel):
 
 
 class ProjectCreate(RequestModel):
-    name: ShortName | None = None
+    name: ShortName
     source: RepositorySource
-    external_repository_id: (
-        Annotated[str, StringConstraints(min_length=1, max_length=512)] | None
-    ) = Field(
-        default=None,
-        validation_alias=AliasChoices("external_repository_id", "repository_id"),
-    )
-    external_repository_connection_id: UUID | None = None
-    branch_name: Annotated[
-        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)
-    ] | None = None
+    repository_id: (
+        Annotated[
+            str,
+            StringConstraints(
+                pattern=r"^[1-9][0-9]{0,18}$", min_length=1, max_length=19
+            ),
+        ]
+        | None
+    ) = None
+    branch_name: (
+        Annotated[
+            str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
+        ]
+        | None
+    ) = None
     local_path_hash: HashString | None = None
     source_hash: HashString | None = None
     current_revision: (
         Annotated[str, StringConstraints(min_length=1, max_length=256)] | None
     ) = None
-    category: ProjectCategory = ProjectCategory.OTHER
+    category: ProjectCategory | None = None
     auto_create_pull_requests: bool = False
 
     @model_validator(mode="after")
     def validate_source_fields(self) -> ProjectCreate:
         if self.source is RepositorySource.LOCAL:
             if (
-                self.name is None
-                or self.local_path_hash is None
-                or self.external_repository_id is not None
-                or self.external_repository_connection_id is not None
+                self.local_path_hash is None
+                or self.repository_id is not None
                 or self.branch_name is not None
             ):
                 raise ValueError("local projects require local-only fields")
-        elif (
-            self.external_repository_id is None
-            or self.local_path_hash is not None
-            or (
-                self.branch_name is None
-                and self.external_repository_connection_id is None
-            )
-        ):
-            raise ValueError("GitHub projects require GitHub-only fields")
+        else:
+            if (
+                self.repository_id is None
+                or self.branch_name is None
+                or self.category is None
+                or self.local_path_hash is not None
+                or self.current_revision is not None
+            ):
+                raise ValueError(
+                    "GitHub imports require repository_id, branch_name, category, "
+                    "and a server-resolved revision"
+                )
         return self
 
 

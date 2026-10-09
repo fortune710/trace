@@ -215,35 +215,28 @@ class ProjectService:
         return _project_response(project)
 
     def create(self, *, owner_id: UUID, values: dict[str, Any]) -> dict[str, object]:
+        if not isinstance(owner_id, UUID):
+            raise TypeError("authenticated owner is required")
         source = values["source"]
         if not isinstance(source, RepositorySource):
             source = RepositorySource(str(source))
-        connection_id = values.get("external_repository_connection_id")
-        external_id = values.get("external_repository_id")
+        external_id = values.get("repository_id")
         local_hash = values.get("local_path_hash")
         github_connection_id: UUID | None = None
         github_external_id: str | None = None
         if source is RepositorySource.GITHUB:
             if (
                 not isinstance(external_id, str)
+                or not isinstance(values.get("name"), str)
+                or not isinstance(values.get("branch_name"), str)
+                or not isinstance(values.get("category"), ProjectCategory)
                 or local_hash is not None
-                or (
-                    connection_id is not None
-                    and not isinstance(connection_id, UUID)
-                )
-                or (connection_id is None and not values.get("branch_name"))
+                or values.get("current_revision") is not None
             ):
                 raise ValueError("GitHub project fields are invalid")
             assert isinstance(external_id, str)
-            github_connection_id = (
-                connection_id if isinstance(connection_id, UUID) else None
-            )
             github_external_id = external_id
-        elif (
-            connection_id is not None
-            or external_id is not None
-            or not isinstance(local_hash, str)
-        ):
+        elif external_id is not None or not isinstance(local_hash, str):
             raise ValueError("Local project fields are invalid")
 
         repository_metadata = None
@@ -282,20 +275,7 @@ class ProjectService:
                         _raise_access(
                             connection, "external_repository", github_connection_id
                         )
-                    name = values.get("name")
-                    if not isinstance(name, str):
-                        name = (
-                            repository_metadata.name
-                            if repository_metadata is not None
-                            else (
-                                self._repository_name_resolver(
-                                    owner_id, github_connection_id, github_external_id
-                                )
-                                if self._repository_name_resolver is not None
-                                else None
-                            )
-                        )
-                    name = name or github_external_id
+                    name = values["name"]
                 else:
                     name = values.get("name")
                     if not isinstance(name, str):
@@ -325,7 +305,9 @@ class ProjectService:
                             else None
                         ),
                         branch_name=(
-                            branch_metadata.name if branch_metadata is not None else None
+                            branch_metadata.name
+                            if branch_metadata is not None
+                            else None
                         ),
                         repository_visibility=(
                             repository_metadata.visibility
@@ -343,7 +325,7 @@ class ProjectService:
                             if branch_metadata is not None
                             else values.get("current_revision")
                         ),
-                        category=values.get("category", ProjectCategory.OTHER),
+                        category=values.get("category") or ProjectCategory.OTHER,
                         auto_create_pull_requests=bool(
                             values.get("auto_create_pull_requests", False)
                         ),
