@@ -72,9 +72,7 @@ class Project(Base):
     repository_owner: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     repository_name: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     branch_name: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
-    repository_visibility: Mapped[str | None] = mapped_column(
-        sa.Text(), nullable=True
-    )
+    repository_visibility: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     imported_at: Mapped[datetime | None] = mapped_column(
         sa.DateTime(timezone=True), nullable=True
     )

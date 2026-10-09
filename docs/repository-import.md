@@ -18,14 +18,36 @@ GitHub's immutable numeric identifiers; names are display metadata only.
 
 The path identifier is the GitHub numeric repository ID. Trace resolves that ID
 to the provider owner/name before requesting branches. Branch responses include
-the branch name, current commit SHA, and protection status.
+the branch name, current commit SHA, and protection status. `page` and
+`page_size` use one-based pagination with a maximum page size of 100.
 
 ### GitHub project creation
 
-GitHub project creation accepts the provider repository ID and selected branch.
-The backend revalidates access and resolves the branch immediately before
-persisting the project. The persisted project records the provider ID, owner,
-repository name, branch, visibility, import timestamp, and resolved commit SHA.
+New GitHub imports require this request shape:
+
+```json
+{
+  "name": "Trace project",
+  "source": "github",
+  "repository_id": "12345",
+  "branch_name": "main",
+  "category": "business",
+  "auto_create_pull_requests": false
+}
+```
+
+The backend derives the active GitHub connection from the authenticated account.
+It revalidates repository access, resolves the selected branch immediately before
+persistence, and stores the provider ID, owner, repository name, branch,
+visibility, import timestamp, and resolved commit SHA atomically. Callers must
+not send `external_repository_connection_id` or `current_revision`; the latter
+is always server-resolved for a new import. Existing stored projects retain their
+nullable legacy metadata fields.
+
+The response includes the persisted `external_repository_id`, repository owner
+and name, selected branch, visibility, `imported_at`, and the server-resolved
+`current_revision` SHA. It also includes the normal project identity, category,
+pull-request setting, and timestamps.
 
 ## Authorization and errors
 
@@ -44,6 +66,10 @@ The API uses these sanitized provider errors:
 | Existing branch | `409 branch_conflict` |
 | Provider rate limit | `429 provider_rate_limited` |
 | Provider outage or malformed response | `503 provider_unavailable` |
+
+When GitHub supplies a valid numeric `Retry-After` value for a rate limit, Trace
+forwards only that value in the response header. Provider response bodies,
+authorization headers, tokens, and raw provider messages are never forwarded.
 
 ## Branch creation service
 
