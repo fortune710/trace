@@ -24,14 +24,30 @@ def test_resource_endpoints_are_composed_under_v1_only():
 
     openapi = app.openapi()["paths"]
     repository_parameters = {
-        parameter["name"] for parameter in openapi["/api/v1/repositories"]["get"]["parameters"]
+        parameter["name"]
+        for parameter in openapi["/api/v1/repositories"]["get"]["parameters"]
     }
     branch_parameters = {
         parameter["name"]
-        for parameter in openapi["/api/v1/repositories/{repository_identifier}/branches"]["get"]["parameters"]
+        for parameter in openapi[
+            "/api/v1/repositories/{repository_identifier}/branches"
+        ]["get"]["parameters"]
     }
     assert {"source", "page", "page_size"} <= repository_parameters
     assert {"repository_identifier", "source", "page", "page_size"} <= branch_parameters
+
+    project_create_schema = app.openapi()["components"]["schemas"]["ProjectCreate"]
+    assert {
+        "name",
+        "source",
+        "repository_id",
+        "branch_name",
+        "category",
+    } <= project_create_schema["properties"].keys()
+    assert (
+        "external_repository_connection_id" not in project_create_schema["properties"]
+    )
+    assert "current_revision" in project_create_schema["properties"]
 
 
 def test_feature_packages_expose_modular_model_imports():
