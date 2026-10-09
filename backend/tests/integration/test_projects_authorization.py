@@ -74,15 +74,32 @@ def test_project_github_binding_is_owner_scoped_and_unique(
     account_pair,
     credential_factory,
     external_repository_factory,
+    github_stub,
 ) -> None:
     owner, other = account_pair
-    credential = credential_factory(owner)
+    credential = credential_factory(owner, access_token="owner-token")
     connection_id = external_repository_factory(owner, UUID(credential["id"]))
+    github_stub.repositories_by_token["owner-token"] = [
+        {
+            "id": 12345,
+            "owner": {"login": "octocat"},
+            "name": "hello-world",
+            "full_name": "octocat/hello-world",
+            "private": False,
+            "visibility": "public",
+            "default_branch": "main",
+            "html_url": "https://github.com/octocat/hello-world",
+        }
+    ]
+    github_stub.branches_by_repository["12345"] = [
+        {"name": "main", "commit": {"sha": "a" * 40}, "protected": False}
+    ]
     body = {
         "name": "github-project",
         "source": "github",
-        "external_repository_id": "repo-123",
-        "external_repository_connection_id": str(connection_id),
+        "repository_id": "12345",
+        "branch_name": "main",
+        "category": "other",
     }
 
     created = owner.request("POST", "/api/v1/projects", json=body)

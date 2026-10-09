@@ -42,8 +42,9 @@ def test_cross_account_relationships_are_rejected_without_side_effects(
         json={
             "name": "cross-account-github",
             "source": "github",
-            "external_repository_id": "foreign-repo",
-            "external_repository_connection_id": str(foreign_connection),
+            "repository_id": "12345",
+            "branch_name": "main",
+            "category": "other",
         },
     )
     assert project_attempt.status_code == 403
