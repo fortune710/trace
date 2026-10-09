@@ -7,11 +7,13 @@ from uuid import uuid4
 
 import pytest
 
-from auth.errors import RepositoryInvalidRequest
+from auth.errors import RepositoryInvalidRequest, UnsupportedSource
 from credentials.models import CredentialProvider
 from external_repositories.service import (
     CreatedBranch,
     GitHubClient,
+    RepositoryPageResult,
+    RepositoryProviderError,
     RepositoryRecord,
     RepositoryService,
 )
@@ -123,7 +125,38 @@ def test_repository_service_rejects_invalid_branch_base_revision() -> None:
         )
 
 
-def test_github_client_maps_branch_conflict_without_provider_message(monkeypatch) -> None:
+def test_repository_service_rejects_unsupported_source_and_invalid_identifiers() -> (
+    None
+):
+    service = RepositoryService.__new__(RepositoryService)
+
+    with pytest.raises(UnsupportedSource):
+        service.list_repositories(
+            owner_id=uuid4(), source="gitlab", page=1, page_size=50
+        )
+
+    with pytest.raises(RepositoryInvalidRequest):
+        service.create_branch(
+            owner_id=uuid4(),
+            source="github",
+            repository_identifier="123abc",
+            branch_name="trace/remediation-1",
+            base_revision="a" * 40,
+        )
+
+    with pytest.raises(RepositoryInvalidRequest):
+        service.create_branch(
+            owner_id=uuid4(),
+            source="github",
+            repository_identifier="12345",
+            branch_name="bad branch",
+            base_revision="a" * 40,
+        )
+
+
+def test_github_client_maps_branch_conflict_without_provider_message(
+    monkeypatch,
+) -> None:
     from urllib.error import HTTPError
 
     headers = Message()
@@ -141,7 +174,7 @@ def test_github_client_maps_branch_conflict_without_provider_message(monkeypatch
     client = GitHubClient(base_url="https://github.example.test")
     repository = client._repository_record(_repository_payload())
 
-    with pytest.raises(Exception) as raised:
+    with pytest.raises(RepositoryProviderError) as raised:
         client.create_branch(
             access_token="synthetic-token",
             repository=repository,
@@ -151,6 +184,80 @@ def test_github_client_maps_branch_conflict_without_provider_message(monkeypatch
 
     assert raised.value.args == ("conflict",)
     assert "synthetic provider details" not in str(raised.value)
+
+
+def test_github_client_preserves_safe_retry_after_without_provider_details(
+    monkeypatch,
+) -> None:
+    from urllib.error import HTTPError
+
+    headers = Message()
+    headers["Retry-After"] = "17"
+
+    def fake_urlopen(_request, timeout):
+        raise HTTPError(
+            "https://github.example.test",
+            429,
+            "synthetic provider details",
+            headers,
+            io.BytesIO(b"secret provider response"),
+        )
+
+    monkeypatch.setattr("external_repositories.service.urlopen", fake_urlopen)
+
+    with pytest.raises(RepositoryProviderError) as raised:
+        GitHubClient(base_url="https://github.example.test").list_repositories(
+            access_token="synthetic-token", page=1, page_size=50
+        )
+
+    assert raised.value.kind == "rate_limited"
+    assert raised.value.retry_after_seconds == 17
+    assert "synthetic" not in str(raised.value)
+
+
+def test_repository_logs_contain_safe_provider_metadata_only(
+    caplog, monkeypatch
+) -> None:
+    owner_id = uuid4()
+    credential_id = uuid4()
+
+    class FakeCredentialMetadata:
+        provider = CredentialProvider.GITHUB
+
+    class FakeCredentialService:
+        def metadata(self, *, owner_id, credential_id):
+            return FakeCredentialMetadata()
+
+        def decrypt_for_provider_call(self, *, owner_id, credential_id):
+            return {"access_token": "synthetic-token"}
+
+    class FakeGitHubClient:
+        def list_repositories(self, *, access_token, page, page_size):
+            return RepositoryPageResult(items=[], next_page=None)
+
+    monkeypatch.setattr(
+        "external_repositories.service._active_connection",
+        lambda *_args, **_kwargs: {"credential_id": credential_id},
+    )
+    service = RepositoryService(
+        engine=object(),
+        credential_service=FakeCredentialService(),
+        settings=type("Settings", (), {"github_api_url": "https://github.example"})(),
+        github_client=FakeGitHubClient(),
+    )
+
+    with caplog.at_level("INFO", logger="trace.repositories"):
+        service.list_repositories(
+            owner_id=owner_id, source="github", page=1, page_size=50
+        )
+
+    assert len(caplog.records) == 1
+    record = caplog.records[0]
+    assert record.operation == "list_repositories"
+    assert record.provider == "github"
+    assert record.outcome == "accepted"
+    assert "synthetic-token" not in caplog.text
+    assert "Authorization" not in caplog.text
 
 
 def test_repository_service_create_branch_uses_owner_credential_and_base_sha(

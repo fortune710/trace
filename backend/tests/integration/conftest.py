@@ -22,6 +22,7 @@ from db.session import get_engine, get_redis_client
 from db.types import RepositorySource
 from external_repositories.models import ExternalRepository
 from findings.models import Finding, FindingSeverity, FindingStatus
+from integration.github_stub import GithubApiStub
 from main import create_app
 from remediations.models import Remediation, RemediationStatus
 from reviews.models import (
@@ -131,6 +132,7 @@ def integration_engine(integration_database_url: str):
 def integration_settings() -> AuthSettings:
     return AuthSettings(
         environment="test",
+        github_api_url="https://github.example.test",
         cookie_secure=False,
         jwt_private_key=_encoded_key(b"a"),
         token_hash_key=_encoded_key(b"b"),
@@ -244,14 +246,16 @@ def local_project_factory():
 
 @pytest.fixture
 def credential_factory():
-    def create(account: TestAccount) -> dict[str, Any]:
+    def create(
+        account: TestAccount, *, access_token: str | None = None
+    ) -> dict[str, Any]:
         response = account.request(
             "POST",
             "/api/v1/credentials",
             json={
                 "provider": "github",
                 "kind": "oauth",
-                "payload": {"access_token": f"test-token-{uuid4()}"},
+                "payload": {"access_token": access_token or f"test-token-{uuid4()}"},
             },
         )
         assert response.status_code == 201, response.text
@@ -263,6 +267,7 @@ def credential_factory():
 @pytest.fixture
 def external_repository_factory(integration_engine):
     def create(account: TestAccount, credential_id: UUID) -> UUID:
+        credential_id = UUID(str(credential_id))
         repository_id = uuid4()
         with principal_transaction(integration_engine, account.user_id) as connection:
             connection.execute(
@@ -277,6 +282,13 @@ def external_repository_factory(integration_engine):
         return repository_id
 
     return create
+
+
+@pytest.fixture
+def github_stub(monkeypatch) -> GithubApiStub:
+    stub = GithubApiStub()
+    stub.install(monkeypatch)
+    return stub
 
 
 @pytest.fixture

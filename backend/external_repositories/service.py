@@ -159,7 +159,9 @@ class GitHubClient:
         )
         if not isinstance(payload, list):
             raise RepositoryProviderError(kind="malformed_response")
-        items = [self._branch_record(item, repository.repository_id) for item in payload]
+        items = [
+            self._branch_record(item, repository.repository_id) for item in payload
+        ]
         return RepositoryPageResult(
             items=items,
             next_page=_next_page(headers, page, len(items) == page_size),
@@ -250,9 +252,7 @@ class GitHubClient:
         except HTTPError as error:
             retry_after = _retry_after(error.headers)
             remaining = error.headers.get("X-RateLimit-Remaining")
-            if error.code == 429 or (
-                error.code == 403 and remaining == "0"
-            ):
+            if error.code == 429 or (error.code == 403 and remaining == "0"):
                 kind = "rate_limited"
             elif error.code in {401, 403}:
                 kind = "authorization"
@@ -520,8 +520,7 @@ def _validate_branch_name(value: str) -> None:
         or "//" in value
         or "@{" in value
         or any(
-            ord(char) < 32 or ord(char) == 127 or char in " ~^:?*[\\"
-            for char in value
+            ord(char) < 32 or ord(char) == 127 or char in " ~^:?*[\\" for char in value
         )
     ):
         raise RepositoryInvalidRequest()
