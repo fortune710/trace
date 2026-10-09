@@ -14,10 +14,14 @@ depends_on = None
 
 def upgrade() -> None:
     op.add_column(
-        "projects", sa.Column("repository_owner", sa.Text(), nullable=True), schema="public"
+        "projects",
+        sa.Column("repository_owner", sa.Text(), nullable=True),
+        schema="public",
     )
     op.add_column(
-        "projects", sa.Column("repository_name", sa.Text(), nullable=True), schema="public"
+        "projects",
+        sa.Column("repository_name", sa.Text(), nullable=True),
+        schema="public",
     )
     op.add_column(
         "projects", sa.Column("branch_name", sa.Text(), nullable=True), schema="public"
