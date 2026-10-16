@@ -152,6 +152,9 @@ services:
       dockerfile: Dockerfile
     command:
       - ./migrate.sh
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?Set MIGRATION_DATABASE_URL in .env}
       TRACE_APP_PASSWORD: ${TRACE_APP_PASSWORD:?Set TRACE_APP_PASSWORD in .env}
@@ -260,7 +263,7 @@ services:
       dockerfile: Dockerfile
     command: ["./start-email-worker.sh"]
     environment:
-      DATABASE_URL: ${INTERNAL_DATABASE_URL:?Set INTERNAL_DATABASE_URL in .env}
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD in .env}@postgres:5432/trace
       SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST in .env}
       SMTP_PORT: ${SMTP_PORT:?Set SMTP_PORT in .env}
       AUTH_ENVIRONMENT: ${AUTH_ENVIRONMENT:-development}
@@ -316,7 +319,7 @@ services:
       dockerfile: Dockerfile
     command: ["./start-audit-worker.sh"]
     environment:
-      DATABASE_URL: ${INTERNAL_DATABASE_URL:?Set INTERNAL_DATABASE_URL in .env}
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD in .env}@postgres:5432/trace
       AUDIT_ENABLED: "true"
       AUDIT_HOST: ${AUDIT_HOST:-immudb}
       AUDIT_PORT: ${AUDIT_PORT:-3322}
@@ -408,6 +411,7 @@ services:
       retries: 10
 
   immudb:
+    platform: linux/amd64
     image: codenotary/immudb:1.10.0@sha256:54f1fb4722034fe6531beed9616284d8e6766b831f18a7b288fc169fa27c6898
     environment:
       IMMUDB_ADMIN_PASSWORD: ${AUDIT_IMMUDB_ADMIN_PASSWORD:-TraceImmuAdmin1!}

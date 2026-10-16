@@ -17,13 +17,32 @@ set +a
 
 backend_url="http://127.0.0.1:${BACKEND_HTTP_PORT:?BACKEND_HTTP_PORT is required}"
 
+wait_for_ready() {
+  local attempts="${1:-60}"
+  for _ in $(seq 1 "$attempts"); do
+    if curl --silent --show-error --fail "$backend_url/health/ready" >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Compose smoke check failed: backend did not become ready" >&2
+  return 1
+}
+
 cleanup() {
   "${compose[@]}" down --volumes --remove-orphans
 }
 trap cleanup EXIT
 
-"${compose[@]}" up --build --wait backend
-curl --fail --retry 20 --retry-connrefused --retry-delay 1 "$backend_url/health/ready" >/dev/null
+"${compose[@]}" up --build --wait backend email-worker audit-worker
+for service in backend email-worker audit-worker; do
+  if ! "${compose[@]}" ps --status running --services | grep -Fxq "$service"; then
+    echo "Compose smoke check failed: $service is not running" >&2
+    "${compose[@]}" ps -a >&2
+    exit 1
+  fi
+done
+wait_for_ready
 
 "${compose[@]}" stop redis
 for _ in {1..20}; do
@@ -35,6 +54,6 @@ done
 [[ "$(curl --silent --output /dev/null --write-out '%{http_code}' "$backend_url/health/ready")" == "503" ]]
 
 "${compose[@]}" start redis
-curl --fail --retry 20 --retry-connrefused --retry-delay 1 "$backend_url/health/ready" >/dev/null
+wait_for_ready
 "${compose[@]}" restart backend
-curl --fail --retry 20 --retry-all-errors --retry-delay 1 "$backend_url/health/ready" >/dev/null
+wait_for_ready

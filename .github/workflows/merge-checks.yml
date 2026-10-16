@@ -63,7 +63,7 @@ jobs:
       - run: bun install --frozen-lockfile --cwd frontend
       - run: bun run --cwd frontend playwright install --with-deps chromium
       - run: COMPOSE_DYNAMIC_PORTS=true scripts/ci/write-compose-env.sh .ci.env
-      - run: docker compose --project-name trace-e2e --env-file .ci.env -f compose.yaml -f compose.e2e.yaml --profile e2e up --build --wait backend email-worker
+      - run: docker compose --project-name trace-e2e --env-file .ci.env -f compose.yaml -f compose.e2e.yaml --profile e2e up --build --wait backend email-worker audit-worker
       - run: |
           set -a
           . .ci.env
