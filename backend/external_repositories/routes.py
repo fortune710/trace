@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, Query
@@ -15,7 +16,7 @@ from auth.rate_limit import (
     enforce_rate_limit,
     rate_limiter_from_settings,
 )
-from db.session import get_engine
+from db.session import get_engine, get_redis_client
 from resources.schemas import BranchPage, RepositoryPage
 
 from .service import RepositoryService
@@ -57,18 +58,31 @@ def build_router(
         response_model=RepositoryPage,
         dependencies=[Depends(require_repository_read_limit)],
     )
-    def list_repositories(
+    async def list_repositories(
         principal: CurrentPrincipal,
         source: str = Query(..., min_length=1, max_length=32),
+        query: str | None = Query(default=None, max_length=100),
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=50, ge=1, le=100),
     ) -> dict[str, object]:
-        result = repository_service().list_repositories(
-            owner_id=principal.user_id,
-            source=source,
-            page=page,
-            page_size=page_size,
-        )
+        normalized_query = query.strip().casefold() if query else ""
+        if normalized_query:
+            result = await repository_service().search_repositories(
+                owner_id=principal.user_id,
+                source=source,
+                query=normalized_query,
+                page=page,
+                page_size=page_size,
+                redis_client=get_redis_client(),
+            )
+        else:
+            result = await asyncio.to_thread(
+                repository_service().list_repositories,
+                owner_id=principal.user_id,
+                source=source,
+                page=page,
+                page_size=page_size,
+            )
         return {
             "items": [
                 {
@@ -92,20 +106,34 @@ def build_router(
         response_model=BranchPage,
         dependencies=[Depends(require_repository_read_limit)],
     )
-    def list_branches(
+    async def list_branches(
         principal: CurrentPrincipal,
         repository_identifier: str,
         source: str = Query(..., min_length=1, max_length=32),
+        query: str | None = Query(default=None, max_length=100),
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=50, ge=1, le=100),
     ) -> dict[str, object]:
-        result = repository_service().list_branches(
-            owner_id=principal.user_id,
-            source=source,
-            repository_identifier=repository_identifier,
-            page=page,
-            page_size=page_size,
-        )
+        normalized_query = query.strip().casefold() if query else ""
+        if normalized_query:
+            result = await repository_service().search_branches(
+                owner_id=principal.user_id,
+                source=source,
+                repository_identifier=repository_identifier,
+                query=normalized_query,
+                page=page,
+                page_size=page_size,
+                redis_client=get_redis_client(),
+            )
+        else:
+            result = await asyncio.to_thread(
+                repository_service().list_branches,
+                owner_id=principal.user_id,
+                source=source,
+                repository_identifier=repository_identifier,
+                page=page,
+                page_size=page_size,
+            )
         return {
             "items": [
                 {

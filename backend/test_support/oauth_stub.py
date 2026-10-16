@@ -71,6 +71,7 @@ async def google_token(request: Request) -> dict[str, str]:
             "exp": now + timedelta(minutes=5),
             "iat": now,
             "iss": "https://accounts.google.com",
+            "name": "Google E2E User",
             "nonce": nonce,
             "sub": "google-e2e-subject",
         },

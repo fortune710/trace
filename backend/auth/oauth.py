@@ -10,16 +10,19 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 from uuid import UUID
 
 import jwt
+import sqlalchemy as sa
 from fastapi import FastAPI
 from fastapi import Request as FastAPIRequest
 from fastapi.responses import RedirectResponse
 from jwt import PyJWKClient
+from pydantic import BaseModel
 from redis.exceptions import RedisError
 
 from audit.emit import enqueue_audit
@@ -27,7 +30,11 @@ from audit.outbox import AuditRecorder
 from auth.audit import AuditHasher, log_auth_event
 from auth.config import AuthSettings
 from auth.cookies import set_auth_cookies, set_csrf_cookie
-from auth.credential_service import CredentialService, CredentialServiceError
+from auth.credential_service import (
+    CredentialNotFound,
+    CredentialService,
+    CredentialServiceError,
+)
 from auth.credentials import credential_cipher_from_settings
 from auth.csrf import issue_csrf_token, validate_csrf_token
 from auth.errors import AuthError
@@ -44,8 +51,14 @@ from auth.tokens import (
     generate_opaque_token,
 )
 from credentials.models import CredentialKind, CredentialProvider
+from db.rls import principal_transaction
 from db.session import get_engine, get_redis_client
-from external_repositories.service import provision_external_repository
+from db.types import RepositoryProvider, RepositorySource
+from external_repositories.models import ExternalRepository
+from external_repositories.service import (
+    invalidate_repository_catalog,
+    provision_external_repository,
+)
 
 _STATE_TTL_SECONDS = 600
 OAUTH_CALLBACK_ROUTE = "/auth/oauth/{provider}/callback"
@@ -65,6 +78,17 @@ class OAuthPurpose(StrEnum):
     REPOSITORY_CONNECTION = "repository_connection"
 
 
+class GitHubConnectionStatus(StrEnum):
+    CONNECTED = "connected"
+    NEVER_CONNECTED = "never_connected"
+    NEEDS_RECONNECTION = "needs_reconnection"
+
+
+class GitHubConnectionStatusResponse(BaseModel):
+    provider: Literal["github"] = "github"
+    status: GitHubConnectionStatus
+
+
 @dataclass(frozen=True)
 class OAuthTransaction:
     provider: str
@@ -81,6 +105,7 @@ class OAuthTransaction:
 class ProviderIdentity:
     subject: str
     email: str
+    display_name: str | None = None
     credential_payload: dict[str, object] | None = None
 
 
@@ -370,6 +395,33 @@ def install_oauth_routes(
             "authorization_url": f"{provider_config.authorize_url}?{urlencode(parameters)}"
         }
 
+    @app.get(
+        "/auth/oauth/github/connection",
+        response_model=GitHubConnectionStatusResponse,
+    )
+    async def github_connection_status(
+        request: FastAPIRequest, principal: CurrentPrincipal
+    ) -> GitHubConnectionStatusResponse:
+        try:
+            connection_status = await asyncio.to_thread(
+                get_github_connection_status,
+                engine=get_engine(),
+                service=credential_service(),
+                settings=settings,
+                owner_id=principal.user_id,
+            )
+        except OAuthUnavailable as error:
+            raise _unavailable() from error
+        audit(
+            request,
+            event="oauth",
+            outcome="accepted",
+            reason="repository_connection_status_read",
+            status_code=200,
+            provider=IdentityProvider.GITHUB.value,
+        )
+        return GitHubConnectionStatusResponse(status=connection_status)
+
     @app.get(OAUTH_CALLBACK_ROUTE)
     async def oauth_callback(
         request: FastAPIRequest,
@@ -380,7 +432,15 @@ def install_oauth_routes(
     ):
         request_id = getattr(request.state, "request_id", "unavailable")
         fallback_destination = settings.frontend_url.rstrip("/")
+        transaction: OAuthTransaction | None = None
         if error or not state or not code:
+            if state:
+                try:
+                    transaction = await state_store().consume(state)
+                    if transaction.provider != provider:
+                        transaction = None
+                except (OAuthRejected, OAuthUnavailable, ValueError):
+                    transaction = None
             audit(
                 request,
                 event="oauth",
@@ -389,7 +449,11 @@ def install_oauth_routes(
                 status_code=400,
                 provider=provider,
             )
-            return _oauth_failure_redirect(fallback_destination, request_id)
+            return _oauth_failure_redirect(
+                transaction.destination if transaction else fallback_destination,
+                request_id,
+                purpose=transaction.purpose if transaction else OAuthPurpose.LOGIN,
+            )
         session_tokens: SessionTokens | None = None
         try:
             transaction = await state_store().consume(state)
@@ -427,12 +491,18 @@ def install_oauth_routes(
                     credential_id=credential_metadata.id,
                     external_user_id=identity.subject,
                 )
+                await invalidate_repository_catalog(
+                    redis_client=get_redis_client(),
+                    owner_id=UUID(transaction.user_id),
+                    source=RepositoryProvider.GITHUB,
+                )
             else:
                 result = await asyncio.to_thread(
                     auth_service().oauth_login,
                     provider=IdentityProvider(provider),
                     subject=identity.subject,
                     email=identity.email,
+                    display_name=identity.display_name,
                 )
                 if result.tokens is None:
                     raise OAuthRejected("OAuth account is not eligible")
@@ -446,7 +516,11 @@ def install_oauth_routes(
                 status_code=401,
                 provider=provider,
             )
-            return _oauth_failure_redirect(fallback_destination, request_id)
+            return _oauth_failure_redirect(
+                transaction.destination if transaction else fallback_destination,
+                request_id,
+                purpose=transaction.purpose if transaction else OAuthPurpose.LOGIN,
+            )
         except (
             OAuthUnavailable,
             AuthenticationUnavailable,
@@ -460,12 +534,17 @@ def install_oauth_routes(
                 status_code=503,
                 provider=provider,
             )
-            return _oauth_failure_redirect(fallback_destination, request_id)
+            return _oauth_failure_redirect(
+                transaction.destination if transaction else fallback_destination,
+                request_id,
+                purpose=transaction.purpose if transaction else OAuthPurpose.LOGIN,
+            )
 
         if transaction.purpose == OAuthPurpose.REPOSITORY_CONNECTION:
-            response = RedirectResponse(
-                f"{transaction.destination.rstrip('/')}/auth/github/callback?{urlencode({'connected': 'github', 'request_id': request_id})}",
-                status_code=303,
+            response = _repository_connection_redirect(
+                transaction.destination,
+                outcome="connected",
+                request_id=request_id,
             )
             audit(
                 request,
@@ -647,7 +726,18 @@ def _provider_identity(
     subject, email = claims.get("sub"), claims.get("email")
     if not isinstance(subject, str) or not subject or not isinstance(email, str):
         raise OAuthRejected("Google identity is invalid")
-    return ProviderIdentity(subject=subject, email=email)
+    display_name = claims.get("name")
+    if display_name is not None and (
+        not isinstance(display_name, str) or len(display_name) > 120
+    ):
+        raise OAuthRejected("Google identity is invalid")
+    return ProviderIdentity(
+        subject=subject,
+        email=email,
+        display_name=(display_name.strip() or None)
+        if isinstance(display_name, str)
+        else None,
+    )
 
 
 def _github_credential_payload(token: dict[str, object]) -> dict[str, object]:
@@ -718,6 +808,124 @@ def refresh_github_credential(
         payload=refreshed,
     )
     return refreshed
+
+
+def get_github_connection_status(
+    *,
+    engine,
+    service: CredentialService,
+    settings: AuthSettings,
+    owner_id: UUID,
+    now: datetime | None = None,
+) -> GitHubConnectionStatus:
+    """Return a safe, owner-scoped GitHub connection state.
+
+    This intentionally never returns credential metadata or provider payload values.
+    A token is refreshed only after its explicitly stored access-token expiry passes.
+    """
+
+    connection = _latest_github_connection(engine=engine, owner_id=owner_id)
+    if connection is None:
+        return GitHubConnectionStatus.NEVER_CONNECTED
+    if connection["revoked_at"] is not None:
+        return GitHubConnectionStatus.NEEDS_RECONNECTION
+
+    credential_id = connection["credential_id"]
+    try:
+        metadata = service.metadata(owner_id=owner_id, credential_id=credential_id)
+    except CredentialNotFound:
+        return GitHubConnectionStatus.NEEDS_RECONNECTION
+    except CredentialServiceError as error:
+        raise OAuthUnavailable("GitHub credential service is unavailable") from error
+
+    if (
+        metadata.revoked_at is not None
+        or metadata.provider is not CredentialProvider.GITHUB
+        or metadata.kind is not CredentialKind.OAUTH
+    ):
+        return GitHubConnectionStatus.NEEDS_RECONNECTION
+
+    try:
+        payload = service.decrypt_for_provider_call(
+            owner_id=owner_id, credential_id=credential_id
+        )
+    except CredentialNotFound:
+        return GitHubConnectionStatus.NEEDS_RECONNECTION
+    except CredentialServiceError as error:
+        raise OAuthUnavailable("GitHub credential service is unavailable") from error
+
+    if not isinstance(payload.get("access_token"), str) or not payload["access_token"]:
+        return GitHubConnectionStatus.NEEDS_RECONNECTION
+
+    expiration = _github_access_token_expiration(payload)
+    if expiration is _INVALID_TOKEN_EXPIRATION:
+        return GitHubConnectionStatus.NEEDS_RECONNECTION
+    if expiration is None:
+        return GitHubConnectionStatus.CONNECTED
+    assert isinstance(expiration, datetime)
+    if expiration > (now or datetime.now(UTC)):
+        return GitHubConnectionStatus.CONNECTED
+
+    try:
+        refresh_github_credential(
+            service=service,
+            settings=settings,
+            owner_id=owner_id,
+            credential_id=credential_id,
+        )
+    except OAuthRejected:
+        return GitHubConnectionStatus.NEEDS_RECONNECTION
+    except CredentialServiceError as error:
+        raise OAuthUnavailable("GitHub credential service is unavailable") from error
+    return GitHubConnectionStatus.CONNECTED
+
+
+class _InvalidTokenExpiration:
+    pass
+
+
+_INVALID_TOKEN_EXPIRATION = _InvalidTokenExpiration()
+
+
+def _github_access_token_expiration(
+    payload: dict[str, object],
+) -> datetime | _InvalidTokenExpiration | None:
+    value = payload.get("access_token_expires_at")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return _INVALID_TOKEN_EXPIRATION
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return _INVALID_TOKEN_EXPIRATION
+    if parsed.tzinfo is None:
+        return _INVALID_TOKEN_EXPIRATION
+    return parsed.astimezone(UTC)
+
+
+def _latest_github_connection(*, engine, owner_id: UUID):
+    try:
+        with principal_transaction(engine, owner_id) as connection:
+            return (
+                connection.execute(
+                    sa.select(ExternalRepository.__table__)
+                    .where(
+                        ExternalRepository.owner_id == owner_id,
+                        ExternalRepository.source == RepositorySource.GITHUB,
+                    )
+                    .order_by(
+                        ExternalRepository.updated_at.desc(),
+                        ExternalRepository.created_at.desc(),
+                        ExternalRepository.id.desc(),
+                    )
+                    .limit(1)
+                )
+                .mappings()
+                .one_or_none()
+            )
+    except sa.exc.SQLAlchemyError as error:
+        raise OAuthUnavailable("GitHub connection storage is unavailable") from error
 
 
 def _post_form(url: str, values: dict[str, str]) -> dict[str, object]:
@@ -810,9 +1018,29 @@ def _set_session(
     )
 
 
-def _oauth_failure_redirect(destination: str, request_id: str) -> RedirectResponse:
+def _oauth_failure_redirect(
+    destination: str,
+    request_id: str,
+    *,
+    purpose: OAuthPurpose = OAuthPurpose.LOGIN,
+) -> RedirectResponse:
+    if purpose == OAuthPurpose.REPOSITORY_CONNECTION:
+        return _repository_connection_redirect(
+            destination,
+            outcome="failed",
+            request_id=request_id,
+        )
     return RedirectResponse(
         f"{destination.rstrip('/')}/auth/callback?{urlencode({'error': 'oauth_failed', 'request_id': request_id})}",
+        status_code=303,
+    )
+
+
+def _repository_connection_redirect(
+    destination: str, *, outcome: Literal["connected", "failed"], request_id: str
+) -> RedirectResponse:
+    return RedirectResponse(
+        f"{destination.rstrip('/')}/integrations?{urlencode({'github': outcome, 'request_id': request_id})}",
         status_code=303,
     )
 

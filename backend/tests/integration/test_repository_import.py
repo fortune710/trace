@@ -28,6 +28,55 @@ def _branch(name: str, sha: str, *, protected: bool = False) -> dict[str, object
     }
 
 
+class _CatalogRedis:
+    def __init__(self) -> None:
+        self.values: dict[str, bytes] = {}
+
+    async def get(self, key: str) -> bytes | None:
+        return self.values.get(key)
+
+    async def set(self, key: str, value: str, *, ex: int) -> None:
+        self.values[key] = value.encode("utf-8")
+
+
+def test_repository_and_branch_listing_search_by_optional_query(
+    account_pair,
+    credential_factory,
+    external_repository_factory,
+    github_stub: GithubApiStub,
+    monkeypatch,
+) -> None:
+    owner, _ = account_pair
+    credential = credential_factory(owner, access_token="owner-token")
+    external_repository_factory(owner, credential["id"])
+    github_stub.repositories_by_token["owner-token"] = [
+        _repository(12345, "trace-labs", "dashboard"),
+        _repository(67890, "trace-labs", "mobile-companion"),
+    ]
+    github_stub.branches_by_repository["12345"] = [
+        _branch("main", "a" * 40),
+        _branch("feature/dashboard-search", "b" * 40),
+    ]
+    monkeypatch.setattr(
+        "external_repositories.routes.get_redis_client", lambda: _CatalogRedis()
+    )
+
+    repositories = owner.request(
+        "GET", "/api/v1/repositories?source=github&query=DASH&page=1&page_size=10"
+    )
+    branches = owner.request(
+        "GET",
+        "/api/v1/repositories/12345/branches?source=github&query=SEARCH&page=1&page_size=10",
+    )
+
+    assert repositories.status_code == 200, repositories.text
+    assert [item["name"] for item in repositories.json()["items"]] == ["dashboard"]
+    assert branches.status_code == 200, branches.text
+    assert [item["name"] for item in branches.json()["items"]] == [
+        "feature/dashboard-search"
+    ]
+
+
 def test_authenticated_repository_listing_paginates_and_maps_metadata(
     account_pair,
     credential_factory,

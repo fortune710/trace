@@ -111,7 +111,7 @@ def test_project_github_binding_is_owner_scoped_and_unique(
 
     foreign = other.request("POST", "/api/v1/projects", json=body)
     assert foreign.status_code == 403
-    assert foreign.json()["error"]["code"] == "authorization_denied"
+    assert foreign.json()["error"]["code"] == "github_authorization_required"
     assert str(connection_id) not in foreign.text
 
 
