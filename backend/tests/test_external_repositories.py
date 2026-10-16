@@ -1,21 +1,29 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 from email.message import Message
 from uuid import uuid4
 
 import pytest
+from fastapi import FastAPI
+from redis.exceptions import RedisError
 
+from auth.config import AuthSettings
 from auth.errors import RepositoryInvalidRequest, UnsupportedSource
 from credentials.models import CredentialProvider
+from db.types import RepositoryProvider
+from external_repositories.routes import build_router
 from external_repositories.service import (
+    BranchRecord,
     CreatedBranch,
     GitHubClient,
     RepositoryPageResult,
     RepositoryProviderError,
     RepositoryRecord,
     RepositoryService,
+    invalidate_repository_catalog,
 )
 
 
@@ -232,7 +240,7 @@ def test_repository_logs_contain_safe_provider_metadata_only(
             return {"access_token": "synthetic-token"}
 
     class FakeGitHubClient:
-        def list_repositories(self, *, access_token, page, page_size):
+        def list_repositories(self, *, access_token, page, page_size, query=None):
             return RepositoryPageResult(items=[], next_page=None)
 
     monkeypatch.setattr(
@@ -344,3 +352,256 @@ def test_repository_service_create_branch_uses_owner_credential_and_base_sha(
         "branch_name": "trace/remediation-1",
         "base_revision": base_sha,
     }
+
+
+class _CatalogRedis:
+    def __init__(self) -> None:
+        self.values: dict[str, bytes | str] = {}
+        self.expirations: dict[str, int] = {}
+
+    async def get(self, key: str):
+        return self.values.get(key)
+
+    async def set(self, key: str, value: str, *, ex: int) -> None:
+        self.values[key] = value
+        self.expirations[key] = ex
+
+    async def incr(self, key: str) -> int:
+        value = self.values.get(key, b"0")
+        if isinstance(value, bytes):
+            value = value.decode("ascii")
+        next_value = int(value) + 1
+        self.values[key] = str(next_value).encode("ascii")
+        return next_value
+
+    async def expire(self, key: str, seconds: int) -> bool:
+        self.expirations[key] = seconds
+        return True
+
+
+def _catalog_service(monkeypatch, github_client):
+    owner_id = uuid4()
+    connection_id = uuid4()
+    credential_id = uuid4()
+
+    class FakeCredentialMetadata:
+        provider = CredentialProvider.GITHUB
+
+    class FakeCredentialService:
+        def metadata(self, *, owner_id, credential_id):
+            return FakeCredentialMetadata()
+
+        def decrypt_for_provider_call(self, *, owner_id, credential_id):
+            return {"access_token": "synthetic-token"}
+
+    monkeypatch.setattr(
+        "external_repositories.service._active_connection",
+        lambda *_args, **_kwargs: {
+            "id": connection_id,
+            "credential_id": credential_id,
+        },
+    )
+    return (
+        RepositoryService(
+            engine=object(),
+            credential_service=FakeCredentialService(),
+            settings=type("Settings", (), {"github_api_url": "https://github.example"})(),
+            github_client=github_client,
+        ),
+        owner_id,
+    )
+
+
+def test_repository_query_uses_a_bounded_owner_scoped_catalog_cache(monkeypatch) -> None:
+    class FakeGitHubClient:
+        repository_calls = 0
+
+        def list_repositories(self, *, access_token, page, page_size, query=None):
+            self.repository_calls += 1
+            assert access_token == "synthetic-token"
+            assert (page, page_size, query) == (1, 100, None)
+            return RepositoryPageResult(
+                items=[
+                    RepositoryRecord(
+                        repository_id="1",
+                        owner_login="trace-labs",
+                        name="trace-dashboard",
+                        full_name="trace-labs/trace-dashboard",
+                        visibility="private",
+                        private=True,
+                        default_branch="main",
+                        web_url="https://github.com/trace-labs/trace-dashboard",
+                    ),
+                    RepositoryRecord(
+                        repository_id="2",
+                        owner_login="trace-labs",
+                        name="mobile-companion",
+                        full_name="trace-labs/mobile-companion",
+                        visibility="public",
+                        private=False,
+                        default_branch="main",
+                        web_url="https://github.com/trace-labs/mobile-companion",
+                    ),
+                ],
+                next_page=2,
+            )
+
+    github_client = FakeGitHubClient()
+    service, owner_id = _catalog_service(monkeypatch, github_client)
+    cache = _CatalogRedis()
+
+    dashboard = asyncio.run(
+        service.search_repositories(
+            owner_id=owner_id,
+            source="github",
+            query="dashboard",
+            page=1,
+            page_size=50,
+            redis_client=cache,
+        )
+    )
+    mobile = asyncio.run(
+        service.search_repositories(
+            owner_id=owner_id,
+            source="github",
+            query="MOBILE",
+            page=1,
+            page_size=50,
+            redis_client=cache,
+        )
+    )
+
+    assert [item.name for item in dashboard.items] == ["trace-dashboard"]
+    assert [item.name for item in mobile.items] == ["mobile-companion"]
+    assert github_client.repository_calls == 1
+    assert len(cache.values) == 1
+    assert set(cache.expirations.values()) == {300}
+
+
+def test_branch_query_uses_a_separate_catalog_cache(monkeypatch) -> None:
+    class FakeGitHubClient:
+        branch_calls = 0
+
+        def get_repository(self, *, access_token, repository_identifier):
+            return RepositoryRecord(
+                repository_id=repository_identifier,
+                owner_login="trace-labs",
+                name="trace-dashboard",
+                full_name="trace-labs/trace-dashboard",
+                visibility="private",
+                private=True,
+                default_branch="main",
+                web_url="https://github.com/trace-labs/trace-dashboard",
+            )
+
+        def list_branches(self, *, access_token, repository, page, page_size, query=None):
+            self.branch_calls += 1
+            assert (page, page_size, query) == (1, 100, None)
+            return RepositoryPageResult(
+                items=[
+                    BranchRecord(
+                        repository_id=repository.repository_id,
+                        name="main",
+                        commit_sha="a" * 40,
+                        protected=True,
+                    ),
+                    BranchRecord(
+                        repository_id=repository.repository_id,
+                        name="feature/catalog-cache",
+                        commit_sha="b" * 40,
+                        protected=False,
+                    ),
+                ],
+                next_page=None,
+            )
+
+    github_client = FakeGitHubClient()
+    service, owner_id = _catalog_service(monkeypatch, github_client)
+    cache = _CatalogRedis()
+
+    result = asyncio.run(
+        service.search_branches(
+            owner_id=owner_id,
+            source="github",
+            repository_identifier="12345",
+            query="FEATURE",
+            page=1,
+            page_size=50,
+            redis_client=cache,
+        )
+    )
+
+    assert [item.name for item in result.items] == ["feature/catalog-cache"]
+    assert github_client.branch_calls == 1
+    assert len(cache.values) == 1
+
+
+def test_repository_query_bypasses_an_unavailable_cache(monkeypatch) -> None:
+    class UnavailableRedis:
+        async def get(self, _key: str):
+            raise RedisError("cache unavailable")
+
+    class FakeGitHubClient:
+        def list_repositories(self, *, access_token, page, page_size, query=None):
+            return RepositoryPageResult(
+                items=[
+                    RepositoryRecord(
+                        repository_id="1",
+                        owner_login="trace-labs",
+                        name="trace-dashboard",
+                        full_name="trace-labs/trace-dashboard",
+                        visibility="private",
+                        private=True,
+                        default_branch="main",
+                        web_url="https://github.com/trace-labs/trace-dashboard",
+                    )
+                ],
+                next_page=None,
+            )
+
+    service, owner_id = _catalog_service(monkeypatch, FakeGitHubClient())
+
+    result = asyncio.run(
+        service.search_repositories(
+            owner_id=owner_id,
+            source="github",
+            query="trace",
+            page=1,
+            page_size=50,
+            redis_client=UnavailableRedis(),
+        )
+    )
+
+    assert [item.name for item in result.items] == ["trace-dashboard"]
+
+
+def test_successful_reconnect_invalidates_catalogs_by_version() -> None:
+    redis = _CatalogRedis()
+    owner_id = uuid4()
+
+    asyncio.run(
+        invalidate_repository_catalog(
+            redis_client=redis,
+            owner_id=owner_id,
+            source=RepositoryProvider.GITHUB,
+        )
+    )
+
+    assert len(redis.values) == 1
+    assert set(redis.values.values()) == {b"1"}
+    assert set(redis.expirations.values()) == {600}
+
+
+def test_repository_routes_expose_a_bounded_query_parameter() -> None:
+    app = FastAPI()
+    app.include_router(build_router(AuthSettings()))
+    paths = app.openapi()["paths"]
+
+    for path in ("/repositories", "/repositories/{repository_identifier}/branches"):
+        parameters = {
+            parameter["name"]: parameter for parameter in paths[path]["get"]["parameters"]
+        }
+        assert {item.get("maxLength") for item in parameters["query"]["schema"]["anyOf"]} == {
+            100,
+            None,
+        }

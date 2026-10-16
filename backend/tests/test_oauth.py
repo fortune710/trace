@@ -1,4 +1,6 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -10,6 +12,7 @@ from auth.config import AuthSettings
 from auth.oauth import (
     GITHUB_CONNECT_START_ROUTE,
     OAUTH_CALLBACK_ROUTE,
+    GitHubConnectionStatus,
     OAuthPurpose,
     OAuthRejected,
     OAuthStateStore,
@@ -17,10 +20,13 @@ from auth.oauth import (
     ProviderConfiguration,
     _provider_configuration,
     _provider_identity,
+    _repository_connection_redirect,
+    get_github_connection_status,
     install_oauth_routes,
     oauth_callback_path,
     refresh_github_credential,
 )
+from credentials.models import CredentialKind, CredentialProvider
 
 
 class FakeRedis:
@@ -84,7 +90,161 @@ def test_repository_connection_route_is_explicitly_registered() -> None:
     app = FastAPI()
     install_oauth_routes(app, AuthSettings(), audit_hasher=None)
 
-    assert GITHUB_CONNECT_START_ROUTE in {route.path for route in app.routes}
+    paths = {route.path for route in app.routes}
+
+    assert GITHUB_CONNECT_START_ROUTE in paths
+    assert "/auth/oauth/github/connection" in paths
+
+
+def test_repository_connection_redirects_always_return_to_integrations() -> None:
+    success = _repository_connection_redirect(
+        "https://trace.example", outcome="connected", request_id="request-123"
+    )
+    failure = _repository_connection_redirect(
+        "https://trace.example", outcome="failed", request_id="request-123"
+    )
+
+    assert success.status_code == 303
+    assert success.headers["location"] == (
+        "https://trace.example/integrations?github=connected&request_id=request-123"
+    )
+    assert failure.headers["location"] == (
+        "https://trace.example/integrations?github=failed&request_id=request-123"
+    )
+
+
+class FakeGitHubCredentialService:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+        self.metadata_value = SimpleNamespace(
+            revoked_at=None,
+            provider=CredentialProvider.GITHUB,
+            kind=CredentialKind.OAUTH,
+        )
+
+    def metadata(self, *, owner_id, credential_id):
+        return self.metadata_value
+
+    def decrypt_for_provider_call(self, *, owner_id, credential_id):
+        return self.payload
+
+
+def test_github_connection_status_distinguishes_never_connected_and_valid_tokens(
+    monkeypatch,
+) -> None:
+    owner_id = UUID("00000000-0000-0000-0000-000000000011")
+    service = FakeGitHubCredentialService({"access_token": "token"})
+    monkeypatch.setattr("auth.oauth._latest_github_connection", lambda **_kwargs: None)
+
+    assert (
+        get_github_connection_status(
+            engine=object(), service=service, settings=AuthSettings(), owner_id=owner_id
+        )
+        == GitHubConnectionStatus.NEVER_CONNECTED
+    )
+
+    monkeypatch.setattr(
+        "auth.oauth._latest_github_connection",
+        lambda **_kwargs: {
+            "credential_id": UUID("00000000-0000-0000-0000-000000000010"),
+            "revoked_at": None,
+        },
+    )
+    assert (
+        get_github_connection_status(
+            engine=object(), service=service, settings=AuthSettings(), owner_id=owner_id
+        )
+        == GitHubConnectionStatus.CONNECTED
+    )
+
+    service.payload = {
+        "access_token": "token",
+        "access_token_expires_at": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+    }
+    assert (
+        get_github_connection_status(
+            engine=object(), service=service, settings=AuthSettings(), owner_id=owner_id
+        )
+        == GitHubConnectionStatus.CONNECTED
+    )
+
+
+def test_github_connection_status_refreshes_expired_tokens_or_requires_reconnection(
+    monkeypatch,
+) -> None:
+    owner_id = UUID("00000000-0000-0000-0000-000000000011")
+    credential_id = UUID("00000000-0000-0000-0000-000000000010")
+    service = FakeGitHubCredentialService(
+        {
+            "access_token": "expired-token",
+            "access_token_expires_at": (datetime.now(UTC) - timedelta(minutes=5)).isoformat(),
+        }
+    )
+    monkeypatch.setattr(
+        "auth.oauth._latest_github_connection",
+        lambda **_kwargs: {"credential_id": credential_id, "revoked_at": None},
+    )
+    refreshed: list[UUID] = []
+
+    def refresh(**kwargs):
+        refreshed.append(kwargs["credential_id"])
+        return {"access_token": "fresh-token"}
+
+    monkeypatch.setattr("auth.oauth.refresh_github_credential", refresh)
+    assert (
+        get_github_connection_status(
+            engine=object(), service=service, settings=AuthSettings(), owner_id=owner_id
+        )
+        == GitHubConnectionStatus.CONNECTED
+    )
+    assert refreshed == [credential_id]
+
+    def reject(**_kwargs):
+        raise OAuthRejected("credential refresh rejected")
+
+    monkeypatch.setattr("auth.oauth.refresh_github_credential", reject)
+    assert (
+        get_github_connection_status(
+            engine=object(), service=service, settings=AuthSettings(), owner_id=owner_id
+        )
+        == GitHubConnectionStatus.NEEDS_RECONNECTION
+    )
+
+
+def test_github_connection_status_requires_reconnection_for_revoked_or_invalid_state(
+    monkeypatch,
+) -> None:
+    owner_id = UUID("00000000-0000-0000-0000-000000000011")
+    service = FakeGitHubCredentialService({"access_token": "token"})
+    monkeypatch.setattr(
+        "auth.oauth._latest_github_connection",
+        lambda **_kwargs: {
+            "credential_id": UUID("00000000-0000-0000-0000-000000000010"),
+            "revoked_at": datetime.now(UTC),
+        },
+    )
+
+    assert (
+        get_github_connection_status(
+            engine=object(), service=service, settings=AuthSettings(), owner_id=owner_id
+        )
+        == GitHubConnectionStatus.NEEDS_RECONNECTION
+    )
+
+    monkeypatch.setattr(
+        "auth.oauth._latest_github_connection",
+        lambda **_kwargs: {
+            "credential_id": UUID("00000000-0000-0000-0000-000000000010"),
+            "revoked_at": None,
+        },
+    )
+    service.payload = {"access_token": ""}
+    assert (
+        get_github_connection_status(
+            engine=object(), service=service, settings=AuthSettings(), owner_id=owner_id
+        )
+        == GitHubConnectionStatus.NEEDS_RECONNECTION
+    )
 
 
 def test_github_login_discards_provider_tokens(monkeypatch) -> None:
@@ -129,6 +289,65 @@ def test_github_login_discards_provider_tokens(monkeypatch) -> None:
 
     assert identity.subject == "123"
     assert identity.credential_payload is None
+
+
+def test_google_login_extracts_a_bounded_display_name(monkeypatch) -> None:
+    configuration = ProviderConfiguration(
+        provider="google",
+        client_id="client",
+        client_secret="secret",
+        redirect_uri="https://trace.example/auth/oauth/google/callback",
+        authorize_url="https://google.example/authorize",
+        token_url="https://google.example/token",
+        scope="openid email profile",
+        google_jwks_url="https://google.example/jwks",
+    )
+
+    class SigningKey:
+        key = object()
+
+    class FakeJWKClient:
+        def __init__(self, _url: str, *, cache_keys: bool) -> None:
+            assert cache_keys is True
+
+        def get_signing_key_from_jwt(self, _token: str) -> SigningKey:
+            return SigningKey()
+
+    monkeypatch.setattr("auth.oauth.PyJWKClient", FakeJWKClient)
+    monkeypatch.setattr(
+        "auth.oauth._post_form",
+        lambda _url, _values: {
+            "access_token": "google-access-token",
+            "id_token": "id-token",
+        },
+    )
+    monkeypatch.setattr(
+        "auth.oauth.jwt.decode",
+        lambda *_args, **_kwargs: {
+            "email": "owner@example.test",
+            "email_verified": True,
+            "iss": "https://accounts.google.com",
+            "name": "  Google User  ",
+            "nonce": "nonce",
+            "sub": "google-subject",
+        },
+    )
+
+    identity = _provider_identity(
+        configuration,
+        "authorization-code",
+        OAuthTransaction(
+            provider="google",
+            verifier="verifier",
+            nonce="nonce",
+            destination="https://trace.example",
+            user_agent_hash="hash",
+        ),
+    )
+
+    assert identity.subject == "google-subject"
+    assert identity.email == "owner@example.test"
+    assert identity.display_name == "Google User"
 
 
 def test_github_repository_connection_retains_only_provider_token_payload(

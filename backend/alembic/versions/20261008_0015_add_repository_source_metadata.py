@@ -37,11 +37,10 @@ def upgrade() -> None:
         schema="public",
     )
 
-    op.drop_index(
-        "projects_owner_external_repository_key",
-        table_name="projects",
-        schema="public",
-    )
+    # Earlier databases can legitimately be missing this legacy index.  The
+    # replacement below is authoritative, so make the upgrade safe for both
+    # fresh databases and existing installations that skipped the old index.
+    op.execute("DROP INDEX IF EXISTS public.projects_owner_external_repository_key")
     op.create_index(
         "projects_owner_external_repository_key",
         "projects",
@@ -53,11 +52,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "projects_owner_external_repository_key",
-        table_name="projects",
-        schema="public",
-    )
+    op.execute("DROP INDEX IF EXISTS public.projects_owner_external_repository_key")
     op.create_index(
         "projects_owner_external_repository_key",
         "projects",

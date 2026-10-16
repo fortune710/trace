@@ -43,6 +43,7 @@ from auth.tokens import (
     jwt_service_from_settings,
 )
 from auth.uuids import uuid7
+from db.rls import principal_transaction
 from users.models import User
 
 
@@ -168,6 +169,24 @@ class AuthService:
             ) from error
         self._dispatch(job_id)
 
+    def account_profile(self, *, user_id: UUID) -> tuple[str | None, str | None]:
+        """Return the authenticated user's display metadata without secrets."""
+
+        try:
+            with principal_transaction(self._engine, user_id) as connection:
+                row = connection.execute(
+                    sa.select(AuthUser.email, User.display_name)
+                    .join(User, User.id == AuthUser.id)
+                    .where(AuthUser.id == user_id)
+                ).one_or_none()
+        except sa.exc.SQLAlchemyError as error:
+            raise AuthenticationUnavailable(
+                "Authentication database is unavailable"
+            ) from error
+        if row is None:
+            raise AuthenticationUnavailable("Authenticated account is unavailable")
+        return row.email, row.display_name
+
     def verify_email(self, *, token: str) -> bool:
         try:
             with self._engine.begin() as connection:
@@ -261,7 +280,12 @@ class AuthService:
             ) from error
 
     def oauth_login(
-        self, *, provider: IdentityProvider, subject: str, email: str
+        self,
+        *,
+        provider: IdentityProvider,
+        subject: str,
+        email: str,
+        display_name: str | None = None,
     ) -> LoginResult:
         """Find an exact provider identity or atomically create a new OAuth account.
 
@@ -317,7 +341,9 @@ class AuthService:
                 ).scalar_one_or_none()
                 if inserted is None:
                     return LoginResult("rejected")
-                connection.execute(sa.insert(User).values(id=user_id))
+                connection.execute(
+                    sa.insert(User).values(id=user_id, display_name=display_name)
+                )
                 connection.execute(
                     sa.insert(AuthIdentity).values(
                         id=uuid7(),

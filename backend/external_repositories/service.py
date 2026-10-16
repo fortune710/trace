@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -13,6 +15,7 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 import sqlalchemy as sa
+from redis.exceptions import RedisError
 
 from auth.config import AuthSettings
 from auth.credential_service import (
@@ -43,6 +46,7 @@ __all__ = [
     "RepositoryPageResult",
     "RepositoryRecord",
     "RepositoryService",
+    "invalidate_repository_catalog",
     "provision_external_repository",
 ]
 
@@ -50,6 +54,9 @@ _GITHUB_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 _GITHUB_REPOSITORY_ID = re.compile(r"^[1-9][0-9]{0,18}$")
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _GITHUB_API_VERSION = "2022-11-28"
+_CATALOG_CACHE_LIMIT = 100
+_CATALOG_CACHE_TTL_SECONDS = 300
+_CATALOG_VERSION_TTL_SECONDS = 600
 logger = logging.getLogger("trace.repositories")
 
 
@@ -87,6 +94,115 @@ class RepositoryPageResult[T]:
     next_page: int | None
 
 
+class RepositoryCatalogCache:
+    """Fail-open cache containing only safe, owner-scoped provider metadata."""
+
+    def __init__(self, redis_client: Any) -> None:
+        self._redis = redis_client
+
+    async def version(
+        self, *, owner_id: UUID, provider: RepositoryProvider
+    ) -> str | None:
+        try:
+            value = await self._redis.get(_catalog_version_key(owner_id, provider))
+        except RedisError:
+            return None
+        if value is None:
+            return "0"
+        if isinstance(value, bytes):
+            value = value.decode("ascii", errors="ignore")
+        return value if isinstance(value, str) and value.isdecimal() else "0"
+
+    async def repositories(
+        self,
+        *,
+        owner_id: UUID,
+        provider: RepositoryProvider,
+        connection_id: UUID,
+        version: str,
+    ) -> list[RepositoryRecord] | None:
+        return await self._read_records(
+            _repository_catalog_key(owner_id, provider, connection_id, version),
+            RepositoryRecord,
+        )
+
+    async def branches(
+        self,
+        *,
+        owner_id: UUID,
+        provider: RepositoryProvider,
+        connection_id: UUID,
+        version: str,
+        repository_identifier: str,
+    ) -> list[BranchRecord] | None:
+        return await self._read_records(
+            _branch_catalog_key(
+                owner_id, provider, connection_id, version, repository_identifier
+            ),
+            BranchRecord,
+        )
+
+    async def store_repositories(
+        self,
+        *,
+        owner_id: UUID,
+        provider: RepositoryProvider,
+        connection_id: UUID,
+        version: str,
+        records: list[RepositoryRecord],
+    ) -> None:
+        await self._write_records(
+            _repository_catalog_key(owner_id, provider, connection_id, version), records
+        )
+
+    async def store_branches(
+        self,
+        *,
+        owner_id: UUID,
+        provider: RepositoryProvider,
+        connection_id: UUID,
+        version: str,
+        repository_identifier: str,
+        records: list[BranchRecord],
+    ) -> None:
+        await self._write_records(
+            _branch_catalog_key(
+                owner_id, provider, connection_id, version, repository_identifier
+            ),
+            records,
+        )
+
+    async def _read_records(self, key: str, record_type):
+        try:
+            raw = await self._redis.get(key)
+        except RedisError:
+            return None
+        if raw is None:
+            return None
+        try:
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8")
+            payload = json.loads(raw)
+            items = payload["items"]
+            if not isinstance(items, list) or len(items) > _CATALOG_CACHE_LIMIT:
+                return None
+            return [record_type(**item) for item in items]
+        except (KeyError, TypeError, UnicodeDecodeError, ValueError):
+            return None
+
+    async def _write_records(
+        self, key: str, records: list[RepositoryRecord] | list[BranchRecord]
+    ) -> None:
+        payload = json.dumps(
+            {"items": [record.__dict__ for record in records]},
+            separators=(",", ":"),
+        )
+        try:
+            await self._redis.set(key, payload, ex=_CATALOG_CACHE_TTL_SECONDS)
+        except RedisError:
+            return
+
+
 class RepositoryProviderError(RuntimeError):
     def __init__(
         self,
@@ -107,9 +223,22 @@ class GitHubClient:
         self._timeout_seconds = timeout_seconds
 
     def list_repositories(
+        self,
+        *,
+        access_token: str,
+        page: int,
+        page_size: int,
+    ) -> RepositoryPageResult[RepositoryRecord]:
+        return self._list_repositories_page(
+            access_token=access_token,
+            page=page,
+            page_size=page_size,
+        )
+
+    def _list_repositories_page(
         self, *, access_token: str, page: int, page_size: int
     ) -> RepositoryPageResult[RepositoryRecord]:
-        query = urlencode(
+        parameters = urlencode(
             {
                 "visibility": "all",
                 "affiliation": "owner,collaborator,organization_member",
@@ -120,7 +249,7 @@ class GitHubClient:
             }
         )
         payload, headers = self._request_json(
-            method="GET", path=f"/user/repos?{query}", access_token=access_token
+            method="GET", path=f"/user/repos?{parameters}", access_token=access_token
         )
         if not isinstance(payload, list):
             raise RepositoryProviderError(kind="malformed_response")
@@ -148,12 +277,27 @@ class GitHubClient:
         page: int,
         page_size: int,
     ) -> RepositoryPageResult[BranchRecord]:
-        query = urlencode({"per_page": page_size, "page": page})
+        return self._list_branches_page(
+            access_token=access_token,
+            repository=repository,
+            page=page,
+            page_size=page_size,
+        )
+
+    def _list_branches_page(
+        self,
+        *,
+        access_token: str,
+        repository: RepositoryRecord,
+        page: int,
+        page_size: int,
+    ) -> RepositoryPageResult[BranchRecord]:
+        parameters = urlencode({"per_page": page_size, "page": page})
         payload, headers = self._request_json(
             method="GET",
             path=(
                 f"/repos/{quote(repository.owner_login, safe='')}/"
-                f"{quote(repository.name, safe='')}/branches?{query}"
+                f"{quote(repository.name, safe='')}/branches?{parameters}"
             ),
             access_token=access_token,
         )
@@ -375,6 +519,67 @@ class RepositoryService:
             _log_provider_call("list_repositories", error.kind)
             raise _provider_auth_error(error) from error
 
+    async def search_repositories(
+        self,
+        *,
+        owner_id: UUID,
+        source: str,
+        query: str,
+        page: int,
+        page_size: int,
+        redis_client: Any,
+    ) -> RepositoryPageResult[RepositoryRecord]:
+        """Filter the first 100 owner-accessible repositories from a safe cache."""
+
+        provider = _provider(source)
+        query = query.strip().casefold()
+        connection_id, token = await asyncio.to_thread(
+            self._catalog_connection, owner_id=owner_id, provider=provider
+        )
+        if redis_client is None:
+            return await asyncio.to_thread(
+                self._search_repositories_from_provider,
+                token=token,
+                query=query,
+                page=page,
+                page_size=page_size,
+            )
+        cache = RepositoryCatalogCache(redis_client)
+        version = await cache.version(owner_id=owner_id, provider=provider)
+        if version is None:
+            return await asyncio.to_thread(
+                self._search_repositories_from_provider,
+                token=token,
+                query=query,
+                page=page,
+                page_size=page_size,
+            )
+
+        records = await cache.repositories(
+            owner_id=owner_id,
+            provider=provider,
+            connection_id=connection_id,
+            version=version,
+        )
+        if records is None:
+            records = await asyncio.to_thread(
+                self._repository_catalog_from_provider, token=token
+            )
+            await cache.store_repositories(
+                owner_id=owner_id,
+                provider=provider,
+                connection_id=connection_id,
+                version=version,
+                records=records,
+            )
+        return _filtered_page(
+            records,
+            page=page,
+            page_size=page_size,
+            matches=lambda record: query in record.name.casefold()
+            or query in record.full_name.casefold(),
+        )
+
     def list_branches(
         self,
         *,
@@ -403,6 +608,74 @@ class RepositoryService:
             _log_provider_call("list_branches", error.kind)
             raise _provider_error(error, operation="repository") from error
 
+    async def search_branches(
+        self,
+        *,
+        owner_id: UUID,
+        source: str,
+        repository_identifier: str,
+        query: str,
+        page: int,
+        page_size: int,
+        redis_client: Any,
+    ) -> RepositoryPageResult[BranchRecord]:
+        """Filter the first 100 branches for an owner-accessible repository."""
+
+        provider = _provider(source)
+        query = query.strip().casefold()
+        repository_identifier = _validate_repository_identifier(repository_identifier)
+        connection_id, token = await asyncio.to_thread(
+            self._catalog_connection, owner_id=owner_id, provider=provider
+        )
+        if redis_client is None:
+            return await asyncio.to_thread(
+                self._search_branches_from_provider,
+                token=token,
+                repository_identifier=repository_identifier,
+                query=query,
+                page=page,
+                page_size=page_size,
+            )
+        cache = RepositoryCatalogCache(redis_client)
+        version = await cache.version(owner_id=owner_id, provider=provider)
+        if version is None:
+            return await asyncio.to_thread(
+                self._search_branches_from_provider,
+                token=token,
+                repository_identifier=repository_identifier,
+                query=query,
+                page=page,
+                page_size=page_size,
+            )
+
+        records = await cache.branches(
+            owner_id=owner_id,
+            provider=provider,
+            connection_id=connection_id,
+            version=version,
+            repository_identifier=repository_identifier,
+        )
+        if records is None:
+            records = await asyncio.to_thread(
+                self._branch_catalog_from_provider,
+                token=token,
+                repository_identifier=repository_identifier,
+            )
+            await cache.store_branches(
+                owner_id=owner_id,
+                provider=provider,
+                connection_id=connection_id,
+                version=version,
+                repository_identifier=repository_identifier,
+                records=records,
+            )
+        return _filtered_page(
+            records,
+            page=page,
+            page_size=page_size,
+            matches=lambda record: query in record.name.casefold(),
+        )
+
     def connection_id(self, *, owner_id: UUID, source: str) -> UUID:
         provider = _provider(source)
         connection = _active_connection(
@@ -428,6 +701,11 @@ class RepositoryService:
             repository = self._github_client.get_repository(
                 access_token=token, repository_identifier=repository_identifier
             )
+        except RepositoryProviderError as error:
+            _log_provider_call("resolve_repository", error.kind)
+            raise _provider_error(error, operation="repository") from error
+
+        try:
             branch = self._github_client.get_branch(
                 access_token=token, repository=repository, branch_name=branch_name
             )
@@ -468,6 +746,85 @@ class RepositoryService:
             _log_provider_call("create_branch", error.kind)
             raise _provider_error(error, operation="branch_create") from error
 
+    def _repository_catalog_from_provider(
+        self, *, token: str
+    ) -> list[RepositoryRecord]:
+        try:
+            result = self._github_client.list_repositories(
+                access_token=token,
+                page=1,
+                page_size=_CATALOG_CACHE_LIMIT,
+            )
+            _log_provider_call("list_repositories", "accepted")
+            return result.items
+        except RepositoryProviderError as error:
+            _log_provider_call("list_repositories", error.kind)
+            raise _provider_auth_error(error) from error
+
+    def _branch_catalog_from_provider(
+        self, *, token: str, repository_identifier: str
+    ) -> list[BranchRecord]:
+        try:
+            repository = self._github_client.get_repository(
+                access_token=token, repository_identifier=repository_identifier
+            )
+            result = self._github_client.list_branches(
+                access_token=token,
+                repository=repository,
+                page=1,
+                page_size=_CATALOG_CACHE_LIMIT,
+            )
+            _log_provider_call("list_branches", "accepted")
+            return result.items
+        except RepositoryProviderError as error:
+            _log_provider_call("list_branches", error.kind)
+            raise _provider_error(error, operation="repository") from error
+
+    def _search_repositories_from_provider(
+        self, *, token: str, query: str, page: int, page_size: int
+    ) -> RepositoryPageResult[RepositoryRecord]:
+        records = self._repository_catalog_from_provider(token=token)
+        return _filtered_page(
+            records,
+            page=page,
+            page_size=page_size,
+            matches=lambda record: query in record.name.casefold()
+            or query in record.full_name.casefold(),
+        )
+
+    def _search_branches_from_provider(
+        self,
+        *,
+        token: str,
+        repository_identifier: str,
+        query: str,
+        page: int,
+        page_size: int,
+    ) -> RepositoryPageResult[BranchRecord]:
+        records = self._branch_catalog_from_provider(
+            token=token, repository_identifier=repository_identifier
+        )
+        return _filtered_page(
+            records,
+            page=page,
+            page_size=page_size,
+            matches=lambda record: query in record.name.casefold(),
+        )
+
+    def _catalog_connection(
+        self, *, owner_id: UUID, provider: RepositoryProvider
+    ) -> tuple[UUID, str]:
+        if provider is not RepositoryProvider.GITHUB:
+            raise UnsupportedSource()
+        connection = _active_connection(
+            self._engine, owner_id=owner_id, provider=provider
+        )
+        if connection is None:
+            raise GithubAuthorizationRequired()
+        return connection["id"], self._access_token(
+            owner_id=owner_id, provider=provider
+        )
+
     def _access_token(self, *, owner_id: UUID, provider: RepositoryProvider) -> str:
         if provider is not RepositoryProvider.GITHUB:
             raise UnsupportedSource()
@@ -491,6 +848,62 @@ class RepositoryService:
         if not isinstance(token, str) or not token:
             raise GithubAuthorizationRequired()
         return token
+
+
+async def invalidate_repository_catalog(
+    *, redis_client: Any, owner_id: UUID, source: RepositoryProvider
+) -> None:
+    """Version owner/provider catalog keys without scanning or deleting Redis keys."""
+
+    try:
+        version_key = _catalog_version_key(owner_id, source)
+        await redis_client.incr(version_key)
+        await redis_client.expire(version_key, _CATALOG_VERSION_TTL_SECONDS)
+    except RedisError:
+        return
+
+
+def _catalog_version_key(owner_id: UUID, provider: RepositoryProvider) -> str:
+    return f"trace:repository-catalog:v1:{owner_id}:{provider.value}:version"
+
+
+def _repository_catalog_key(
+    owner_id: UUID,
+    provider: RepositoryProvider,
+    connection_id: UUID,
+    version: str,
+) -> str:
+    return (
+        f"trace:repository-catalog:v1:{owner_id}:{provider.value}:"
+        f"{connection_id}:{version}"
+    )
+
+
+def _branch_catalog_key(
+    owner_id: UUID,
+    provider: RepositoryProvider,
+    connection_id: UUID,
+    version: str,
+    repository_identifier: str,
+) -> str:
+    return (
+        f"trace:branch-catalog:v1:{owner_id}:{provider.value}:"
+        f"{connection_id}:{version}:{repository_identifier}"
+    )
+
+
+def _filtered_page[T](
+    records: list[T],
+    *,
+    page: int,
+    page_size: int,
+    matches: Callable[[T], bool],
+) -> RepositoryPageResult[T]:
+    matched = [record for record in records if matches(record)]
+    start = (page - 1) * page_size
+    selected = matched[start : start + page_size]
+    next_page = page + 1 if start + page_size < len(matched) else None
+    return RepositoryPageResult(items=selected, next_page=next_page)
 
 
 def _provider(source: str | RepositoryProvider) -> RepositoryProvider:

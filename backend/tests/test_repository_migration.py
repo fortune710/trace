@@ -22,3 +22,4 @@ def test_repository_metadata_migration_has_upgrade_and_downgrade_contract() -> N
         assert f'"{column}"' in source
     assert '"projects_owner_external_repository_key"' in source
     assert "source = 'github' AND archived_at IS NULL" in source
+    assert "DROP INDEX IF EXISTS public.projects_owner_external_repository_key" in source
