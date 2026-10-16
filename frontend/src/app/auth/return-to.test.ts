@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { safeReturnTo } from '@/auth/return-to'
+import { safeReturnTo } from '@/app/auth/return-to'
 
 describe('safeReturnTo', () => {
   it('accepts only internal non-authentication paths', () => {

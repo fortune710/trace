@@ -49,7 +49,7 @@ test.describe('isolated authentication stack', () => {
     await page.getByLabel('Email').fill(email)
     await page.getByLabel('Password').fill(password)
     await page.getByRole('button', { name: 'Sign in' }).click()
-    await expect(page.getByRole('heading', { name: 'Your account is ready.' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Open account menu for student.e2e@example.test' })).toBeVisible()
   })
 
   test('invalid credentials do not authenticate a user', async ({ page }) => {
@@ -64,7 +64,8 @@ test.describe('isolated authentication stack', () => {
     test(`a user can sign in with ${provider}`, async ({ page }) => {
       await openSignIn(page)
       await page.getByRole('button', { name: `Continue with ${provider}` }).click()
-      await expect(page.getByRole('heading', { name: 'Your account is ready.' })).toBeVisible()
+      const accountName = provider === 'Google' ? 'Google E2E User' : 'github.e2e@example.test'
+      await expect(page.getByRole('button', { name: `Open account menu for ${accountName}` })).toBeVisible()
     })
   }
 
