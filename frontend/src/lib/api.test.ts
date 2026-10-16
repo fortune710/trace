@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { projectsApi, repositoriesApi } from "@/lib/api"
+import { assertPathFree } from "@/test/path-redaction"
 
 describe("repositoriesApi", () => {
   afterEach(() => {
@@ -55,5 +56,28 @@ describe("projectsApi", () => {
       "http://localhost:8000/api/v1/projects?page=2&page_size=9",
       expect.objectContaining({ credentials: "include" }),
     )
+  })
+
+  it("keeps project API requests free of local source paths", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        id: "remote-project",
+        name: "Remote project",
+      }), { status: 200 }),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await projectsApi.create({
+      name: "Remote project",
+      source: "github",
+      repository_id: "repository-1",
+      branch_name: "main",
+      category: "productivity",
+      auto_create_pull_requests: false,
+    })
+
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit
+    assertPathFree(requestInit.body)
+    expect(requestInit.body).not.toContain("canonicalPath")
   })
 })

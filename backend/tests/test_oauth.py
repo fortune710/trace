@@ -10,14 +10,17 @@ from pydantic import SecretStr
 
 from auth.config import AuthSettings
 from auth.oauth import (
+    DESKTOP_OAUTH_REDIRECT_URI,
     GITHUB_CONNECT_START_ROUTE,
     OAUTH_CALLBACK_ROUTE,
+    DesktopOAuthHandoffStore,
     GitHubConnectionStatus,
     OAuthPurpose,
     OAuthRejected,
     OAuthStateStore,
     OAuthTransaction,
     ProviderConfiguration,
+    _pkce_challenge,
     _provider_configuration,
     _provider_identity,
     _repository_connection_redirect,
@@ -84,6 +87,72 @@ async def test_repository_connection_state_is_bound_to_an_owner() -> None:
     assert transaction.purpose == OAuthPurpose.REPOSITORY_CONNECTION
     assert transaction.user_id == str(owner_id)
     assert transaction.session_id == "00000000-0000-0000-0000-000000000012"
+
+
+@pytest.mark.anyio
+async def test_desktop_oauth_handoff_requires_the_matching_verifier_and_is_single_use():
+    redis = FakeRedis()
+    store = DesktopOAuthHandoffStore(redis_client=redis, state_key=b"a" * 32)
+    verifier = "v" * 43
+    challenge = _pkce_challenge(verifier)
+    challenge_hash = store._digest(challenge)
+    tokens = SimpleNamespace(
+        access_token="access-token",
+        refresh_token="refresh-token",
+        session_id=UUID("00000000-0000-0000-0000-000000000012"),
+    )
+
+    code = await store.create(tokens=tokens, challenge_hash=challenge_hash)
+
+    with pytest.raises(OAuthRejected):
+        await store.consume(code=code, verifier="w" * 43)
+
+    # A mismatched attempt consumes the code, so it cannot be replayed.
+    with pytest.raises(OAuthRejected):
+        await store.consume(code=code, verifier=verifier)
+
+
+@pytest.mark.anyio
+async def test_desktop_oauth_state_is_bound_to_the_fixed_deep_link():
+    redis = FakeRedis()
+    store = OAuthStateStore(redis_client=redis, state_key=b"a" * 32)
+
+    state, _, _ = await store.create(
+        provider="github",
+        destination=DESKTOP_OAUTH_REDIRECT_URI,
+        user_agent="test-agent",
+        purpose=OAuthPurpose.DESKTOP_LOGIN,
+        desktop_challenge_hash="challenge-hash",
+    )
+
+    transaction = await store.consume(state)
+
+    assert transaction.purpose == OAuthPurpose.DESKTOP_LOGIN
+    assert transaction.destination == DESKTOP_OAUTH_REDIRECT_URI
+    assert transaction.desktop_challenge_hash == "challenge-hash"
+
+
+@pytest.mark.anyio
+async def test_desktop_oauth_handoff_returns_session_tokens_once():
+    redis = FakeRedis()
+    store = DesktopOAuthHandoffStore(redis_client=redis, state_key=b"a" * 32)
+    verifier = "v" * 43
+    tokens = SimpleNamespace(
+        access_token="access-token",
+        refresh_token="refresh-token",
+        session_id=UUID("00000000-0000-0000-0000-000000000012"),
+    )
+    code = await store.create(
+        tokens=tokens,
+        challenge_hash=store._digest(_pkce_challenge(verifier)),
+    )
+
+    result = await store.consume(code=code, verifier=verifier)
+
+    assert result.access_token == "access-token"
+    assert result.refresh_token == "refresh-token"
+    with pytest.raises(OAuthRejected):
+        await store.consume(code=code, verifier=verifier)
 
 
 def test_repository_connection_route_is_explicitly_registered() -> None:
@@ -159,7 +228,9 @@ def test_github_connection_status_distinguishes_never_connected_and_valid_tokens
 
     service.payload = {
         "access_token": "token",
-        "access_token_expires_at": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+        "access_token_expires_at": (
+            datetime.now(UTC) + timedelta(minutes=5)
+        ).isoformat(),
     }
     assert (
         get_github_connection_status(
@@ -177,7 +248,9 @@ def test_github_connection_status_refreshes_expired_tokens_or_requires_reconnect
     service = FakeGitHubCredentialService(
         {
             "access_token": "expired-token",
-            "access_token_expires_at": (datetime.now(UTC) - timedelta(minutes=5)).isoformat(),
+            "access_token_expires_at": (
+                datetime.now(UTC) - timedelta(minutes=5)
+            ).isoformat(),
         }
     )
     monkeypatch.setattr(

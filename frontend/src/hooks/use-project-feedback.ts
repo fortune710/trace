@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react"
 
 import { toast } from "@/components/ui/toast"
 import { ApiError } from "@/lib/api"
+import { LocalProjectCreationError } from "@/lib/desktop-projects"
 
 type Operation = "projects" | "repositories" | "branches" | "create"
 
@@ -18,6 +19,14 @@ const operationLabel: Record<Exclude<Operation, "create">, string> = {
 }
 
 export function projectErrorCopy(error: unknown, operation: Operation) {
+  if (error instanceof LocalProjectCreationError && error.code === "already_exists") {
+    return {
+      title: "Project already connected",
+      description: "Choose a different folder or open the existing local project.",
+      type: "error" as const,
+    }
+  }
+
   if (error instanceof ApiError) {
     if (error.code === "provider_rate_limited" || error.code === "rate_limited") {
       return {
