@@ -1,16 +1,104 @@
-export type Session = { user_id: string; session_id: string }
+export type Session = {
+  user_id: string
+  session_id: string
+  email?: string | null
+  display_name?: string | null
+}
+export type GitHubConnectionStatus =
+  | 'connected'
+  | 'never_connected'
+  | 'needs_reconnection'
+export type GitHubConnection = {
+  provider: 'github'
+  status: GitHubConnectionStatus
+}
 type ApiErrorPayload = { error?: { code?: string; message?: string; request_id?: string } }
+
+export type ProjectCategory =
+  | "entertainment"
+  | "educational"
+  | "sports"
+  | "gaming"
+  | "business"
+  | "health"
+  | "finance"
+  | "social"
+  | "productivity"
+  | "e_commerce"
+  | "other"
+
+export type Project = {
+  id: string
+  name: string
+  source: "github" | "local"
+  external_repository_id: string | null
+  external_repository_connection_id: string | null
+  repository_owner: string | null
+  repository_name: string | null
+  branch_name: string | null
+  repository_visibility: string | null
+  imported_at: string | null
+  source_hash: string | null
+  current_revision: string | null
+  category: ProjectCategory
+  auto_create_pull_requests: boolean
+  created_at: string
+  updated_at: string
+  archived_at: string | null
+}
+
+export type ProjectPage = { items: Project[]; next_offset: number | null }
+export type Repository = {
+  source: "github"
+  repository_id: string
+  owner_login: string
+  name: string
+  full_name: string
+  visibility: string
+  private: boolean
+  default_branch: string | null
+  web_url: string
+}
+export type RepositoryPage = { items: Repository[]; next_page: number | null }
+export type Branch = {
+  source: "github"
+  repository_id: string
+  name: string
+  commit_sha: string
+  protected: boolean
+}
+export type BranchPage = { items: Branch[]; next_page: number | null }
+export type ProjectCreate = {
+  name: string
+  source: "github"
+  repository_id: string
+  branch_name: string
+  category: ProjectCategory
+  auto_create_pull_requests: boolean
+}
 
 export class ApiError extends Error {
   readonly code: string
   readonly requestId?: string
   readonly status: number
-  constructor(status: number, payload: ApiErrorPayload) { super(payload.error?.message ?? 'Unable to complete the request.'); this.code = payload.error?.code ?? 'request_failed'; this.requestId = payload.error?.request_id; this.status = status }
+  readonly retryAfterSeconds?: number
+  constructor(status: number, payload: ApiErrorPayload, retryAfterSeconds?: number) { super(payload.error?.message ?? 'Unable to complete the request.'); this.code = payload.error?.code ?? 'request_failed'; this.requestId = payload.error?.request_id; this.status = status; this.retryAfterSeconds = retryAfterSeconds }
 }
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000').replace(/\/$/, '')
 function csrfToken() { return document.cookie.split('; ').find((entry) => entry.startsWith('trace_csrf='))?.split('=', 2)[1] }
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> { const headers = new Headers(init.headers); if (init.body) headers.set('Content-Type', 'application/json'); if (init.method && !['GET', 'HEAD'].includes(init.method)) { const csrf = csrfToken(); if (csrf) headers.set('X-CSRF-Token', decodeURIComponent(csrf)) }; const response = await fetch(`${apiBaseUrl}${path}`, { ...init, credentials: 'include', headers }); if (response.status === 204) return undefined as T; const payload = await response.json().catch(() => ({})) as ApiErrorPayload; if (!response.ok) throw new ApiError(response.status, payload); return payload as T }
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> { const headers = new Headers(init.headers); if (init.body) headers.set('Content-Type', 'application/json'); if (init.method && !['GET', 'HEAD'].includes(init.method)) { const csrf = csrfToken(); if (csrf) headers.set('X-CSRF-Token', decodeURIComponent(csrf)) }; const response = await fetch(`${apiBaseUrl}${path}`, { ...init, credentials: 'include', headers }); if (response.status === 204) return undefined as T; const payload = await response.json().catch(() => ({})) as ApiErrorPayload; if (!response.ok) { const retryAfter = Number(response.headers.get('Retry-After')); throw new ApiError(response.status, payload, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined) }; return payload as T }
 function post<T>(path: string, body?: unknown) { return request<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }) }
-export const authApi = { session: () => request<Session>('/auth/session'), refresh: () => post<{ message: string }>('/auth/refresh'), login: (email: string, password: string) => post<{ message: string }>('/auth/login', { email, password }), register: (email: string, password: string) => post<{ message: string }>('/auth/register', { email, password, return_to: window.location.origin }), verifyEmail: (token: string) => post<{ message: string }>('/auth/verify-email', { token }), recoverPassword: (email: string) => post<{ message: string }>('/auth/password-recovery', { email, return_to: window.location.origin }), resetPassword: (token: string, password: string) => post<{ message: string }>('/auth/password-recovery/confirm', { token, password }), logout: () => post<void>('/auth/logout'), oauthUrl: (provider: 'github' | 'google') => `${apiBaseUrl}/auth/oauth/${provider}/start?return_to=${encodeURIComponent(window.location.origin)}` }
+function pageQuery(values: Record<string, string | number | undefined>) { const query = new URLSearchParams(); Object.entries(values).forEach(([key, value]) => { if (value !== undefined) query.set(key, String(value)) }); return query.toString() }
+export const authApi = { session: () => request<Session>('/auth/session'), refresh: () => post<{ message: string }>('/auth/refresh'), login: (email: string, password: string) => post<{ message: string }>('/auth/login', { email, password }), register: (email: string, password: string) => post<{ message: string }>('/auth/register', { email, password, return_to: window.location.origin }), verifyEmail: (token: string) => post<{ message: string }>('/auth/verify-email', { token }), recoverPassword: (email: string) => post<{ message: string }>('/auth/password-recovery', { email, return_to: window.location.origin }), resetPassword: (token: string, password: string) => post<{ message: string }>('/auth/password-recovery/confirm', { token, password }), logout: () => post<void>('/auth/logout'), githubConnection: () => request<GitHubConnection>('/auth/oauth/github/connection'), beginGitHubConnection: () => post<{ authorization_url: string }>('/auth/oauth/github/connect/start'), oauthUrl: (provider: 'github' | 'google') => `${apiBaseUrl}/auth/oauth/${provider}/start?return_to=${encodeURIComponent(window.location.origin)}` }
+export const projectsApi = {
+  list: ({ page, pageSize }: { page: number; pageSize: number }) =>
+    request<ProjectPage>(`/api/v1/projects?${pageQuery({ page, page_size: pageSize })}`),
+  get: (projectId: string) => request<Project>(`/api/v1/projects/${encodeURIComponent(projectId)}`),
+  create: (project: ProjectCreate) => post<Project>('/api/v1/projects', project),
+}
+export const repositoriesApi = {
+  list: ({ page, query }: { page: number; query?: string }) => request<RepositoryPage>(`/api/v1/repositories?${pageQuery({ source: 'github', page, page_size: 5, query })}`),
+  listBranches: ({ repositoryId, page, query }: { repositoryId: string; page: number; query?: string }) => request<BranchPage>(`/api/v1/repositories/${encodeURIComponent(repositoryId)}/branches?${pageQuery({ source: 'github', page, page_size: 5, query })}`),
+}
 export function isUnauthenticated(error: unknown) { return error instanceof ApiError && error.status === 401 }
