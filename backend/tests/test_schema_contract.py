@@ -18,7 +18,7 @@ from external_repositories.models import ExternalRepository
 from findings.models import Finding
 from projects.models import Project
 from remediations.models import Remediation
-from reviews.models import ReviewRun
+from reviews.models import Review, ReviewAgent, ReviewDispatchJob
 
 
 def test_string_columns_use_text_and_provider_fields_use_native_enums() -> None:
@@ -28,7 +28,7 @@ def test_string_columns_use_text_and_provider_fields_use_native_enums() -> None:
     assert isinstance(Credential.__table__.c.key_version.type, sa.Text)
     assert isinstance(Credential.__table__.c.key_reference.type, sa.Text)
     assert isinstance(Credential.__table__.c.mutation_version.type, sa.Integer)
-    assert isinstance(ReviewRun.__table__.c.retry_version.type, sa.Integer)
+    assert isinstance(Review.__table__.c.retry_version.type, sa.Integer)
     assert isinstance(Remediation.__table__.c.mutation_version.type, sa.Integer)
     assert isinstance(EmailDeliveryJob.__table__.c.payload_key_version.type, sa.Text)
     assert isinstance(EmailDeliveryJob.__table__.c.payload_key_reference.type, sa.Text)
@@ -56,9 +56,8 @@ def test_all_auth_and_public_tables_match_the_database_contract() -> None:
             "users",
             "external_repositories",
             "agents",
-            "review_runs",
-            "review_run_agents",
-            "review_run_categories",
+            "reviews",
+            "review_agents",
             "findings",
             "remediations",
             "pull_requests",
@@ -104,7 +103,7 @@ def test_generated_primary_keys_use_the_uuidv7_database_default() -> None:
         Credential,
         ExternalRepository,
         Agent,
-        ReviewRun,
+        Review,
         Finding,
         Remediation,
         PullRequest,
@@ -115,3 +114,12 @@ def test_generated_primary_keys_use_the_uuidv7_database_default() -> None:
         str(model.__table__.c.id.server_default.arg) == "public.uuidv7()"
         for model in generated_models
     )
+
+
+def test_review_submission_metadata_uses_identifier_only_storage() -> None:
+    assert Review.__table__.c.idempotency_id.nullable is False
+    assert isinstance(Review.__table__.c.idempotency_key_digest.type, sa.LargeBinary)
+    assert isinstance(Review.__table__.c.request_digest.type, sa.LargeBinary)
+    assert ReviewAgent.__table__.c.id.server_default is not None
+    assert ReviewDispatchJob.__table__.c.idempotency_id.server_default is not None
+    assert "payload" not in ReviewDispatchJob.__table__.c

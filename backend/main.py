@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from audit.outbox import AuditRecorder
 from audit.runtime import get_audit_recorder
 from auth.audit import AuditHasher
 from auth.config import AuthSettings, get_auth_settings
@@ -23,8 +24,12 @@ from auth.tokens import decode_base64url_key, jwt_service_from_settings
 from auth.uuids import uuid7
 from core.v1 import configure_router
 from core.v1 import router as v1_router
-from db.session import close_redis_client, get_engine, get_redis_client
-from reviews.service import ReviewDispatcher
+from db.session import (
+    close_cached_engines,
+    close_redis_client,
+    get_engine,
+    get_redis_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +82,7 @@ async def _renew_vault_token_forever(
 def create_app(
     settings: AuthSettings | None = None,
     *,
-    review_dispatcher: ReviewDispatcher | None = None,
+    audit_recorder: AuditRecorder | None = None,
 ) -> FastAPI:
     auth_settings = settings or get_auth_settings()
 
@@ -101,6 +106,11 @@ def create_app(
                 with suppress(asyncio.CancelledError):
                     await vault_renewal_task
             await close_redis_client()
+            # The audit recorder owns no connection itself, but references the
+            # process-cached engine. Clear it before disposing that pool so a
+            # later application lifecycle cannot reuse the stale recorder.
+            get_audit_recorder.cache_clear()
+            close_cached_engines()
 
     application = FastAPI(title="Trace API", lifespan=lifespan)
     principal_service: AuthService | None = None
@@ -137,15 +147,24 @@ def create_app(
     install_auth_cors(application, auth_settings)
     application.add_middleware(RequestIdMiddleware)
     audit_hasher = _audit_hasher(auth_settings)
-    audit_recorder = get_audit_recorder()
-    install_auth_error_handlers(application, audit_hasher, audit_recorder)
-    install_auth_routes(application, auth_settings, audit_hasher, audit_recorder)
-    install_oauth_routes(application, auth_settings, audit_hasher, audit_recorder)
+    active_audit_recorder = audit_recorder or get_audit_recorder()
+    install_auth_error_handlers(application, audit_hasher, active_audit_recorder)
+    install_auth_routes(
+        application,
+        auth_settings,
+        audit_hasher,
+        active_audit_recorder,
+    )
+    install_oauth_routes(
+        application,
+        auth_settings,
+        audit_hasher,
+        active_audit_recorder,
+    )
     configure_router(
         auth_settings,
         audit_hasher,
-        dispatcher=review_dispatcher,
-        audit_recorder=audit_recorder,
+        audit_recorder=active_audit_recorder,
     )
     application.include_router(v1_router)
 

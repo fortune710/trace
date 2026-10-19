@@ -10,7 +10,7 @@ provider repository identifier as text and points to an active
 `external_repository_connection_id`. A local project stores only its
 `local_path_hash`.
 
-Agents are reusable account-owned configurations. `review_run_agents` is the
+Agents are reusable account-owned configurations. `review_agents` is the
 assignment table, so one run can use many agents and one agent can participate
 in many runs. The composite foreign key on `findings` requires the producing
 agent to be assigned to the same run and owner.

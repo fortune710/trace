@@ -30,10 +30,11 @@ On a high level, Trace will operate with the client-server model, with the serve
 
 ## Local services
 
-Docker Compose runs the FastAPI backend, email worker, PostgreSQL, Redis, RabbitMQ, Mailpit, and a local Vault Transit service.
+Docker Compose runs the FastAPI backend, email worker, review-dispatch worker,
+PostgreSQL, Redis, RabbitMQ, Mailpit, and a local Vault Transit service.
 
 1. Copy `.env.example` to `.env`.
-2. Replace `POSTGRES_PASSWORD` and `TRACE_APP_PASSWORD`, then update `MIGRATION_DATABASE_URL` and `DATABASE_URL`. Set `RABBITMQ_PASSWORD`. The example derives `AUTH_RABBITMQ_URL` from the RabbitMQ credentials, so use URL-safe values.
+2. Replace `POSTGRES_PASSWORD` and `TRACE_APP_PASSWORD`, then update `MIGRATION_DATABASE_URL` and `DATABASE_URL`. Set `RABBITMQ_PASSWORD`. The example derives `AUTH_RABBITMQ_URL` and `REVIEW_RABBITMQ_URL` from the RabbitMQ credentials, so use URL-safe values.
 3. Generate a different 32-byte base64url value for each required `AUTH_*_KEY`. Set a development-only value for `VAULT_DEV_ROOT_TOKEN_ID`.
 4. Add the GitHub and Google client credentials when you want to test OAuth.
 5. Start the stack and wait for each health check:

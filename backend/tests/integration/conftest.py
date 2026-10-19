@@ -18,7 +18,7 @@ from auth.csrf import issue_csrf_token
 from auth.models import AuthSession, AuthUser, UserStatus
 from auth.tokens import jwt_service_from_settings
 from db.rls import principal_transaction
-from db.session import get_engine, get_redis_client
+from db.session import close_cached_engines, get_redis_client
 from db.types import RepositorySource
 from external_repositories.models import ExternalRepository
 from findings.models import Finding, FindingSeverity, FindingStatus
@@ -26,10 +26,9 @@ from integration.github_stub import GithubApiStub
 from main import create_app
 from remediations.models import Remediation, RemediationStatus
 from reviews.models import (
-    ReviewRun,
-    ReviewRunAgent,
-    ReviewRunAgentStatus,
-    ReviewRunCategory,
+    Review,
+    ReviewAgent,
+    ReviewAgentStatus,
     ReviewStatus,
 )
 from users.models import User
@@ -105,12 +104,12 @@ class AuthenticatedTestClient:
         return None
 
 
-@dataclass
-class DispatcherStub:
-    calls: list[tuple[UUID, UUID]]
+class RecordingAuditRecorder:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
 
-    def dispatch(self, *, review_id: UUID, owner_id: UUID) -> None:
-        self.calls.append((review_id, owner_id))
+    def create_event(self, **kwargs: object) -> None:
+        self.events.append(kwargs)
 
 
 @pytest.fixture(scope="session")
@@ -143,25 +142,26 @@ def integration_settings() -> AuthSettings:
 
 
 @pytest.fixture
-def dispatcher_stub() -> DispatcherStub:
-    return DispatcherStub([])
+def recording_audit_recorder() -> RecordingAuditRecorder:
+    return RecordingAuditRecorder()
 
 
 @pytest.fixture
 def integration_app(
-    integration_settings: AuthSettings, dispatcher_stub: DispatcherStub
+    integration_settings: AuthSettings,
+    recording_audit_recorder: RecordingAuditRecorder,
 ):
-    get_engine.cache_clear()
-    get_redis_client.cache_clear()
     get_audit_recorder.cache_clear()
+    close_cached_engines()
+    get_redis_client.cache_clear()
     application = create_app(
         integration_settings,
-        review_dispatcher=dispatcher_stub,
+        audit_recorder=recording_audit_recorder,  # type: ignore[arg-type]
     )
     yield application
     get_audit_recorder.cache_clear()
+    close_cached_engines()
     get_redis_client.cache_clear()
-    get_engine.cache_clear()
 
 
 @pytest.fixture
@@ -236,6 +236,7 @@ def local_project_factory():
                 "name": name,
                 "source": "local",
                 "local_path_hash": (uuid4().hex + uuid4().hex)[:64],
+                "source_hash": (uuid4().hex + uuid4().hex)[:64],
             },
         )
         assert response.status_code == 201, response.text
@@ -299,7 +300,7 @@ def agent_factory():
         name: str = "integration-agent",
         credential_id: UUID | None = None,
         category: str = "security",
-        provider: str = "github",
+        provider: str = "openai",
     ) -> dict[str, Any]:
         response = account.request(
             "POST",
@@ -308,9 +309,8 @@ def agent_factory():
                 "name": name,
                 "review_category": category,
                 "model_provider": provider,
-                "model_name": "integration-model",
+                "model_name": "gpt-6.1-sol",
                 "skills": [],
-                "fallback_order": 0,
                 "credential_id": str(credential_id) if credential_id else None,
             },
         )
@@ -326,18 +326,16 @@ def review_factory():
         account: TestAccount,
         project_id: UUID,
         agent_ids: list[UUID],
-        *,
-        categories: list[str] | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         response = account.request(
             "POST",
             "/api/v1/reviews",
             json={
                 "project_id": str(project_id),
-                "source_revision": "integration-revision",
-                "selected_categories": categories or ["security"],
                 "agent_ids": [str(agent_id) for agent_id in agent_ids],
             },
+            headers={"Idempotency-Key": idempotency_key or str(uuid4())},
         )
         assert response.status_code == 202, response.text
         return response.json()
@@ -357,7 +355,7 @@ def artifact_graph_factory(integration_engine):
         backup_id = uuid4()
         with principal_transaction(integration_engine, account.user_id) as connection:
             connection.execute(
-                sa.insert(ReviewRun).values(
+                sa.insert(Review).values(
                     id=review_id,
                     owner_id=account.user_id,
                     project_id=project_id,
@@ -366,25 +364,18 @@ def artifact_graph_factory(integration_engine):
                 )
             )
             connection.execute(
-                sa.insert(ReviewRunCategory).values(
+                sa.insert(ReviewAgent).values(
                     owner_id=account.user_id,
-                    review_run_id=review_id,
-                    category="security",
-                )
-            )
-            connection.execute(
-                sa.insert(ReviewRunAgent).values(
-                    owner_id=account.user_id,
-                    review_run_id=review_id,
+                    review_id=review_id,
                     agent_id=agent_id,
-                    status=ReviewRunAgentStatus.COMPLETED,
+                    status=ReviewAgentStatus.COMPLETED,
                 )
             )
             connection.execute(
                 sa.insert(Finding).values(
                     id=finding_id,
                     owner_id=account.user_id,
-                    review_run_id=review_id,
+                    review_id=review_id,
                     agent_id=agent_id,
                     category="security",
                     severity=FindingSeverity.HIGH,
