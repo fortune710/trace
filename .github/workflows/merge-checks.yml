@@ -34,7 +34,36 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run test
+      - run: bun run test:desktop:sqlite
+      - run: bun run check:privacy
       - run: bun run build
+
+  desktop-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bun install --frozen-lockfile
+      - run: cargo install tauri-driver --locked
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - run: bun run tauri:build -- --debug
+      - run: bun run test:e2e:desktop
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-e2e-${{ matrix.os }}
+          path: |
+            frontend/test-results
+            frontend/src-tauri/target/debug
+          if-no-files-found: ignore
 
   migrations-and-integration:
     runs-on: ubuntu-latest

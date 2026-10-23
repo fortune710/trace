@@ -41,9 +41,11 @@ function ProjectCard({ project }: { project: Project }) {
             </p>
           </div>
         </div>
-        <span className="rounded-full border border-border px-2 py-1 text-[11px] capitalize text-muted-foreground">
-          {project.repository_visibility}
-        </span>
+        {project.repository_visibility !== null ? (
+          <span className="rounded-full border border-border px-2 py-1 text-[11px] capitalize text-muted-foreground">
+            {project.repository_visibility}
+          </span>
+        ) : null}
       </div>
 
       <div className="mt-5 grid grid-cols-2 gap-4 border-t border-border pt-4 text-xs">

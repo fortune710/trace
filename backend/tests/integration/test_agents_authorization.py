@@ -3,8 +3,43 @@ from __future__ import annotations
 from uuid import UUID
 
 import pytest
+from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.integration
+
+
+def test_agent_model_catalog_is_authenticated_and_enforced(
+    account_pair, integration_app
+) -> None:
+    owner, _ = account_pair
+
+    catalog = owner.request("GET", "/api/v1/agents/catalog")
+    assert catalog.status_code == 200
+    assert catalog.json()["providers"][0] == {
+        "id": "openai",
+        "label": "OpenAI",
+        "models": [
+            {"id": "gpt-6.1-sol", "label": "GPT-6.1 Sol"},
+            {"id": "gpt-5.1", "label": "GPT-5.1"},
+        ],
+    }
+
+    rejected = owner.request(
+        "POST",
+        "/api/v1/agents",
+        json={
+            "name": "unsupported model",
+            "review_category": "security",
+            "model_provider": "openai",
+            "model_name": "not-a-model",
+        },
+    )
+    assert rejected.status_code == 400
+    assert rejected.json()["error"]["code"] == "invalid_request"
+
+    with TestClient(integration_app) as client:
+        unauthenticated = client.get("/api/v1/agents/catalog")
+    assert unauthenticated.status_code == 401
 
 
 def test_agent_owner_can_create_update_disable_and_list(
@@ -21,7 +56,7 @@ def test_agent_owner_can_create_update_disable_and_list(
     updated = owner.request(
         "PATCH",
         f"/api/v1/agents/{agent_id}",
-        json={"name": "updated-agent", "fallback_order": 2},
+        json={"name": "updated-agent"},
     )
     assert updated.status_code == 200
     assert updated.json()["name"] == "updated-agent"
@@ -64,8 +99,8 @@ def test_agent_foreign_resource_and_foreign_credential_are_denied(
         json={
             "name": "foreign-credential-agent",
             "review_category": "security",
-            "model_provider": "github",
-            "model_name": "integration-model",
+            "model_provider": "openai",
+            "model_name": "gpt-6.1-sol",
             "credential_id": credential["id"],
         },
     )
@@ -90,8 +125,8 @@ def test_agent_rejects_revoked_credential_and_unknown_fields(
         json={
             "name": "revoked-credential-agent",
             "review_category": "security",
-            "model_provider": "github",
-            "model_name": "integration-model",
+            "model_provider": "openai",
+            "model_name": "gpt-6.1-sol",
             "credential_id": str(credential_id),
         },
     )
@@ -103,8 +138,8 @@ def test_agent_rejects_revoked_credential_and_unknown_fields(
         json={
             "name": "unknown-field-agent",
             "review_category": "security",
-            "model_provider": "trace",
-            "model_name": "integration-model",
+            "model_provider": "openai",
+            "model_name": "gpt-6.1-sol",
             "unexpected": True,
         },
     )

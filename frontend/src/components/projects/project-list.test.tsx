@@ -1,0 +1,40 @@
+// @vitest-environment jsdom
+import { render, screen } from "@testing-library/react"
+import { describe, expect, it } from "vitest"
+
+import type { Project } from "@/lib/api"
+import { ProjectList } from "@/components/projects/project-list"
+
+const project: Project = {
+  id: "project-1",
+  name: "Trace project",
+  source: "local",
+  external_repository_id: null,
+  external_repository_connection_id: null,
+  repository_owner: null,
+  repository_name: "Trace project",
+  branch_name: null,
+  repository_visibility: null,
+  imported_at: "2026-10-16T00:00:00Z",
+  source_hash: null,
+  current_revision: null,
+  category: "productivity",
+  auto_create_pull_requests: false,
+  created_at: "2026-10-16T00:00:00Z",
+  updated_at: "2026-10-16T00:00:00Z",
+  archived_at: null,
+}
+
+describe("ProjectList", () => {
+  it("does not render a visibility badge when visibility is null", () => {
+    render(<ProjectList projects={[project]} />)
+
+    expect(screen.queryByText("private")).toBeNull()
+  })
+
+  it("renders the visibility badge when visibility is available", () => {
+    render(<ProjectList projects={[{ ...project, repository_visibility: "private" }]} />)
+
+    expect(screen.getByText("private")).toBeTruthy()
+  })
+})

@@ -182,7 +182,7 @@ def install_auth_routes(
                 identity=body.email,
             )
             raise _authentication_failed()
-        _set_session(
+        csrf_token = _set_session(
             response,
             result.tokens.access_token,
             result.tokens.refresh_token,
@@ -197,7 +197,7 @@ def install_auth_routes(
             status_code=200,
             identity=body.email,
         )
-        return {"message": "Authenticated."}
+        return {"message": "Authenticated.", "csrf_token": csrf_token}
 
     @app.post("/auth/refresh")
     async def refresh(
@@ -228,7 +228,7 @@ def install_auth_routes(
                 status_code=401,
             )
             raise _session_expired()
-        _set_session(
+        csrf_token = _set_session(
             response,
             result.tokens.access_token,
             result.tokens.refresh_token,
@@ -242,7 +242,7 @@ def install_auth_routes(
             reason="session_rotated",
             status_code=200,
         )
-        return {"message": "Session refreshed."}
+        return {"message": "Session refreshed.", "csrf_token": csrf_token}
 
     @app.post("/auth/logout", status_code=204)
     async def logout(
@@ -359,7 +359,7 @@ def _set_session(
     refresh_token: str,
     session_id,
     settings: AuthSettings,
-) -> None:
+) -> str:
     set_auth_cookies(
         response,
         access_token=access_token,
@@ -370,11 +370,13 @@ def _set_session(
     csrf_key = decode_base64url_key(
         settings.csrf_hmac_key.get_secret_value(), name="AUTH_CSRF_HMAC_KEY"
     )
+    csrf_token = issue_csrf_token(session_id=session_id, key=csrf_key)
     set_csrf_cookie(
         response,
-        csrf_token=issue_csrf_token(session_id=session_id, key=csrf_key),
+        csrf_token=csrf_token,
         settings=settings,
     )
+    return csrf_token
 
 
 def _require_csrf(

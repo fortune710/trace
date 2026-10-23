@@ -1,18 +1,32 @@
+import { isTauri } from "@tauri-apps/api/core"
+
+import { clearDesktopCsrfToken, getDesktopCsrfToken, setDesktopCsrfToken } from "@/lib/desktop-auth-state"
+import { runtimeConfig } from "@/lib/runtime-config"
+
 export type Session = {
   user_id: string
   session_id: string
   email?: string | null
   display_name?: string | null
 }
+
 export type GitHubConnectionStatus =
-  | 'connected'
-  | 'never_connected'
-  | 'needs_reconnection'
+  | "connected"
+  | "never_connected"
+  | "needs_reconnection"
+
 export type GitHubConnection = {
-  provider: 'github'
+  provider: "github"
   status: GitHubConnectionStatus
 }
-type ApiErrorPayload = { error?: { code?: string; message?: string; request_id?: string } }
+
+type ApiErrorPayload = {
+  error?: {
+    code?: string
+    message?: string
+    request_id?: string
+  }
+}
 
 export type ProjectCategory =
   | "entertainment"
@@ -47,7 +61,96 @@ export type Project = {
   archived_at: string | null
 }
 
-export type ProjectPage = { items: Project[]; next_offset: number | null }
+export type ProjectPage = {
+  items: Project[]
+  next_offset: number | null
+}
+
+export type ReviewCategory =
+  | "security"
+  | "engineering"
+  | "product"
+  | "legal"
+  | "accessibility"
+  | "marketing"
+
+export type ModelProvider = "openai" | "anthropic" | "google" | "xai"
+
+export type AgentSkill = string | Record<string, object>
+
+export type Agent = {
+  id: string
+  name: string
+  personality: string | null
+  review_category: ReviewCategory
+  model_provider: ModelProvider
+  model_name: string
+  avatar: string | null
+  skills: AgentSkill[]
+  credential_id: string | null
+  created_at: string
+  updated_at: string
+  disabled_at: string | null
+}
+
+export type AgentCreate = {
+  name: string
+  personality?: string | null
+  review_category: ReviewCategory
+  model_provider: ModelProvider
+  model_name: string
+  avatar?: string | null
+  skills: AgentSkill[]
+  credential_id?: string | null
+}
+
+export type AgentUpdate = Partial<AgentCreate>
+
+export type AgentPage = {
+  items: Agent[]
+  next_offset: number | null
+}
+
+export type AgentModel = {
+  id: string
+  label: string
+}
+
+export type AgentModelProvider = {
+  id: ModelProvider
+  label: string
+  models: AgentModel[]
+}
+
+export type AgentModelCatalog = {
+  providers: AgentModelProvider[]
+}
+
+export type CredentialProvider = ModelProvider | "github"
+
+export type Credential = {
+  id: string
+  provider: CredentialProvider
+  kind: "oauth" | "api_key"
+  active: boolean
+  created_at: string
+  updated_at: string
+  revoked_at: string | null
+}
+
+export type CredentialPage = {
+  items: Credential[]
+  next_offset: number | null
+}
+
+export type CredentialCreate = {
+  provider: ModelProvider
+  kind: "api_key"
+  payload: {
+    api_key: string
+  }
+}
+
 export type Repository = {
   source: "github"
   repository_id: string
@@ -59,7 +162,12 @@ export type Repository = {
   default_branch: string | null
   web_url: string
 }
-export type RepositoryPage = { items: Repository[]; next_page: number | null }
+
+export type RepositoryPage = {
+  items: Repository[]
+  next_page: number | null
+}
+
 export type Branch = {
   source: "github"
   repository_id: string
@@ -67,7 +175,12 @@ export type Branch = {
   commit_sha: string
   protected: boolean
 }
-export type BranchPage = { items: Branch[]; next_page: number | null }
+
+export type BranchPage = {
+  items: Branch[]
+  next_page: number | null
+}
+
 export type ProjectCreate = {
   name: string
   source: "github"
@@ -82,23 +195,250 @@ export class ApiError extends Error {
   readonly requestId?: string
   readonly status: number
   readonly retryAfterSeconds?: number
-  constructor(status: number, payload: ApiErrorPayload, retryAfterSeconds?: number) { super(payload.error?.message ?? 'Unable to complete the request.'); this.code = payload.error?.code ?? 'request_failed'; this.requestId = payload.error?.request_id; this.status = status; this.retryAfterSeconds = retryAfterSeconds }
+
+  constructor(
+    status: number,
+    payload: ApiErrorPayload,
+    retryAfterSeconds?: number
+  ) {
+    super(payload.error?.message ?? "Unable to complete the request.")
+    this.code = payload.error?.code ?? "request_failed"
+    this.requestId = payload.error?.request_id
+    this.status = status
+    this.retryAfterSeconds = retryAfterSeconds
+  }
 }
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000').replace(/\/$/, '')
-function csrfToken() { return document.cookie.split('; ').find((entry) => entry.startsWith('trace_csrf='))?.split('=', 2)[1] }
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> { const headers = new Headers(init.headers); if (init.body) headers.set('Content-Type', 'application/json'); if (init.method && !['GET', 'HEAD'].includes(init.method)) { const csrf = csrfToken(); if (csrf) headers.set('X-CSRF-Token', decodeURIComponent(csrf)) }; const response = await fetch(`${apiBaseUrl}${path}`, { ...init, credentials: 'include', headers }); if (response.status === 204) return undefined as T; const payload = await response.json().catch(() => ({})) as ApiErrorPayload; if (!response.ok) { const retryAfter = Number(response.headers.get('Retry-After')); throw new ApiError(response.status, payload, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined) }; return payload as T }
-function post<T>(path: string, body?: unknown) { return request<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }) }
-function pageQuery(values: Record<string, string | number | undefined>) { const query = new URLSearchParams(); Object.entries(values).forEach(([key, value]) => { if (value !== undefined) query.set(key, String(value)) }); return query.toString() }
-export const authApi = { session: () => request<Session>('/auth/session'), refresh: () => post<{ message: string }>('/auth/refresh'), login: (email: string, password: string) => post<{ message: string }>('/auth/login', { email, password }), register: (email: string, password: string) => post<{ message: string }>('/auth/register', { email, password, return_to: window.location.origin }), verifyEmail: (token: string) => post<{ message: string }>('/auth/verify-email', { token }), recoverPassword: (email: string) => post<{ message: string }>('/auth/password-recovery', { email, return_to: window.location.origin }), resetPassword: (token: string, password: string) => post<{ message: string }>('/auth/password-recovery/confirm', { token, password }), logout: () => post<void>('/auth/logout'), githubConnection: () => request<GitHubConnection>('/auth/oauth/github/connection'), beginGitHubConnection: () => post<{ authorization_url: string }>('/auth/oauth/github/connect/start'), oauthUrl: (provider: 'github' | 'google') => `${apiBaseUrl}/auth/oauth/${provider}/start?return_to=${encodeURIComponent(window.location.origin)}` }
+function csrfToken() {
+  if (isTauri()) {
+    return getDesktopCsrfToken()
+  }
+
+  return document.cookie
+    .split("; ")
+    .find((entry) => entry.startsWith("trace_csrf="))
+    ?.split("=", 2)[1]
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers)
+
+  if (init.body) {
+    headers.set("Content-Type", "application/json")
+  }
+
+  if (init.method && !["GET", "HEAD"].includes(init.method)) {
+    const csrf = csrfToken()
+
+    if (csrf) {
+      headers.set("X-CSRF-Token", decodeURIComponent(csrf))
+    }
+  }
+
+  const response = await fetch(`${runtimeConfig.apiBaseUrl}${path}`, {
+    ...init,
+    credentials: "include",
+    headers,
+  })
+
+  if (response.status === 204) {
+    return undefined as T
+  }
+
+  const payload = (await response.json().catch(() => ({}))) as ApiErrorPayload
+
+  if (!response.ok) {
+    const retryAfter = Number(response.headers.get("Retry-After"))
+
+    throw new ApiError(
+      response.status,
+      payload,
+      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined
+    )
+  }
+
+  return payload as T
+}
+
+function post<T>(path: string, body?: unknown) {
+  return request<T>(path, {
+    method: "POST",
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+}
+
+function patch<T>(path: string, body: unknown) {
+  return request<T>(path, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  })
+}
+
+function remove(path: string) {
+  return request<void>(path, { method: "DELETE" })
+}
+
+function pageQuery(
+  values: Record<string, string | number | boolean | undefined>
+) {
+  const query = new URLSearchParams()
+
+  Object.entries(values).forEach(([key, value]) => {
+    if (value !== undefined) {
+      query.set(key, String(value))
+    }
+  })
+
+  return query.toString()
+}
+
+type AuthenticatedResponse = {
+  message: string
+  csrf_token: string
+}
+
+function rememberDesktopCsrf(response: AuthenticatedResponse) {
+  if (isTauri()) {
+    setDesktopCsrfToken(response.csrf_token)
+  }
+
+  return response
+}
+
+export const authApi = {
+  session: () => request<Session>("/auth/session"),
+  refresh: async () =>
+    rememberDesktopCsrf(await post<AuthenticatedResponse>("/auth/refresh")),
+  login: async (email: string, password: string) =>
+    rememberDesktopCsrf(
+      await post<AuthenticatedResponse>("/auth/login", { email, password })
+    ),
+  register: (email: string, password: string) =>
+    post<{ message: string }>("/auth/register", {
+      email,
+      password,
+      return_to: window.location.origin,
+    }),
+  verifyEmail: (token: string) =>
+    post<{ message: string }>("/auth/verify-email", { token }),
+  recoverPassword: (email: string) =>
+    post<{ message: string }>("/auth/password-recovery", {
+      email,
+      return_to: window.location.origin,
+    }),
+  resetPassword: (token: string, password: string) =>
+    post<{ message: string }>("/auth/password-recovery/confirm", {
+      token,
+      password,
+    }),
+  logout: async () => {
+    try {
+      return await post<void>("/auth/logout")
+    } finally {
+      if (isTauri()) {
+        clearDesktopCsrfToken()
+      }
+    }
+  },
+  githubConnection: () =>
+    request<GitHubConnection>("/auth/oauth/github/connection"),
+  beginGitHubConnection: () =>
+    post<{ authorization_url: string }>("/auth/oauth/github/connect/start"),
+  oauthUrl: (provider: "github" | "google") =>
+    `${runtimeConfig.apiBaseUrl}/auth/oauth/${provider}/start?return_to=${encodeURIComponent(
+      window.location.origin
+    )}`,
+  desktopOAuthUrl: (
+    provider: "github" | "google",
+    challenge: string
+  ) =>
+    `${runtimeConfig.apiBaseUrl}/auth/oauth/${provider}/desktop/start?challenge=${encodeURIComponent(
+      challenge
+    )}`,
+  exchangeDesktopOAuth: async (code: string, verifier: string) =>
+    rememberDesktopCsrf(
+      await post<AuthenticatedResponse>("/auth/oauth/desktop/exchange", {
+        code,
+        verifier,
+      })
+    ),
+}
+
 export const projectsApi = {
   list: ({ page, pageSize }: { page: number; pageSize: number }) =>
-    request<ProjectPage>(`/api/v1/projects?${pageQuery({ page, page_size: pageSize })}`),
-  get: (projectId: string) => request<Project>(`/api/v1/projects/${encodeURIComponent(projectId)}`),
-  create: (project: ProjectCreate) => post<Project>('/api/v1/projects', project),
+    request<ProjectPage>(
+      `/api/v1/projects?${pageQuery({ page, page_size: pageSize })}`
+    ),
+  get: (projectId: string) =>
+    request<Project>(`/api/v1/projects/${encodeURIComponent(projectId)}`),
+  create: (project: ProjectCreate) => post<Project>("/api/v1/projects", project),
 }
+
+export const agentsApi = {
+  list: ({
+    page,
+    pageSize,
+    includeDisabled,
+  }: {
+    page: number
+    pageSize: number
+    includeDisabled: boolean
+  }) =>
+    request<AgentPage>(
+      `/api/v1/agents?${pageQuery({
+        page,
+        page_size: pageSize,
+        include_disabled: includeDisabled,
+      })}`
+    ),
+  get: (agentId: string) =>
+    request<Agent>(`/api/v1/agents/${encodeURIComponent(agentId)}`),
+  catalog: () => request<AgentModelCatalog>("/api/v1/agents/catalog"),
+  create: (agent: AgentCreate) => post<Agent>("/api/v1/agents", agent),
+  update: (agentId: string, agent: AgentUpdate) =>
+    patch<Agent>(`/api/v1/agents/${encodeURIComponent(agentId)}`, agent),
+  disable: (agentId: string) =>
+    remove(`/api/v1/agents/${encodeURIComponent(agentId)}`),
+}
+
+export const credentialsApi = {
+  list: ({ page, pageSize }: { page: number; pageSize: number }) =>
+    request<CredentialPage>(
+      `/api/v1/credentials?${pageQuery({ page, page_size: pageSize })}`
+    ),
+  createOrReplace: (credential: CredentialCreate) =>
+    post<Credential>("/api/v1/credentials", credential),
+}
+
 export const repositoriesApi = {
-  list: ({ page, query }: { page: number; query?: string }) => request<RepositoryPage>(`/api/v1/repositories?${pageQuery({ source: 'github', page, page_size: 5, query })}`),
-  listBranches: ({ repositoryId, page, query }: { repositoryId: string; page: number; query?: string }) => request<BranchPage>(`/api/v1/repositories/${encodeURIComponent(repositoryId)}/branches?${pageQuery({ source: 'github', page, page_size: 5, query })}`),
+  list: ({ page, query }: { page: number; query?: string }) =>
+    request<RepositoryPage>(
+      `/api/v1/repositories?${pageQuery({
+        source: "github",
+        page,
+        page_size: 5,
+        query,
+      })}`
+    ),
+  listBranches: ({
+    repositoryId,
+    page,
+    query,
+  }: {
+    repositoryId: string
+    page: number
+    query?: string
+  }) =>
+    request<BranchPage>(
+      `/api/v1/repositories/${encodeURIComponent(repositoryId)}/branches?${pageQuery({
+        source: "github",
+        page,
+        page_size: 5,
+        query,
+      })}`
+    ),
 }
-export function isUnauthenticated(error: unknown) { return error instanceof ApiError && error.status === 401 }
+
+export function isUnauthenticated(error: unknown) {
+  return error instanceof ApiError && error.status === 401
+}

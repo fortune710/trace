@@ -1,5 +1,7 @@
 .env
 .ci.env
+frontend/.env.*.local
+frontend/.env.local
 node_modules
 .venv
 
@@ -7,6 +9,10 @@ node_modules
 .mypy_cache
 .pytest_cache
 frontend/test-results/
+
+# Tauri/Cargo build artifacts
+frontend/src-tauri/target/
+frontend/src-tauri/gen/schemas/
 
 tmp
 __pycache__

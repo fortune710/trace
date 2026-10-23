@@ -55,6 +55,7 @@ OAUTH_STUB_HTTP_PORT=$oauth_stub_http_port
 RABBITMQ_USER=trace
 RABBITMQ_PASSWORD=trace-ci-rabbitmq-password
 AUTH_RABBITMQ_URL=amqp://trace:trace-ci-rabbitmq-password@rabbitmq:5672/%2F
+TEST_REVIEW_RABBITMQ_URL=amqp://trace:trace-ci-rabbitmq-password@rabbitmq:5672/%2F
 AUDIT_ENABLED=true
 AUDIT_HOST=immudb
 AUDIT_PORT=3322

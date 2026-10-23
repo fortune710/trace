@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from auth.models import AuthSession
 from db.rls import principal_transaction
 from remediations.models import Remediation
-from reviews.models import ReviewRunAgent
+from reviews.models import ReviewAgent
 
 pytestmark = pytest.mark.integration
 
@@ -56,8 +56,8 @@ def test_cross_account_relationships_are_rejected_without_side_effects(
         json={
             "name": "cross-account-agent",
             "review_category": "security",
-            "model_provider": "github",
-            "model_name": "integration-model",
+            "model_provider": "openai",
+            "model_name": "gpt-6.1-sol",
             "credential_id": foreign_credential["id"],
         },
     )
@@ -69,10 +69,9 @@ def test_cross_account_relationships_are_rejected_without_side_effects(
         "/api/v1/reviews",
         json={
             "project_id": foreign_project["id"],
-            "source_revision": "cross-account",
-            "selected_categories": ["security"],
             "agent_ids": [foreign_agent["id"]],
         },
+        headers={"Idempotency-Key": "cross-account-review"},
     )
     assert review_attempt.status_code == 403
     assert foreign_project["id"] not in review_attempt.text
@@ -131,9 +130,9 @@ def test_same_owner_composite_foreign_keys_block_direct_relationship_inserts(
         principal_transaction(integration_engine, owner.user_id) as connection,
     ):
         connection.execute(
-            sa.insert(ReviewRunAgent).values(
+            sa.insert(ReviewAgent).values(
                 owner_id=owner.user_id,
-                review_run_id=UUID(review["id"]),
+                review_id=UUID(review["id"]),
                 agent_id=UUID(foreign_agent["id"]),
             )
         )
@@ -259,8 +258,8 @@ def test_invalid_access_token_variants_are_generic(
             {
                 "name": "csrf",
                 "review_category": "security",
-                "model_provider": "trace",
-                "model_name": "model",
+                "model_provider": "openai",
+                "model_name": "gpt-6.1-sol",
             },
         ),
         (
@@ -268,9 +267,7 @@ def test_invalid_access_token_variants_are_generic(
             "/api/v1/reviews",
             {
                 "project_id": str(UUID(int=1)),
-                "source_revision": "csrf",
-                "selected_categories": ["security"],
-                "agent_ids": [],
+                "agent_ids": [str(UUID(int=2))],
             },
         ),
         (

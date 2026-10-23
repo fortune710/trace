@@ -31,7 +31,7 @@ def set_auth_cookies(
 
 def set_csrf_cookie(
     response: Response, *, csrf_token: str, settings: AuthSettings
-) -> None:
+) -> str:
     response.set_cookie(
         key=settings.csrf_cookie_name,
         value=csrf_token,
@@ -41,6 +41,7 @@ def set_csrf_cookie(
         httponly=False,
         samesite=settings.cookie_same_site,
     )
+    return csrf_token
 
 
 def clear_auth_cookies(response: Response, settings: AuthSettings) -> None:

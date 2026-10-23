@@ -36,6 +36,7 @@ services:
       AUTH_CSRF_HMAC_KEY: ${AUTH_CSRF_HMAC_KEY:-}
       AUTH_AUDIT_HASH_KEY: ${AUTH_AUDIT_HASH_KEY:-}
       AUTH_ALLOWED_ORIGINS: ${AUTH_ALLOWED_ORIGINS:-[]}
+      AUTH_DESKTOP_ALLOWED_ORIGINS: ${AUTH_DESKTOP_ALLOWED_ORIGINS:-["http://127.0.0.1:5173","https://tauri.localhost","tauri://localhost"]}
       AUTH_GITHUB_CLIENT_ID: ${AUTH_GITHUB_CLIENT_ID:-}
       AUTH_GITHUB_CLIENT_SECRET: ${AUTH_GITHUB_CLIENT_SECRET:-}
       AUTH_GITHUB_REDIRECT_URI: ${AUTH_GITHUB_REDIRECT_URI:-}
@@ -223,6 +224,7 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       INTERNAL_DATABASE_URL: ${TEST_INTERNAL_DATABASE_URL:?Set TEST_INTERNAL_DATABASE_URL in .env}
       MAINTENANCE_DATABASE_URL: ${TEST_MAINTENANCE_DATABASE_URL:?Set TEST_MAINTENANCE_DATABASE_URL in .env}
+      REVIEW_RABBITMQ_URL: ${TEST_REVIEW_RABBITMQ_URL:-${REVIEW_RABBITMQ_URL:-${AUTH_RABBITMQ_URL:?Set AUTH_RABBITMQ_URL in .env}}}
       AUDIT_ENABLED: ${AUDIT_ENABLED:-true}
       AUDIT_HOST: ${AUDIT_HOST:-immudb}
       AUDIT_PORT: ${AUDIT_PORT:-3322}
@@ -243,9 +245,12 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - data
       - audit
+      - queue
     init: true
     read_only: true
     tmpfs:
@@ -263,7 +268,7 @@ services:
       dockerfile: Dockerfile
     command: ["./start-email-worker.sh"]
     environment:
-      DATABASE_URL: ${INTERNAL_DATABASE_URL:?Set INTERNAL_DATABASE_URL in .env}
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD in .env}@postgres:5432/trace
       SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST in .env}
       SMTP_PORT: ${SMTP_PORT:?Set SMTP_PORT in .env}
       AUTH_ENVIRONMENT: ${AUTH_ENVIRONMENT:-development}
@@ -319,7 +324,7 @@ services:
       dockerfile: Dockerfile
     command: ["./start-audit-worker.sh"]
     environment:
-      DATABASE_URL: ${INTERNAL_DATABASE_URL:?Set INTERNAL_DATABASE_URL in .env}
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD in .env}@postgres:5432/trace
       AUDIT_ENABLED: "true"
       AUDIT_HOST: ${AUDIT_HOST:-immudb}
       AUDIT_PORT: ${AUDIT_PORT:-3322}
@@ -347,6 +352,45 @@ services:
     networks:
       - data
       - audit
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    stop_grace_period: 30s
+
+  review-dispatch-worker:
+    restart: unless-stopped
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["./start-review-dispatch-worker.sh"]
+    environment:
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD in .env}@postgres:5432/trace
+      REVIEW_RABBITMQ_URL: ${REVIEW_RABBITMQ_URL:-${AUTH_RABBITMQ_URL:?Set AUTH_RABBITMQ_URL in .env}}
+      REVIEW_MAX_ATTEMPTS: ${REVIEW_MAX_ATTEMPTS:-8}
+      REVIEW_RETRY_BASE_SECONDS: ${REVIEW_RETRY_BASE_SECONDS:-5}
+      REVIEW_RETRY_MAX_SECONDS: ${REVIEW_RETRY_MAX_SECONDS:-900}
+      REVIEW_POLL_SECONDS: ${REVIEW_POLL_SECONDS:-1}
+      REVIEW_PROCESSING_TIMEOUT_SECONDS: ${REVIEW_PROCESSING_TIMEOUT_SECONDS:-300}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./backend:/app:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - data
+      - queue
     init: true
     read_only: true
     tmpfs:

@@ -163,6 +163,12 @@ AUTH_RATE_LIMIT_POLICIES = {
     "auth.oauth_start.ip": RateLimitPolicy(
         "auth.oauth_start.ip", capacity=10, refill_tokens=10, refill_period_seconds=600
     ),
+    "auth.oauth_desktop_exchange.ip": RateLimitPolicy(
+        "auth.oauth_desktop_exchange.ip",
+        capacity=10,
+        refill_tokens=10,
+        refill_period_seconds=600,
+    ),
     "auth.refresh.session": RateLimitPolicy(
         "auth.refresh.session", capacity=30, refill_tokens=30, refill_period_seconds=300
     ),

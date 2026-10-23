@@ -34,13 +34,13 @@ class Finding(Base):
     __table_args__ = (
         sa.UniqueConstraint("owner_id", "id", name="findings_owner_id_id_key"),
         sa.ForeignKeyConstraint(
-            ["owner_id", "review_run_id", "agent_id"],
+            ["owner_id", "review_id", "agent_id"],
             [
-                "public.review_run_agents.owner_id",
-                "public.review_run_agents.review_run_id",
-                "public.review_run_agents.agent_id",
+                "public.review_agents.owner_id",
+                "public.review_agents.review_id",
+                "public.review_agents.agent_id",
             ],
-            name="findings_owner_run_agent_fkey",
+            name="findings_owner_review_agent_fkey",
             ondelete="RESTRICT",
         ),
         {"schema": "public"},
@@ -56,7 +56,7 @@ class Finding(Base):
         sa.ForeignKey("public.users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    review_run_id: Mapped[UUID] = mapped_column(
+    review_id: Mapped[UUID] = mapped_column(
         PostgreSQLUUID(as_uuid=True), nullable=False
     )
     agent_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=False)
