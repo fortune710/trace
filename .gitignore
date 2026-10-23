@@ -1,6 +1,12 @@
 .env
+.ci.env
 node_modules
-backend/.venv
+.venv
+
+.ruff_cache
+.mypy_cache
+.pytest_cache
+frontend/test-results/
 
 tmp
 __pycache__

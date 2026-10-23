@@ -1,0 +1,25 @@
+# Runtime dependencies of immudb-py==1.5.0, excluding python-ecdsa.
+# Keep these exact pins synchronized with the SDK compatibility test.
+appier==1.46.0
+cachetools==7.2.1
+certifi==2026.7.22
+charset-normalizer==3.5.2
+google-api==0.1.12
+google-api-core==2.41.0
+google-api-python-client==2.201.0
+google-auth==2.61.0
+google-auth-httplib2==0.4.4
+googleapis-common-protos==1.75.5
+grpcio==1.84.0
+httplib2==0.32.0
+idna==3.20
+proto-plus==1.29.0
+protobuf==7.36.2
+pyasn1==0.6.4
+pyasn1-modules==0.4.2
+pyparsing==3.3.3
+requests==2.34.2
+rsa==4.9.1
+six==1.17.0
+uritemplate==4.2.0
+urllib3==2.8.0

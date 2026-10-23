@@ -1,0 +1,1 @@
+"""Finding resource package."""
