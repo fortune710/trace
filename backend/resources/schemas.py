@@ -4,10 +4,16 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 from credentials.models import CredentialKind, CredentialProvider
-from db.types import RepositorySource
+from db.types import RepositoryProvider, RepositorySource
 from findings.models import FindingSeverity, FindingStatus
 from projects.models import ProjectCategory
 from remediations.models import RemediationStatus
@@ -19,6 +25,7 @@ class RequestModel(BaseModel):
 
 
 HashString = Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{64}$")]
+CommitSha = Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{40}$")]
 ShortName = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
 ]
@@ -42,36 +49,52 @@ class PageQuery(RequestModel):
 
 
 class ProjectCreate(RequestModel):
-    name: ShortName | None = None
+    name: ShortName
     source: RepositorySource
-    external_repository_id: (
-        Annotated[str, StringConstraints(min_length=1, max_length=512)] | None
+    repository_id: (
+        Annotated[
+            str,
+            StringConstraints(
+                pattern=r"^[1-9][0-9]{0,18}$", min_length=1, max_length=19
+            ),
+        ]
+        | None
     ) = None
-    external_repository_connection_id: UUID | None = None
+    branch_name: (
+        Annotated[
+            str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
+        ]
+        | None
+    ) = None
     local_path_hash: HashString | None = None
     source_hash: HashString | None = None
     current_revision: (
         Annotated[str, StringConstraints(min_length=1, max_length=256)] | None
     ) = None
-    category: ProjectCategory = ProjectCategory.OTHER
+    category: ProjectCategory | None = None
     auto_create_pull_requests: bool = False
 
     @model_validator(mode="after")
     def validate_source_fields(self) -> ProjectCreate:
         if self.source is RepositorySource.LOCAL:
             if (
-                self.name is None
-                or self.local_path_hash is None
-                or self.external_repository_id is not None
-                or self.external_repository_connection_id is not None
+                self.local_path_hash is None
+                or self.repository_id is not None
+                or self.branch_name is not None
             ):
                 raise ValueError("local projects require local-only fields")
-        elif (
-            self.external_repository_id is None
-            or self.external_repository_connection_id is None
-            or self.local_path_hash is not None
-        ):
-            raise ValueError("GitHub projects require GitHub-only fields")
+        else:
+            if (
+                self.repository_id is None
+                or self.branch_name is None
+                or self.category is None
+                or self.local_path_hash is not None
+                or self.current_revision is not None
+            ):
+                raise ValueError(
+                    "GitHub imports require repository_id, branch_name, category, "
+                    "and a server-resolved revision"
+                )
         return self
 
 
@@ -87,6 +110,11 @@ class ProjectResponse(RequestModel):
     source: RepositorySource
     external_repository_id: str | None
     external_repository_connection_id: UUID | None
+    repository_owner: str | None
+    repository_name: str | None
+    branch_name: str | None
+    repository_visibility: str | None
+    imported_at: datetime | None
     source_hash: str | None
     current_revision: str | None
     category: ProjectCategory
@@ -99,6 +127,36 @@ class ProjectResponse(RequestModel):
 class ProjectPage(RequestModel):
     items: list[ProjectResponse]
     next_offset: int | None
+
+
+class RepositoryResponse(RequestModel):
+    source: RepositoryProvider
+    repository_id: str
+    owner_login: str
+    name: str
+    full_name: str
+    visibility: str
+    private: bool
+    default_branch: str | None
+    web_url: str
+
+
+class RepositoryPage(RequestModel):
+    items: list[RepositoryResponse]
+    next_page: int | None
+
+
+class BranchResponse(RequestModel):
+    source: RepositoryProvider
+    repository_id: str
+    name: str
+    commit_sha: CommitSha
+    protected: bool
+
+
+class BranchPage(RequestModel):
+    items: list[BranchResponse]
+    next_page: int | None
 
 
 class AgentCreate(RequestModel):

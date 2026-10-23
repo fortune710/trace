@@ -184,6 +184,12 @@ AUTH_RATE_LIMIT_POLICIES = {
         refill_tokens=20,
         refill_period_seconds=900,
     ),
+    "resource.repository_read.user": RateLimitPolicy(
+        "resource.repository_read.user",
+        capacity=60,
+        refill_tokens=60,
+        refill_period_seconds=900,
+    ),
 }
 
 

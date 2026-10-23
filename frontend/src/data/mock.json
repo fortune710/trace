@@ -1,0 +1,62 @@
+{
+  "items": [
+    {
+      "id": "0199d86b-7e5f-7d4b-b8d2-0d7d9e2a1001",
+      "name": "Trace Dashboard",
+      "source": "github",
+      "external_repository_id": "184729301",
+      "external_repository_connection_id": "0199d86b-7e5f-7d4b-b8d2-0d7d9e2a2001",
+      "repository_owner": "trace-labs",
+      "repository_name": "dashboard",
+      "branch_name": "main",
+      "repository_visibility": "private",
+      "imported_at": "2026-10-08T14:32:00Z",
+      "source_hash": "8b1a9953c4611296a827abf8c47804d7f2c4f6a5f7d7e0d2e7b6f2d3a8b1c9e4",
+      "current_revision": "a3f5c8d2e1b49706f8c9d0e4a2b6c7d8e9f00112",
+      "category": "business",
+      "auto_create_pull_requests": true,
+      "created_at": "2026-10-08T14:30:00Z",
+      "updated_at": "2026-10-08T14:32:00Z",
+      "archived_at": null
+    },
+    {
+      "id": "0199d86b-7e5f-7d4b-b8d2-0d7d9e2a1002",
+      "name": "Mobile Companion",
+      "source": "github",
+      "external_repository_id": "194827560",
+      "external_repository_connection_id": "0199d86b-7e5f-7d4b-b8d2-0d7d9e2a2001",
+      "repository_owner": "trace-labs",
+      "repository_name": "mobile-companion",
+      "branch_name": "develop",
+      "repository_visibility": "public",
+      "imported_at": "2026-10-06T09:18:00Z",
+      "source_hash": "4d7c3b2a1908f6e5d4c3b2a1908f6e5d4c3b2a1908f6e5d4c3b2a1908f6e5d4c",
+      "current_revision": "f7e6d5c4b3a2918071625344f3e2d1c0b9a88776",
+      "category": "productivity",
+      "auto_create_pull_requests": false,
+      "created_at": "2026-10-06T09:15:00Z",
+      "updated_at": "2026-10-06T09:18:00Z",
+      "archived_at": null
+    },
+    {
+      "id": "0199d86b-7e5f-7d4b-b8d2-0d7d9e2a1003",
+      "name": "Security Playground",
+      "source": "github",
+      "external_repository_id": "205938471",
+      "external_repository_connection_id": "0199d86b-7e5f-7d4b-b8d2-0d7d9e2a2001",
+      "repository_owner": "trace-labs",
+      "repository_name": "security-playground",
+      "branch_name": "main",
+      "repository_visibility": "private",
+      "imported_at": "2026-10-01T16:45:00Z",
+      "source_hash": "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "current_revision": "0123456789abcdef0123456789abcdef01234567",
+      "category": "educational",
+      "auto_create_pull_requests": true,
+      "created_at": "2026-10-01T16:42:00Z",
+      "updated_at": "2026-10-01T16:45:00Z",
+      "archived_at": null
+    }
+  ],
+  "next_offset": null
+}

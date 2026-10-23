@@ -33,6 +33,7 @@ from credentials.models import (
 from db.types import (
     CredentialEncryptionProvider,
     ProjectSourceType,
+    RepositoryProvider,
     RepositorySource,
     ReviewCategory,
     native_enum,
@@ -84,6 +85,7 @@ __all__ = [
     "RefreshToken",
     "Remediation",
     "RemediationStatus",
+    "RepositoryProvider",
     "RepositorySource",
     "ReviewCategory",
     "ReviewRun",

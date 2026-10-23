@@ -96,6 +96,100 @@ class ResourceUnavailable(AuthError):
         )
 
 
+class GithubAuthorizationRequired(AuthError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="github_authorization_required",
+            message="GitHub authorization is required for this operation.",
+            status_code=status.HTTP_403_FORBIDDEN,
+            event="provider",
+            reason="authorization_required",
+        )
+
+
+class RepositoryNotFound(AuthError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="repository_not_found",
+            message="The requested repository was not found.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            event="provider",
+            reason="repository_not_found",
+        )
+
+
+class BranchNotFound(AuthError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="branch_not_found",
+            message="The requested branch was not found.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            event="provider",
+            reason="branch_not_found",
+        )
+
+
+class UnsupportedSource(AuthError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="unsupported_source",
+            message="The requested repository source is not supported.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            event="request",
+            reason="unsupported_source",
+        )
+
+
+class RepositoryInvalidRequest(AuthError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="invalid_request",
+            message="The request could not be processed.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            event="request",
+            reason="invalid_input",
+        )
+
+
+class BranchConflict(AuthError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="branch_conflict",
+            message="The requested branch already exists or conflicts with repository state.",
+            status_code=status.HTTP_409_CONFLICT,
+            event="provider",
+            reason="branch_conflict",
+        )
+
+
+class ProviderRateLimited(AuthError):
+    def __init__(self, retry_after_seconds: int | None = None) -> None:
+        headers = (
+            {"Retry-After": str(retry_after_seconds)}
+            if retry_after_seconds is not None and retry_after_seconds > 0
+            else {}
+        )
+        super().__init__(
+            code="provider_rate_limited",
+            message="The repository provider rate limit was exceeded.",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            event="provider",
+            reason="rate_limited",
+            headers=headers,
+        )
+
+
+class ProviderUnavailable(AuthError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="provider_unavailable",
+            message="The repository provider is temporarily unavailable.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            event="provider",
+            reason="provider_unavailable",
+        )
+
+
 def _request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "unavailable")
 

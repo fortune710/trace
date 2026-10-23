@@ -17,6 +17,7 @@ from audit.outbox import AuditRecorder
 from auth.audit import AuditHasher
 from auth.config import AuthSettings
 from credentials.routes import build_router as build_credentials_router
+from external_repositories.routes import build_router as build_repositories_router
 from findings.routes import build_router as build_findings_router
 from projects.routes import build_router as build_projects_router
 from remediations.routes import build_router as build_remediations_router
@@ -53,6 +54,7 @@ def build_router(
         (build_remediations_router(resource_router), ["remediations"]),
         (build_artifacts_router(resource_router), ["artifacts"]),
         (build_credentials_router(resource_router), ["credentials"]),
+        (build_repositories_router(settings), ["repositories"]),
     ]
     for feature_router, tags in router_tags:
         version_router.include_router(feature_router, tags=tags)

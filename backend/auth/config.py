@@ -22,6 +22,7 @@ _OAUTH_PROVIDER_DEFAULTS = {
     "github_token_url": "https://github.com/login/oauth/access_token",
     "github_user_url": "https://api.github.com/user",
     "github_emails_url": "https://api.github.com/user/emails",
+    "github_api_url": "https://api.github.com",
     "google_authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
     "google_token_url": "https://oauth2.googleapis.com/token",
     "google_jwks_url": "https://www.googleapis.com/oauth2/v3/certs",
@@ -88,6 +89,7 @@ class AuthSettings(BaseSettings):
     github_token_url: str = _OAUTH_PROVIDER_DEFAULTS["github_token_url"]
     github_user_url: str = _OAUTH_PROVIDER_DEFAULTS["github_user_url"]
     github_emails_url: str = _OAUTH_PROVIDER_DEFAULTS["github_emails_url"]
+    github_api_url: str = _OAUTH_PROVIDER_DEFAULTS["github_api_url"]
     google_client_id: str | None = None
     google_client_secret: SecretStr | None = None
     google_redirect_uri: str | None = None
@@ -241,6 +243,7 @@ class AuthSettings(BaseSettings):
             "github_token_url": self.github_token_url,
             "github_user_url": self.github_user_url,
             "github_emails_url": self.github_emails_url,
+            "github_api_url": self.github_api_url,
             "google_authorize_url": self.google_authorize_url,
             "google_token_url": self.google_token_url,
             "google_jwks_url": self.google_jwks_url,

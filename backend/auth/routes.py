@@ -273,7 +273,9 @@ def install_auth_routes(
         return response
 
     @app.get("/auth/session")
-    async def session(request: Request, principal: CurrentPrincipal) -> dict[str, str]:
+    async def session(
+        request: Request, principal: CurrentPrincipal
+    ) -> dict[str, str | None]:
         audit(
             request,
             event="access",
@@ -281,9 +283,17 @@ def install_auth_routes(
             reason="session_active",
             status_code=200,
         )
+        try:
+            email, display_name = await asyncio.to_thread(
+                service().account_profile, user_id=principal.user_id
+            )
+        except AuthenticationUnavailable as error:
+            raise _unavailable() from error
         return {
             "user_id": str(principal.user_id),
             "session_id": str(principal.session_id),
+            "email": email,
+            "display_name": display_name,
         }
 
     @app.post("/auth/password-recovery", status_code=202)

@@ -12,6 +12,32 @@ branch_labels = None
 depends_on = None
 
 
+def _findings_status_exists() -> bool:
+    """Return whether an existing database already has the status column.
+
+    Some databases were bootstrapped from metadata before this migration was
+    introduced.  Those schemas already have this model-backed column even when
+    their Alembic revision is earlier than this migration.
+    """
+    return bool(
+        op.get_bind()
+        .execute(
+            sa.text(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'findings'
+                      AND column_name = 'status'
+                )
+                """
+            )
+        )
+        .scalar()
+    )
+
+
 def upgrade() -> None:
     # The initial resource migration created one generic owner index per
     # table.  Keep the indexes used by the model contract instead: ordered
@@ -46,28 +72,30 @@ def upgrade() -> None:
         "ON public.review_run_categories (owner_id, review_run_id)"
     )
 
-    op.add_column(
-        "findings",
-        sa.Column(
-            "status",
-            sa.Enum(
-                "open",
-                "accepted",
-                "resolved",
-                "dismissed",
-                name="finding_status",
-                schema="public",
-                create_type=False,
+    if not _findings_status_exists():
+        op.add_column(
+            "findings",
+            sa.Column(
+                "status",
+                sa.Enum(
+                    "open",
+                    "accepted",
+                    "resolved",
+                    "dismissed",
+                    name="finding_status",
+                    schema="public",
+                    create_type=False,
+                ),
+                nullable=False,
+                server_default=sa.text("'open'::public.finding_status"),
             ),
-            nullable=False,
-            server_default=sa.text("'open'::public.finding_status"),
-        ),
-        schema="public",
-    )
+            schema="public",
+        )
 
 
 def downgrade() -> None:
-    op.drop_column("findings", "status", schema="public")
+    if _findings_status_exists():
+        op.drop_column("findings", "status", schema="public")
 
     op.execute("DROP INDEX IF EXISTS public.review_run_categories_owner_run_idx")
     op.execute(

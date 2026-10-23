@@ -1,0 +1,23 @@
+[
+  {
+    "id": "184729301",
+    "owner": "trace-labs",
+    "name": "dashboard",
+    "visibility": "private",
+    "branches": ["main", "develop", "feat/project-import"]
+  },
+  {
+    "id": "194827560",
+    "owner": "trace-labs",
+    "name": "mobile-companion",
+    "visibility": "public",
+    "branches": ["develop", "main"]
+  },
+  {
+    "id": "205938471",
+    "owner": "trace-labs",
+    "name": "security-playground",
+    "visibility": "private",
+    "branches": ["main", "experiment/rules"]
+  }
+]

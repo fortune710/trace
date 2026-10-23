@@ -13,6 +13,7 @@ from credentials.models import (
     CredentialProvider,
 )
 from db.types import RepositorySource
+from projects.models import ProjectCategory
 from resources.routes import _credential_response, install_resource_routes
 from resources.schemas import PageQuery, ProjectCreate, ReviewCreate
 from reviews.models import ReviewCategory
@@ -92,6 +93,51 @@ def test_project_and_review_requests_reject_cross_field_duplicates() -> None:
             source_revision="main",
             selected_categories=[ReviewCategory.SECURITY, ReviewCategory.SECURITY],
         )
+
+
+def test_github_project_import_requires_server_resolved_source_selection() -> None:
+    valid = ProjectCreate(
+        name="github project",
+        source=RepositorySource.GITHUB,
+        repository_id="12345",
+        branch_name="main",
+        category=ProjectCategory.OTHER,
+    )
+    assert valid.repository_id == "12345"
+
+    invalid_payloads = (
+        {
+            "name": "github project",
+            "source": RepositorySource.GITHUB,
+            "repository_id": "12345",
+            "category": ProjectCategory.OTHER,
+        },
+        {
+            "name": "github project",
+            "source": RepositorySource.GITHUB,
+            "repository_id": "12345",
+            "branch_name": "main",
+        },
+        {
+            "name": "github project",
+            "source": RepositorySource.GITHUB,
+            "repository_id": "12345",
+            "branch_name": "main",
+            "category": ProjectCategory.OTHER,
+            "current_revision": "a" * 40,
+        },
+        {
+            "name": "github project",
+            "source": RepositorySource.GITHUB,
+            "repository_id": "12345",
+            "branch_name": "main",
+            "category": ProjectCategory.OTHER,
+            "external_repository_connection_id": str(uuid4()),
+        },
+    )
+    for payload in invalid_payloads:
+        with pytest.raises(ValidationError):
+            ProjectCreate(**payload)
 
 
 def test_credential_response_is_metadata_only() -> None:
