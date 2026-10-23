@@ -8,6 +8,7 @@ import sqlalchemy as sa
 
 from agents.models import Agent
 from auth.models import AuthUser, UserStatus
+from auth.uuids import uuid7
 from credentials.models import (
     Credential,
     CredentialEncryptionProvider,
@@ -21,10 +22,11 @@ from findings.models import Finding, FindingSeverity
 from projects.models import Project, ProjectCategory
 from remediations.models import Remediation, RemediationStatus
 from reviews.models import (
+    Review,
+    ReviewAgent,
+    ReviewAgentStatus,
     ReviewCategory,
-    ReviewRun,
-    ReviewRunAgent,
-    ReviewRunAgentStatus,
+    ReviewDispatchJob,
 )
 from users.models import User
 
@@ -108,7 +110,7 @@ def test_resource_graph_has_forced_rls_and_same_owner_relationships() -> None:
                     owner_id=owner_id,
                     name="security agent",
                     review_category=ReviewCategory.SECURITY,
-                    model_provider="test",
+                    model_provider="openai",
                     model_name="test-model",
                 )
             )
@@ -118,12 +120,12 @@ def test_resource_graph_has_forced_rls_and_same_owner_relationships() -> None:
                     owner_id=owner_id,
                     name="legal agent",
                     review_category=ReviewCategory.LEGAL,
-                    model_provider="test",
+                    model_provider="openai",
                     model_name="test-model",
                 )
             )
             connection.execute(
-                sa.insert(ReviewRun).values(
+                sa.insert(Review).values(
                     id=run_id,
                     owner_id=owner_id,
                     project_id=project_id,
@@ -131,7 +133,7 @@ def test_resource_graph_has_forced_rls_and_same_owner_relationships() -> None:
                 )
             )
             connection.execute(
-                sa.insert(ReviewRun).values(
+                sa.insert(Review).values(
                     id=second_run_id,
                     owner_id=owner_id,
                     project_id=project_id,
@@ -139,34 +141,64 @@ def test_resource_graph_has_forced_rls_and_same_owner_relationships() -> None:
                 )
             )
             connection.execute(
-                sa.insert(ReviewRunAgent).values(
+                sa.insert(ReviewAgent).values(
                     owner_id=owner_id,
-                    review_run_id=run_id,
+                    review_id=run_id,
                     agent_id=agent_id,
-                    status=ReviewRunAgentStatus.ASSIGNED,
+                    status=ReviewAgentStatus.ASSIGNED,
                 )
             )
             connection.execute(
-                sa.insert(ReviewRunAgent).values(
+                sa.insert(ReviewAgent).values(
                     owner_id=owner_id,
-                    review_run_id=run_id,
+                    review_id=run_id,
                     agent_id=second_agent_id,
-                    status=ReviewRunAgentStatus.ASSIGNED,
+                    status=ReviewAgentStatus.ASSIGNED,
                 )
             )
             connection.execute(
-                sa.insert(ReviewRunAgent).values(
+                sa.insert(ReviewAgent).values(
                     owner_id=owner_id,
-                    review_run_id=second_run_id,
+                    review_id=second_run_id,
                     agent_id=agent_id,
-                    status=ReviewRunAgentStatus.ASSIGNED,
+                    status=ReviewAgentStatus.ASSIGNED,
                 )
             )
+            assignment_id = connection.execute(
+                sa.select(ReviewAgent.id).where(
+                    ReviewAgent.owner_id == owner_id,
+                    ReviewAgent.review_id == run_id,
+                    ReviewAgent.agent_id == agent_id,
+                )
+            ).scalar_one()
+            connection.execute(
+                sa.insert(ReviewDispatchJob).values(
+                    idempotency_id=uuid7(),
+                    owner_id=owner_id,
+                    review_id=run_id,
+                    review_agent_id=assignment_id,
+                )
+            )
+            select_savepoint = connection.begin_nested()
+            with pytest.raises(sa.exc.DBAPIError):
+                connection.execute(sa.select(ReviewDispatchJob)).all()
+            select_savepoint.rollback()
+            savepoint = connection.begin_nested()
+            with pytest.raises(sa.exc.DBAPIError):
+                connection.execute(
+                    sa.insert(ReviewDispatchJob).values(
+                        idempotency_id=uuid7(),
+                        owner_id=owner_id,
+                        review_id=run_id,
+                        review_agent_id=assignment_id,
+                    )
+                )
+            savepoint.rollback()
             connection.execute(
                 sa.insert(Finding).values(
                     id=finding_id,
                     owner_id=owner_id,
-                    review_run_id=run_id,
+                    review_id=run_id,
                     agent_id=agent_id,
                     category=ReviewCategory.SECURITY,
                     severity=FindingSeverity.HIGH,
@@ -187,7 +219,7 @@ def test_resource_graph_has_forced_rls_and_same_owner_relationships() -> None:
 
             assert (
                 connection.execute(
-                    sa.select(sa.func.count()).select_from(ReviewRunAgent)
+                    sa.select(sa.func.count()).select_from(ReviewAgent)
                 ).scalar_one()
                 == 3
             )
@@ -222,7 +254,7 @@ def test_resource_graph_has_forced_rls_and_same_owner_relationships() -> None:
             assert connection.execute(sa.select(Project)).scalars().all() == []
             with pytest.raises(sa.exc.DBAPIError):
                 connection.execute(
-                    sa.insert(ReviewRun).values(
+                    sa.insert(Review).values(
                         id=uuid4(),
                         owner_id=other_owner_id,
                         project_id=project_id,
@@ -234,7 +266,7 @@ def test_resource_graph_has_forced_rls_and_same_owner_relationships() -> None:
                     sa.insert(Finding).values(
                         id=uuid4(),
                         owner_id=other_owner_id,
-                        review_run_id=run_id,
+                        review_id=run_id,
                         agent_id=agent_id,
                         category=ReviewCategory.SECURITY,
                         severity=FindingSeverity.LOW,

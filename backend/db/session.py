@@ -33,6 +33,20 @@ def get_maintenance_engine() -> Engine:
     return create_engine(database_url, pool_pre_ping=True)
 
 
+def close_cached_engines() -> None:
+    """Dispose process-local database pools before forgetting cached engines.
+
+    Clearing an ``lru_cache`` only drops the Python reference. It does not close
+    SQLAlchemy's checked-in PostgreSQL connections, which can exhaust the
+    server when application instances are repeatedly created in one process.
+    """
+
+    for factory in (get_engine, get_maintenance_engine):
+        if factory.cache_info().currsize:
+            factory().dispose()
+        factory.cache_clear()
+
+
 def get_redis_url() -> str:
     redis_url = DatabaseSettings().redis_url
     if not redis_url:

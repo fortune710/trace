@@ -14,6 +14,7 @@ EXPECTED_TABLES = {
     "private.credential_reencryption_items",
     "private.credential_reencryption_runs",
     "private.credentials",
+    "private.review_dispatch_jobs",
     "public.agents",
     "public.external_repositories",
     "public.findings",
@@ -21,9 +22,8 @@ EXPECTED_TABLES = {
     "public.projects",
     "public.pull_requests",
     "public.remediations",
-    "public.review_run_agents",
-    "public.review_run_categories",
-    "public.review_runs",
+    "public.review_agents",
+    "public.reviews",
     "public.users",
 }
 
@@ -51,8 +51,8 @@ def test_registry_imports_every_authoritative_table_once() -> None:
         "PullRequest",
         "RefreshToken",
         "Remediation",
-        "ReviewRun",
-        "ReviewRunAgent",
-        "ReviewRunCategory",
+        "Review",
+        "ReviewAgent",
+        "ReviewDispatchJob",
         "User",
     }

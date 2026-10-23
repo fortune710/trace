@@ -1,5 +1,6 @@
+from credentials.models import CredentialProvider
 from db.base import Base
-from db.types import RepositorySource
+from db.types import RepositorySource, ReviewCategory
 
 EXPECTED_COLUMNS = {
     "auth.users": {
@@ -94,6 +95,20 @@ EXPECTED_COLUMNS = {
         "created_at",
         "updated_at",
     },
+    "private.review_dispatch_jobs": {
+        "idempotency_id",
+        "owner_id",
+        "review_id",
+        "review_agent_id",
+        "status",
+        "attempt_count",
+        "next_attempt_at",
+        "claimed_at",
+        "published_at",
+        "failure_code",
+        "created_at",
+        "updated_at",
+    },
     "public.users": {"id", "display_name", "created_at", "updated_at"},
     "public.projects": {
         "id",
@@ -151,14 +166,15 @@ EXPECTED_COLUMNS = {
         "review_category",
         "model_provider",
         "model_name",
+        "avatar",
+        "default_key",
         "credential_id",
         "skills",
-        "fallback_order",
         "created_at",
         "updated_at",
         "disabled_at",
     },
-    "public.review_runs": {
+    "public.reviews": {
         "id",
         "owner_id",
         "project_id",
@@ -169,10 +185,14 @@ EXPECTED_COLUMNS = {
         "created_at",
         "updated_at",
         "retry_version",
+        "idempotency_id",
+        "idempotency_key_digest",
+        "request_digest",
     },
-    "public.review_run_agents": {
+    "public.review_agents": {
         "owner_id",
-        "review_run_id",
+        "id",
+        "review_id",
         "agent_id",
         "status",
         "error_reason",
@@ -180,11 +200,10 @@ EXPECTED_COLUMNS = {
         "started_at",
         "completed_at",
     },
-    "public.review_run_categories": {"owner_id", "review_run_id", "category"},
     "public.findings": {
         "id",
         "owner_id",
-        "review_run_id",
+        "review_id",
         "agent_id",
         "category",
         "severity",
@@ -283,9 +302,19 @@ def test_primary_keys_foreign_keys_and_named_constraints_are_registered() -> Non
     findings = Base.metadata.tables["public.findings"]
     assert {foreign_key.target_fullname for foreign_key in findings.foreign_keys} >= {
         "public.users.id",
-        "public.review_run_agents.owner_id",
-        "public.review_run_agents.review_run_id",
-        "public.review_run_agents.agent_id",
+        "public.review_agents.owner_id",
+        "public.review_agents.review_id",
+        "public.review_agents.agent_id",
+    }
+
+    dispatch_jobs = Base.metadata.tables["private.review_dispatch_jobs"]
+    assert {
+        foreign_key.target_fullname for foreign_key in dispatch_jobs.foreign_keys
+    } >= {
+        "public.users.id",
+        "public.review_agents.owner_id",
+        "public.review_agents.review_id",
+        "public.review_agents.id",
     }
 
 
@@ -297,7 +326,10 @@ def test_indexes_and_enum_contracts_are_stable() -> None:
         "credentials_active_owner_provider_kind_key",
         "external_repositories_owner_active_key",
         "agents_owner_created_idx",
-        "review_runs_owner_created_idx",
+        "agents_owner_default_key_unique",
+        "reviews_owner_created_idx",
+        "private_review_dispatch_jobs_pending_claim_idx",
+        "private_review_dispatch_jobs_review_idx",
         "findings_owner_created_idx",
         "remediations_owner_created_idx",
         "pull_requests_owner_created_idx",
@@ -311,3 +343,5 @@ def test_indexes_and_enum_contracts_are_stable() -> None:
     source_column = Base.metadata.tables["public.projects"].c.source
     assert source_column.type.enum_class is RepositorySource
     assert [member.value for member in RepositorySource] == ["github", "local"]
+    assert "marketing" in [member.value for member in ReviewCategory]
+    assert "xai" in [member.value for member in CredentialProvider]

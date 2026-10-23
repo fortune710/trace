@@ -19,6 +19,7 @@ class CredentialProvider(str, Enum):
     GOOGLE = "google"
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+    XAI = "xai"
 
 
 class CredentialKind(str, Enum):

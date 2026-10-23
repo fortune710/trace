@@ -124,7 +124,7 @@ def test_owner_rls_isolation_and_transaction_local_context() -> None:
 
 
 @pytest.mark.integration
-def test_internal_worker_role_is_limited_to_email_jobs() -> None:
+def test_internal_worker_role_has_only_the_reads_required_by_internal_workers() -> None:
     internal_database_url = os.environ.get("INTERNAL_DATABASE_URL")
     assert internal_database_url and "postgres-test" in internal_database_url
     engine = sa.create_engine(internal_database_url)
@@ -136,7 +136,21 @@ def test_internal_worker_role_is_limited_to_email_jobs() -> None:
                 ).scalar_one()
                 == 0
             )
+            assert (
+                connection.execute(
+                    sa.text("SELECT count(*) FROM public.reviews")
+                ).scalar_one()
+                == 0
+            )
+            assert (
+                connection.execute(
+                    sa.text("SELECT count(*) FROM private.review_dispatch_jobs")
+                ).scalar_one()
+                == 0
+            )
             with pytest.raises(sa.exc.DBAPIError):
                 connection.execute(sa.text("SELECT count(*) FROM public.projects"))
+            with pytest.raises(sa.exc.DBAPIError):
+                connection.execute(sa.text("SELECT count(*) FROM public.review_agents"))
     finally:
         engine.dispose()

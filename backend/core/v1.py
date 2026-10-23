@@ -22,7 +22,6 @@ from findings.routes import build_router as build_findings_router
 from projects.routes import build_router as build_projects_router
 from remediations.routes import build_router as build_remediations_router
 from resources.router import build_resource_router
-from resources.services import ReviewDispatcher
 from reviews.routes import build_router as build_reviews_router
 
 # Exported for introspection and for callers that only need the public prefix.
@@ -33,7 +32,6 @@ router = APIRouter(prefix="/api/v1")
 def build_router(
     settings: AuthSettings,
     audit_hasher: AuditHasher | None = None,
-    dispatcher: ReviewDispatcher | None = None,
     audit_recorder: AuditRecorder | None = None,
 ) -> APIRouter:
     """Build the configured v1 router for one application instance."""
@@ -41,7 +39,6 @@ def build_router(
     resource_router = build_resource_router(
         settings,
         audit_hasher,
-        dispatcher,
         audit_recorder,
     )
     version_router = APIRouter(prefix="/api/v1")
@@ -65,7 +62,6 @@ def build_router(
 def configure_router(
     settings: AuthSettings,
     audit_hasher: AuditHasher | None = None,
-    dispatcher: ReviewDispatcher | None = None,
     audit_recorder: AuditRecorder | None = None,
 ) -> APIRouter:
     """Install one application's configured routes into the exported router.
@@ -75,7 +71,7 @@ def configure_router(
     audit dependencies are not created at import time.
     """
 
-    configured = build_router(settings, audit_hasher, dispatcher, audit_recorder)
+    configured = build_router(settings, audit_hasher, audit_recorder)
     router.routes.clear()
     router.routes.extend(configured.routes)
     return router

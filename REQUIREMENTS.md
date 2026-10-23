@@ -2,7 +2,7 @@
 
 ## 1. Customer Statement of Requirements
 
-Trace helps an individual builder review an application before release. The web application connects a GitHub repository. The desktop application, built with Tauri and React, lets the builder select a local project directory. Trace assigns each agent one review category and returns findings that point to affected code and explain the risk in plain language. Trace supports Security, Engineering, Product, Legal, and Accessibility reviews. Trace requires approval before it changes a local file. A builder can require approval for GitHub pull requests or enable automatic pull-request creation in project settings.
+Trace helps an individual builder review an application before release. The web application connects a GitHub repository. The desktop application, built with Tauri and React, lets the builder select a local project directory. Trace assigns each agent one review category and returns findings that point to affected code and explain the risk in plain language. Trace supports Security, Engineering, Product, Legal, Accessibility, and Marketing reviews. Trace requires approval before it changes a local file. A builder can require approval for GitHub pull requests or enable automatic pull-request creation in project settings.
 
 Trace serves one person per account. Team workspaces, GitLab imports, ZIP uploads, and automatic local-file changes sit outside the first release.
 
@@ -19,6 +19,7 @@ Trace serves one person per account. Team workspaces, GitLab imports, ZIP upload
 - **Product:** Missing user flows, confusing states, incomplete onboarding, and launch risks that affect a builder's customers.
 - **Legal:** Privacy practices, data collection, consent, terms, licenses, and other legal risks. Privacy findings belong to this category.
 - **Accessibility:** Barriers that prevent people with disabilities from using the application.
+- **Marketing:** Product claims, positioning, pricing and launch messaging, and other marketing content that could mislead a builder's customers or create launch risk.
 
 ### 2.3 Functional Requirements
 
@@ -38,14 +39,14 @@ Trace serves one person per account. Team workspaces, GitLab imports, ZIP upload
 
 #### Agent configuration
 
-- **FR-09 Agent catalog:** WHEN a builder opens the agent workspace THEN Trace SHALL list system agents and builder-created agents with their assigned review category, status, provider, selected model, skills, and fallback order.
-- **FR-10 Custom agents:** WHEN a builder supplies a unique agent name, personality, one review category, model provider, model, and skills THEN Trace SHALL create an agent owned by that builder. Trace SHALL allow only one assigned review category per agent: Security, Engineering, Product, Legal, or Accessibility.
+- **FR-09 Agent catalog:** WHEN a builder opens the agent workspace THEN Trace SHALL list that builder's default and custom agents with their avatar, assigned review category, status, provider, selected model, and skills.
+- **FR-10 Custom agents:** WHEN a builder supplies a unique agent name, personality, one review category, model provider, model, and skills THEN Trace SHALL create an agent owned by that builder. Trace SHALL allow only one assigned review category per agent: Security, Engineering, Product, Legal, Accessibility, or Marketing.
 - **FR-11 Provider access:** WHEN a builder configures an agent THEN Trace SHALL offer Trace-managed model access by default and let the builder select a supported bring-your-own-key provider credential.
-- **FR-12 Fallback providers:** WHEN a selected provider returns an availability, rate-limit, or capacity failure THEN Trace SHALL retry the work with the next configured provider and record the provider used for the completed attempt.
+- **FR-12 Fallback providers (deferred):** Configured fallback chains are deferred and are not part of the first release; the Agent record has no fallback field or order. WHEN a selected provider returns an availability, rate-limit, or capacity failure THEN Trace SHALL record the failure and handle the review under FR-17 instead of retrying the work with another provider.
 
 #### Reviews and findings
 
-- **FR-13 Review selection:** WHEN a builder starts a review THEN Trace SHALL require a project, source revision, and one or more review categories: Security, Engineering, Product, Legal, or Accessibility. Trace SHALL assign only agents whose review category matches a selected category.
+- **FR-13 Review selection:** WHEN a builder starts a review THEN Trace SHALL require a project, source revision, and one or more explicitly selected enabled agents owned by that builder. An agent's review category is metadata for browsing and filtering, not a review-level selection.
 - **FR-14 Review lifecycle:** WHEN Trace accepts a review request THEN Trace SHALL show queued, running, completed, failed, or cancelled status and the assigned agents with their review categories.
 - **FR-15 Findings:** WHEN an agent identifies a risk THEN Trace SHALL store and display a title, review category, severity, explanation, affected file or source location when available, evidence, recommendation, reviewing agent, and review timestamp.
 - **FR-16 Finding triage:** WHEN a builder views a completed review THEN Trace SHALL let the builder filter findings by review category, severity, status, and agent, and mark a finding as open, accepted, resolved, or dismissed with a reason.
@@ -65,7 +66,7 @@ Trace serves one person per account. Team workspaces, GitLab imports, ZIP upload
 - **NFR-01 Availability:** Trace SHALL maintain 99.9% monthly availability for account access, project browsing, and review submission, excluding announced maintenance.
 - **NFR-02 Dashboard performance:** WHEN a builder opens a project list with up to 100 projects THEN Trace SHALL return the list within 2 seconds at the 95th percentile under normal operating load.
 - **NFR-03 Review start:** WHEN Trace accepts a review request under normal operating load THEN Trace SHALL assign it to a queue within 60 seconds.
-- **NFR-04 Review resilience:** WHEN a model provider fails with a retryable error THEN Trace SHALL retry through the configured fallback chain before marking the review failed.
+- **NFR-04 Review resilience:** WHEN a model provider fails with a retryable error THEN Trace SHALL preserve partial findings and let the builder retry the review (see FR-17) before marking the review failed. Configured fallback chains are deferred (see FR-12).
 - **NFR-05 Data encryption:** Trace SHALL encrypt MinIO source artifacts and secrets at rest and use TLS for data in transit.
 - **NFR-06 Secret protection:** Trace SHALL redact detected secrets from application logs, agent prompts, findings, error messages, local-file changes, and pull requests unless the builder explicitly reveals an individual value in a protected view.
 - **NFR-07 Authorization:** Trace SHALL enforce ownership checks for each project, agent, source artifact, review, finding, provider credential, local-file-change, and pull-request operation.
@@ -116,8 +117,8 @@ Trace serves one person per account. Team workspaces, GitLab imports, ZIP upload
 
 - **Account:** ID, sign-in method, encrypted OAuth connections, created date, and consent records.
 - **Project:** ID, owner account ID, name, project category, source type, repository reference or device-local path reference, source hash, and current source revision.
-- **Agent:** ID, owner account ID, name, personality, assigned review category, skills, provider, model, fallback order, and encrypted BYOK reference when selected.
-- **Review run:** ID, project ID, source revision, selected review categories, assigned agents, lifecycle status, provider attempts, timestamps, and error class.
+- **Agent:** ID, owner account ID, default-agent key when applicable, name, avatar, personality, assigned review category, skills, provider, model, and encrypted BYOK reference when selected.
+- **Review run:** ID, project ID, source revision, assigned agents, lifecycle status, provider attempts, timestamps, and error class.
 - **Finding:** ID, review run ID, category, severity, title, explanation, evidence, location, recommendation, triage status, and reviewer agent.
 - **Remediation:** ID, finding ID, proposed diff, builder approval record, output type, local file path or pull-request URL, and source revision.
 
