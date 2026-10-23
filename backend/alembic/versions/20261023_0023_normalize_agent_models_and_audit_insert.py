@@ -40,14 +40,10 @@ def upgrade() -> None:
     # The review-dispatch worker enqueues audit events as trace_internal
     # through enqueue_audit; migration 0012 granted that role only
     # SELECT, UPDATE, and DELETE on the audit outbox.
-    op.execute(
-        "GRANT INSERT ON private.audit_delivery_jobs TO trace_internal"
-    )
+    op.execute("GRANT INSERT ON private.audit_delivery_jobs TO trace_internal")
 
 
 def downgrade() -> None:
     # The model-pair rewrite is not reversible: the previous unsupported
     # values are not recorded anywhere. Only the grant is rolled back.
-    op.execute(
-        "REVOKE INSERT ON private.audit_delivery_jobs FROM trace_internal"
-    )
+    op.execute("REVOKE INSERT ON private.audit_delivery_jobs FROM trace_internal")
