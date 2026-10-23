@@ -107,6 +107,7 @@ function localSourceFromRow(row: ProjectRow): DesktopLocalSource {
     canonicalPath: row.local_canonical_path,
     availability: row.local_availability,
     lastValidatedAt: row.local_last_validated_at,
+    apiProjectId: row.api_project_id,
   }
 }
 
@@ -155,6 +156,18 @@ export class LocalProjectsDatabase implements LocalProjectStore, LocalSourceRegi
     return rows[0] ? projectFromRow(rows[0]) : null
   }
 
+  async getByApiProjectId(
+    accountId: string,
+    apiProjectId: string,
+  ): Promise<DesktopProjectRecord | null> {
+    const database = await this.database
+    const rows = await database.select<ProjectRow>(
+      `${projectQuery} AND p.api_project_id = $2 ORDER BY p.created_at DESC, p.id DESC`,
+      [accountId, apiProjectId],
+    )
+    return rows[0] ? projectFromRow(rows[0]) : null
+  }
+
   async insertLocal(project: DesktopProjectRecord): Promise<void> {
     this.assertLocalProject(project)
     try {
@@ -187,9 +200,9 @@ export class LocalProjectsDatabase implements LocalProjectStore, LocalSourceRegi
       await this.upsertSource(database, project.accountId, project.source)
       await database.execute(
          `UPDATE desktop_projects
-         SET name = $1, category = $2, local_canonical_path = $3, updated_at = $4, api_cache_status = 'not_applicable'
-         WHERE id = $5 AND account_id = $6 AND persistence = 'local'`,
-        [project.name, project.category, project.source.canonicalPath, project.updatedAt, project.id, project.accountId],
+         SET name = $1, category = $2, local_canonical_path = $3, api_project_id = $4, updated_at = $5, api_cache_status = 'not_applicable'
+         WHERE id = $6 AND account_id = $7 AND persistence = 'local'`,
+        [project.name, project.category, project.source.canonicalPath, project.source.apiProjectId, project.updatedAt, project.id, project.accountId],
       )
     })
   }
@@ -262,7 +275,15 @@ export class LocalProjectsDatabase implements LocalProjectStore, LocalSourceRegi
     )
     const row = rows[0]
     return row
-      ? { kind: "local", sourceId: row.source_id, displayName: row.display_name, canonicalPath: row.canonical_path, availability: row.availability, lastValidatedAt: row.last_validated_at }
+      ? {
+          kind: "local",
+          sourceId: row.source_id,
+          displayName: row.display_name,
+          canonicalPath: row.canonical_path,
+          availability: row.availability,
+          lastValidatedAt: row.last_validated_at,
+          apiProjectId: null,
+        }
       : null
   }
 
@@ -330,7 +351,7 @@ export class LocalProjectsDatabase implements LocalProjectStore, LocalSourceRegi
         project.category,
         source.kind,
         source.kind === "local" ? source.sourceId : null,
-        source.kind === "github" ? source.apiProjectId : null,
+        source.apiProjectId,
         source.kind === "github" ? source.repositoryOwner : null,
         source.kind === "github" ? source.repositoryName : null,
         source.kind === "github" ? source.branchName : null,

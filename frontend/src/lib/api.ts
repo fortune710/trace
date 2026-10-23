@@ -59,6 +59,8 @@ export type Project = {
   created_at: string
   updated_at: string
   archived_at: string | null
+  local_source_id?: string
+  api_project_id?: string | null
 }
 
 export type ProjectPage = {
@@ -88,6 +90,7 @@ export type Agent = {
   avatar: string | null
   skills: AgentSkill[]
   credential_id: string | null
+  configuration_version: number
   created_at: string
   updated_at: string
   disabled_at: string | null
@@ -181,13 +184,72 @@ export type BranchPage = {
   next_page: number | null
 }
 
-export type ProjectCreate = {
+export type GitHubProjectCreate = {
   name: string
   source: "github"
   repository_id: string
   branch_name: string
   category: ProjectCategory
   auto_create_pull_requests: boolean
+}
+
+export type LocalProjectCreate = {
+  name: string
+  source: "local"
+  local_path_hash: string
+  category: ProjectCategory
+  auto_create_pull_requests: boolean
+}
+
+export type ProjectCreate = GitHubProjectCreate | LocalProjectCreate
+
+export type LocalSourceSnapshot = {
+  source_id: string
+  integrity_algorithm: "sha256-directory-manifest-v1"
+  digest: string
+}
+
+export type ReviewSourceSnapshot = {
+  source_kind: "github" | "local"
+  source_identifier: string
+  integrity_algorithm: string
+  revision: string
+  captured_at: string
+}
+
+export type ReviewAgent = {
+  assignment_id: string
+  agent_id: string
+  name: string
+  review_category: ReviewCategory
+  model_provider: ModelProvider
+  model_name: string
+  personality: string | null
+  skills: AgentSkill[]
+  configuration_version: number
+  status: "assigned" | "running" | "completed" | "failed" | "cancelled"
+  assigned_at: string
+  started_at: string | null
+  completed_at: string | null
+}
+
+export type Review = {
+  id: string
+  project_id: string
+  source_revision: string
+  source_snapshot: ReviewSourceSnapshot
+  status: "queued" | "running" | "completed" | "failed" | "cancelled"
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+  agents: ReviewAgent[]
+}
+
+export type ReviewCreate = {
+  project_id: string
+  agent_ids: string[]
+  local_source_snapshot?: LocalSourceSnapshot
 }
 
 export class ApiError extends Error {
@@ -399,6 +461,17 @@ export const agentsApi = {
     patch<Agent>(`/api/v1/agents/${encodeURIComponent(agentId)}`, agent),
   disable: (agentId: string) =>
     remove(`/api/v1/agents/${encodeURIComponent(agentId)}`),
+}
+
+export const reviewsApi = {
+  create: (review: ReviewCreate, idempotencyKey: string) =>
+    request<Review>("/api/v1/reviews", {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(review),
+    }),
+  get: (reviewId: string) =>
+    request<Review>(`/api/v1/reviews/${encodeURIComponent(reviewId)}`),
 }
 
 export const credentialsApi = {

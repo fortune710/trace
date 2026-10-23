@@ -22,6 +22,7 @@ export type DesktopLocalSource = {
   canonicalPath: string
   availability: LocalSourceAvailability
   lastValidatedAt: string | null
+  apiProjectId?: string | null
 }
 
 export type DesktopApiSource = {
@@ -69,6 +70,10 @@ export class LocalProjectCreationError extends Error {
 export interface LocalProjectStore {
   list(accountId: string): Promise<DesktopProjectRecord[]>
   get(accountId: string, projectId: string): Promise<DesktopProjectRecord | null>
+  getByApiProjectId(
+    accountId: string,
+    apiProjectId: string,
+  ): Promise<DesktopProjectRecord | null>
   insertLocal(project: DesktopProjectRecord): Promise<void>
   updateLocal(project: DesktopProjectRecord): Promise<void>
   removeLocal(accountId: string, projectId: string): Promise<void>
@@ -161,6 +166,8 @@ export function toProjectResponse(project: DesktopProjectRecord): Project {
       created_at: project.createdAt,
       updated_at: project.updatedAt,
       archived_at: null,
+      local_source_id: project.source.sourceId,
+      api_project_id: project.source.apiProjectId,
     }
   }
 
@@ -182,5 +189,6 @@ export function toProjectResponse(project: DesktopProjectRecord): Project {
     created_at: project.createdAt,
     updated_at: project.updatedAt,
     archived_at: null,
+    api_project_id: project.source.apiProjectId,
   }
 }

@@ -405,14 +405,18 @@ def _catalog_service(monkeypatch, github_client):
         RepositoryService(
             engine=object(),
             credential_service=FakeCredentialService(),
-            settings=type("Settings", (), {"github_api_url": "https://github.example"})(),
+            settings=type(
+                "Settings", (), {"github_api_url": "https://github.example"}
+            )(),
             github_client=github_client,
         ),
         owner_id,
     )
 
 
-def test_repository_query_uses_a_bounded_owner_scoped_catalog_cache(monkeypatch) -> None:
+def test_repository_query_uses_a_bounded_owner_scoped_catalog_cache(
+    monkeypatch,
+) -> None:
     class FakeGitHubClient:
         repository_calls = 0
 
@@ -494,7 +498,9 @@ def test_branch_query_uses_a_separate_catalog_cache(monkeypatch) -> None:
                 web_url="https://github.com/trace-labs/trace-dashboard",
             )
 
-        def list_branches(self, *, access_token, repository, page, page_size, query=None):
+        def list_branches(
+            self, *, access_token, repository, page, page_size, query=None
+        ):
             self.branch_calls += 1
             assert (page, page_size, query) == (1, 100, None)
             return RepositoryPageResult(
@@ -599,9 +605,12 @@ def test_repository_routes_expose_a_bounded_query_parameter() -> None:
 
     for path in ("/repositories", "/repositories/{repository_identifier}/branches"):
         parameters = {
-            parameter["name"]: parameter for parameter in paths[path]["get"]["parameters"]
+            parameter["name"]: parameter
+            for parameter in paths[path]["get"]["parameters"]
         }
-        assert {item.get("maxLength") for item in parameters["query"]["schema"]["anyOf"]} == {
+        assert {
+            item.get("maxLength") for item in parameters["query"]["schema"]["anyOf"]
+        } == {
             100,
             None,
         }

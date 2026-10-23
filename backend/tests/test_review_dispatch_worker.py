@@ -4,6 +4,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Event
+from typing import cast
 from uuid import UUID, uuid4
 
 import pika
@@ -11,14 +12,14 @@ import pytest
 import sqlalchemy as sa
 
 from agents.models import Agent
-from auth.errors import ResourceConflict
+from auth.errors import AuthorizationDenied, ResourceConflict
 from auth.models import AuthUser, UserStatus
 from auth.uuids import uuid7
 from db.rls import principal_transaction
-from db.types import ProjectSourceType
+from db.types import ProjectSourceType, RepositorySource
 from projects.models import Project
 from resources import services as resource_services
-from resources.services import ReviewService
+from resources.services import ReviewService as BaseReviewService
 from reviews.dispatch import (
     REVIEW_DISPATCH_QUEUE,
     RabbitMQReviewPublisher,
@@ -26,7 +27,14 @@ from reviews.dispatch import (
     ReviewQueueUnavailable,
     declare_review_dispatch_topology,
 )
-from reviews.models import Review, ReviewAgent, ReviewDispatchJob, ReviewDispatchStatus
+from reviews.models import (
+    Review,
+    ReviewAgent,
+    ReviewAgentAttempt,
+    ReviewDispatchJob,
+    ReviewDispatchStatus,
+    ReviewStatus,
+)
 from reviews.queueing import ReviewDispatchMessageV1
 from users.models import User
 
@@ -77,6 +85,30 @@ class CancellingAfterClaimWorker(ReviewDispatchWorker):
             self._service.cancel(owner_id=self._owner_id, review_id=claim.review_id)
             self._cancelled = True
         return super()._review_is_queued(claim)
+
+
+def _local_snapshot(project_id: UUID) -> dict[str, object]:
+    return {
+        "source_id": project_id,
+        "integrity_algorithm": "sha256-directory-manifest-v1",
+        "digest": "a" * 64,
+    }
+
+
+class ReviewService(BaseReviewService):
+    """Supply the fixture's valid local snapshot to dispatch-focused tests."""
+
+    def create(self, *, owner_id, values, idempotency_key):  # type: ignore[no-untyped-def]
+        if values.get("local_source_snapshot") is None:
+            values = {
+                **values,
+                "local_source_snapshot": _local_snapshot(values["project_id"]),
+            }
+        return super().create(
+            owner_id=owner_id,
+            values=values,
+            idempotency_key=idempotency_key,
+        )
 
 
 def _database_url() -> str:
@@ -146,7 +178,9 @@ def _create_owner_graph(
                 owner_id=owner_id,
                 name="review dispatch project",
                 source=ProjectSourceType.LOCAL,
-                local_path_hash=b"review-dispatch-project",
+                local_path_hash=resource_services._local_source_identity_hash(
+                    project_id
+                ),
                 source_hash=b"s" * 32,
             )
         )
@@ -222,6 +256,176 @@ def _outbox_counts(
     return review_count, assignment_count, job_count
 
 
+def _attempt_count(internal_engine: sa.Engine, owner_id: UUID) -> int:
+    with internal_engine.connect() as connection:
+        return connection.execute(
+            sa.select(sa.func.count())
+            .select_from(ReviewAgentAttempt)
+            .where(ReviewAgentAttempt.owner_id == owner_id)
+        ).scalar_one()
+
+
+@pytest.mark.integration
+def test_issue_4_submission_queues_exactly_selected_enabled_agent_snapshots() -> None:
+    engine = sa.create_engine(_database_url())
+    internal_engine = _internal_engine()
+    owner_id, project_id, first_agent_id, second_agent_id = (
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+    )
+    try:
+        _create_owner_graph(engine, owner_id, project_id, first_agent_id)
+        with principal_transaction(engine, owner_id) as connection:
+            connection.execute(
+                sa.insert(Agent).values(
+                    id=second_agent_id,
+                    owner_id=owner_id,
+                    name="product reviewer",
+                    personality="Check product fit.",
+                    review_category="product",
+                    model_provider="openai",
+                    model_name="test-product",
+                    skills=["journeys"],
+                    configuration_version=3,
+                )
+            )
+
+        review = BaseReviewService(engine).create(
+            owner_id=owner_id,
+            values={
+                "project_id": project_id,
+                "agent_ids": [second_agent_id, first_agent_id],
+                "local_source_snapshot": _local_snapshot(project_id),
+            },
+            idempotency_key="issue-4-selected-agents",
+        )
+
+        source_snapshot = cast(dict[str, object], review["source_snapshot"])
+        agent_snapshots = cast(list[dict[str, object]], review["agents"])
+        assert review["status"] is ReviewStatus.QUEUED
+        assert source_snapshot == {
+            "source_kind": RepositorySource.LOCAL,
+            "source_identifier": str(project_id),
+            "integrity_algorithm": "sha256-directory-manifest-v1",
+            "revision": "a" * 64,
+            "captured_at": source_snapshot["captured_at"],
+        }
+        assert {agent["agent_id"] for agent in agent_snapshots} == {
+            first_agent_id,
+            second_agent_id,
+        }
+        assert {agent["configuration_version"] for agent in agent_snapshots} == {1, 3}
+        assert _outbox_counts(engine, internal_engine, owner_id) == (1, 2, 2)
+        assert _attempt_count(internal_engine, owner_id) == 0
+    finally:
+        with engine.begin() as connection:
+            connection.execute(sa.delete(AuthUser).where(AuthUser.id == owner_id))
+        engine.dispose()
+        internal_engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "kind",
+    (
+        "missing",
+        "identity_mismatch",
+        "unsupported_algorithm",
+        "uppercase_digest",
+        "short_digest",
+    ),
+)
+def test_local_snapshot_rejections_leave_no_review_graph(kind: str) -> None:
+    engine = sa.create_engine(_database_url())
+    internal_engine = _internal_engine()
+    owner_id, project_id, agent_id = uuid4(), uuid4(), uuid4()
+    try:
+        _create_owner_graph(engine, owner_id, project_id, agent_id)
+        supplied: object = _local_snapshot(project_id)
+        if kind == "missing":
+            supplied = None
+        elif kind == "identity_mismatch":
+            supplied = {**_local_snapshot(project_id), "source_id": uuid4()}
+        elif kind == "unsupported_algorithm":
+            supplied = {
+                **_local_snapshot(project_id),
+                "integrity_algorithm": "sha512-directory-manifest-v1",
+            }
+        elif kind == "uppercase_digest":
+            supplied = {**_local_snapshot(project_id), "digest": "A" * 64}
+        elif kind == "short_digest":
+            supplied = {**_local_snapshot(project_id), "digest": "a" * 63}
+
+        with pytest.raises(ResourceConflict):
+            BaseReviewService(engine).create(
+                owner_id=owner_id,
+                values={
+                    "project_id": project_id,
+                    "agent_ids": [agent_id],
+                    "local_source_snapshot": supplied,
+                },
+                idempotency_key=f"invalid-snapshot-{uuid4()}",
+            )
+
+        assert _outbox_counts(engine, internal_engine, owner_id) == (0, 0, 0)
+        assert _attempt_count(internal_engine, owner_id) == 0
+    finally:
+        with engine.begin() as connection:
+            connection.execute(sa.delete(AuthUser).where(AuthUser.id == owner_id))
+        engine.dispose()
+        internal_engine.dispose()
+
+
+@pytest.mark.integration
+def test_cross_account_project_and_agent_cannot_be_submitted() -> None:
+    engine = sa.create_engine(_database_url())
+    internal_engine = _internal_engine()
+    owner_id, other_owner_id = uuid4(), uuid4()
+    project_id, agent_id, other_project_id, other_agent_id = (
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+    )
+    try:
+        _create_owner_graph(engine, owner_id, project_id, agent_id)
+        _create_owner_graph(engine, other_owner_id, other_project_id, other_agent_id)
+        service = BaseReviewService(engine)
+
+        with pytest.raises(AuthorizationDenied):
+            service.create(
+                owner_id=owner_id,
+                values={
+                    "project_id": other_project_id,
+                    "agent_ids": [agent_id],
+                    "local_source_snapshot": _local_snapshot(other_project_id),
+                },
+                idempotency_key="cross-account-project",
+            )
+        with pytest.raises(AuthorizationDenied):
+            service.create(
+                owner_id=owner_id,
+                values={
+                    "project_id": project_id,
+                    "agent_ids": [other_agent_id],
+                    "local_source_snapshot": _local_snapshot(project_id),
+                },
+                idempotency_key="cross-account-agent",
+            )
+
+        assert _outbox_counts(engine, internal_engine, owner_id) == (0, 0, 0)
+        assert _attempt_count(internal_engine, owner_id) == 0
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                sa.delete(AuthUser).where(AuthUser.id.in_([owner_id, other_owner_id]))
+            )
+        engine.dispose()
+        internal_engine.dispose()
+
+
 @pytest.mark.integration
 def test_submission_creates_one_outbox_job_and_worker_marks_confirmed_publish() -> None:
     engine = sa.create_engine(_database_url())
@@ -236,6 +440,15 @@ def test_submission_creates_one_outbox_job_and_worker_marks_confirmed_publish() 
         )
         job = _job(internal_engine, review["id"])
         assert job["status"] is ReviewDispatchStatus.PENDING
+        with internal_engine.connect() as connection:
+            assert (
+                connection.execute(
+                    sa.select(sa.func.count())
+                    .select_from(ReviewAgentAttempt)
+                    .where(ReviewAgentAttempt.review_id == review["id"])
+                ).scalar_one()
+                == 0
+            )
 
         publisher = RecordingPublisher()
         worker = ReviewDispatchWorker(
@@ -258,6 +471,57 @@ def test_submission_creates_one_outbox_job_and_worker_marks_confirmed_publish() 
             connection.execute(sa.delete(AuthUser).where(AuthUser.id == owner_id))
         engine.dispose()
         internal_engine.dispose()
+
+
+@pytest.mark.integration
+def test_review_snapshots_are_immutable_and_do_not_follow_agent_edits() -> None:
+    engine = sa.create_engine(_database_url())
+    owner_id, project_id, agent_id = uuid4(), uuid4(), uuid4()
+    try:
+        _create_owner_graph(engine, owner_id, project_id, agent_id)
+        service = ReviewService(engine)
+        review = service.create(
+            owner_id=owner_id,
+            values={"project_id": project_id, "agent_ids": [agent_id]},
+            idempotency_key="immutable-snapshot",
+        )
+
+        with principal_transaction(engine, owner_id) as connection:
+            connection.execute(
+                sa.update(Agent)
+                .where(Agent.id == agent_id, Agent.owner_id == owner_id)
+                .values(name="changed after review", configuration_version=2)
+            )
+
+        stored = service.get(owner_id=owner_id, review_id=review["id"])
+        assert stored["agents"][0]["name"] == "review dispatch agent"
+        assert stored["agents"][0]["configuration_version"] == 1
+
+        with (
+            pytest.raises(sa.exc.DBAPIError, match="snapshot is immutable"),
+            principal_transaction(engine, owner_id) as connection,
+        ):
+            connection.execute(
+                sa.update(Review)
+                .where(Review.id == review["id"], Review.owner_id == owner_id)
+                .values(source_revision="b" * 64)
+            )
+        with (
+            pytest.raises(sa.exc.DBAPIError, match="snapshot is immutable"),
+            principal_transaction(engine, owner_id) as connection,
+        ):
+            connection.execute(
+                sa.update(ReviewAgent)
+                .where(
+                    ReviewAgent.review_id == review["id"],
+                    ReviewAgent.owner_id == owner_id,
+                )
+                .values(agent_display_name="changed assignment")
+            )
+    finally:
+        with engine.begin() as connection:
+            connection.execute(sa.delete(AuthUser).where(AuthUser.id == owner_id))
+        engine.dispose()
 
 
 @pytest.mark.integration

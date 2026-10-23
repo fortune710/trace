@@ -103,7 +103,7 @@ def install_resource_routes(
 
     @lru_cache
     def review_service() -> ReviewService:
-        return ReviewService(get_engine())
+        return ReviewService(get_engine(), repository_service=repository_service())
 
     @lru_cache
     def finding_service() -> FindingService:

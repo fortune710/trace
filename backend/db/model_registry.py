@@ -22,7 +22,13 @@ from external_repositories.models import ExternalRepository
 from findings.models import Finding
 from projects.models import Project
 from remediations.models import Remediation
-from reviews.models import Review, ReviewAgent, ReviewDispatchJob
+from reviews.models import (
+    Review,
+    ReviewAgent,
+    ReviewAgentAttempt,
+    ReviewAgentExecutionConfig,
+    ReviewDispatchJob,
+)
 from users.models import User
 
 __all__ = [
@@ -47,6 +53,8 @@ __all__ = [
     "Remediation",
     "Review",
     "ReviewAgent",
+    "ReviewAgentAttempt",
+    "ReviewAgentExecutionConfig",
     "ReviewDispatchJob",
     "User",
 ]

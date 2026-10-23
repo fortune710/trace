@@ -68,7 +68,11 @@ def test_resource_routes_register_the_complete_owner_scoped_surface() -> None:
     ]
     review_reference = review_schema["$ref"].rsplit("/", 1)[-1]
     review_properties = app.openapi()["components"]["schemas"][review_reference]
-    assert set(review_properties["properties"]) == {"project_id", "agent_ids"}
+    assert set(review_properties["properties"]) == {
+        "project_id",
+        "agent_ids",
+        "local_source_snapshot",
+    }
     assert set(review_properties["required"]) == {"project_id", "agent_ids"}
     assert any(
         parameter["name"] == "Idempotency-Key"

@@ -576,8 +576,9 @@ class RepositoryService:
             records,
             page=page,
             page_size=page_size,
-            matches=lambda record: query in record.name.casefold()
-            or query in record.full_name.casefold(),
+            matches=lambda record: (
+                query in record.name.casefold() or query in record.full_name.casefold()
+            ),
         )
 
     def list_branches(
@@ -788,8 +789,9 @@ class RepositoryService:
             records,
             page=page,
             page_size=page_size,
-            matches=lambda record: query in record.name.casefold()
-            or query in record.full_name.casefold(),
+            matches=lambda record: (
+                query in record.name.casefold() or query in record.full_name.casefold()
+            ),
         )
 
     def _search_branches_from_provider(
