@@ -36,7 +36,7 @@ export function useProjects(page: number) {
   return {
     ...query,
     projects: query.data?.items ?? [],
-    hasNextPage: query.data?.next_offset !== null,
+    hasNextPage: query.data?.next_offset != null,
   }
 }
 

@@ -96,6 +96,24 @@ def test_repository_connection_route_is_explicitly_registered() -> None:
     assert "/auth/oauth/github/connection" in paths
 
 
+def test_github_repository_connection_requests_the_documented_scope() -> None:
+    settings = AuthSettings(
+        github_client_id="github-client-id",
+        github_client_secret=SecretStr("github-client-secret"),
+        github_redirect_uri="https://trace.example/auth/oauth/github/callback",
+    )
+
+    sign_in = _provider_configuration(settings, "github")
+    repository_connection = _provider_configuration(
+        settings,
+        "github",
+        purpose=OAuthPurpose.REPOSITORY_CONNECTION,
+    )
+
+    assert sign_in.scope == "read:user user:email"
+    assert repository_connection.scope == "read:user user:email repo"
+
+
 def test_repository_connection_redirects_always_return_to_integrations() -> None:
     success = _repository_connection_redirect(
         "https://trace.example", outcome="connected", request_id="request-123"
@@ -159,7 +177,9 @@ def test_github_connection_status_distinguishes_never_connected_and_valid_tokens
 
     service.payload = {
         "access_token": "token",
-        "access_token_expires_at": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+        "access_token_expires_at": (
+            datetime.now(UTC) + timedelta(minutes=5)
+        ).isoformat(),
     }
     assert (
         get_github_connection_status(
@@ -177,7 +197,9 @@ def test_github_connection_status_refreshes_expired_tokens_or_requires_reconnect
     service = FakeGitHubCredentialService(
         {
             "access_token": "expired-token",
-            "access_token_expires_at": (datetime.now(UTC) - timedelta(minutes=5)).isoformat(),
+            "access_token_expires_at": (
+                datetime.now(UTC) - timedelta(minutes=5)
+            ).isoformat(),
         }
     )
     monkeypatch.setattr(

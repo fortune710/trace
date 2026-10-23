@@ -263,7 +263,7 @@ services:
       dockerfile: Dockerfile
     command: ["./start-email-worker.sh"]
     environment:
-      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD in .env}@postgres:5432/trace
+      DATABASE_URL: ${INTERNAL_DATABASE_URL:?Set INTERNAL_DATABASE_URL in .env}
       SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST in .env}
       SMTP_PORT: ${SMTP_PORT:?Set SMTP_PORT in .env}
       AUTH_ENVIRONMENT: ${AUTH_ENVIRONMENT:-development}
@@ -319,7 +319,7 @@ services:
       dockerfile: Dockerfile
     command: ["./start-audit-worker.sh"]
     environment:
-      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD in .env}@postgres:5432/trace
+      DATABASE_URL: ${INTERNAL_DATABASE_URL:?Set INTERNAL_DATABASE_URL in .env}
       AUDIT_ENABLED: "true"
       AUDIT_HOST: ${AUDIT_HOST:-immudb}
       AUDIT_PORT: ${AUDIT_PORT:-3322}
