@@ -2,7 +2,7 @@
 
 ## 1. Customer Statement of Requirements
 
-Trace helps an individual builder review an application before release. The web application connects a GitHub repository. The desktop application, built with Tauri and React, lets the builder select a local project directory. Trace assigns each agent one review category and returns findings that point to affected code and explain the risk in plain language. Trace supports Security, Engineering, Product, Legal, and Accessibility reviews. Trace requires approval before it changes a local file. A builder can require approval for GitHub pull requests or enable automatic pull-request creation in project settings.
+Trace helps an individual builder review an application before release. The web application connects a GitHub repository. The desktop application, built with Tauri and React, lets the builder select a local project directory. Trace assigns each agent one review category and returns findings that point to affected code and explain the risk in plain language. Trace supports Security, Engineering, Product, Legal, Accessibility, and Marketing reviews. Trace requires approval before it changes a local file. A builder can require approval for GitHub pull requests or enable automatic pull-request creation in project settings.
 
 Trace serves one person per account. Team workspaces, GitLab imports, ZIP uploads, and automatic local-file changes sit outside the first release.
 
@@ -19,6 +19,7 @@ Trace serves one person per account. Team workspaces, GitLab imports, ZIP upload
 - **Product:** Missing user flows, confusing states, incomplete onboarding, and launch risks that affect a builder's customers.
 - **Legal:** Privacy practices, data collection, consent, terms, licenses, and other legal risks. Privacy findings belong to this category.
 - **Accessibility:** Barriers that prevent people with disabilities from using the application.
+- **Marketing:** Product claims, positioning, pricing and launch messaging, and other marketing content that could mislead a builder's customers or create launch risk.
 
 ### 2.3 Functional Requirements
 
@@ -41,7 +42,7 @@ Trace serves one person per account. Team workspaces, GitLab imports, ZIP upload
 - **FR-09 Agent catalog:** WHEN a builder opens the agent workspace THEN Trace SHALL list that builder's default and custom agents with their avatar, assigned review category, status, provider, selected model, and skills.
 - **FR-10 Custom agents:** WHEN a builder supplies a unique agent name, personality, one review category, model provider, model, and skills THEN Trace SHALL create an agent owned by that builder. Trace SHALL allow only one assigned review category per agent: Security, Engineering, Product, Legal, Accessibility, or Marketing.
 - **FR-11 Provider access:** WHEN a builder configures an agent THEN Trace SHALL offer Trace-managed model access by default and let the builder select a supported bring-your-own-key provider credential.
-- **FR-12 Fallback providers:** WHEN a selected provider returns an availability, rate-limit, or capacity failure THEN Trace SHALL retry the work with the next configured provider and record the provider used for the completed attempt.
+- **FR-12 Fallback providers (deferred):** Configured fallback chains are deferred and are not part of the first release; the Agent record has no fallback field or order. WHEN a selected provider returns an availability, rate-limit, or capacity failure THEN Trace SHALL record the failure and handle the review under FR-17 instead of retrying the work with another provider.
 
 #### Reviews and findings
 
@@ -65,7 +66,7 @@ Trace serves one person per account. Team workspaces, GitLab imports, ZIP upload
 - **NFR-01 Availability:** Trace SHALL maintain 99.9% monthly availability for account access, project browsing, and review submission, excluding announced maintenance.
 - **NFR-02 Dashboard performance:** WHEN a builder opens a project list with up to 100 projects THEN Trace SHALL return the list within 2 seconds at the 95th percentile under normal operating load.
 - **NFR-03 Review start:** WHEN Trace accepts a review request under normal operating load THEN Trace SHALL assign it to a queue within 60 seconds.
-- **NFR-04 Review resilience:** WHEN a model provider fails with a retryable error THEN Trace SHALL retry through the configured fallback chain before marking the review failed.
+- **NFR-04 Review resilience:** WHEN a model provider fails with a retryable error THEN Trace SHALL preserve partial findings and let the builder retry the review (see FR-17) before marking the review failed. Configured fallback chains are deferred (see FR-12).
 - **NFR-05 Data encryption:** Trace SHALL encrypt MinIO source artifacts and secrets at rest and use TLS for data in transit.
 - **NFR-06 Secret protection:** Trace SHALL redact detected secrets from application logs, agent prompts, findings, error messages, local-file changes, and pull requests unless the builder explicitly reveals an individual value in a protected view.
 - **NFR-07 Authorization:** Trace SHALL enforce ownership checks for each project, agent, source artifact, review, finding, provider credential, local-file-change, and pull-request operation.

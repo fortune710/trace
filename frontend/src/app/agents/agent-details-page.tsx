@@ -89,21 +89,30 @@ function skillLabel(skill: AgentSkill, index: number) {
 function useDebouncedAgentSave(agentId: string) {
   const updateAgent = useUpdateAgent()
   const timeout = useRef<number | undefined>(undefined)
+  const pending = useRef<AgentUpdate | undefined>(undefined)
+  const mutate = useRef(updateAgent.mutate)
+  mutate.current = updateAgent.mutate
 
   useEffect(() => {
     return () => {
       if (timeout.current !== undefined) {
         window.clearTimeout(timeout.current)
       }
+      if (pending.current !== undefined) {
+        mutate.current({ agentId, agent: pending.current })
+        pending.current = undefined
+      }
     }
-  }, [])
+  }, [agentId])
 
   function save(values: AgentUpdate) {
     if (timeout.current !== undefined) {
       window.clearTimeout(timeout.current)
     }
+    pending.current = values
 
     timeout.current = window.setTimeout(() => {
+      pending.current = undefined
       updateAgent.mutate({ agentId, agent: values })
     }, 650)
   }

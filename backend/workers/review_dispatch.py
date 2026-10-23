@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from audit.outbox import AuditRecorder
+from audit.runtime import get_audit_recorder
 from db.session import get_engine
 from reviews.config import ReviewDispatchSettings
 from reviews.dispatch import RabbitMQReviewPublisher, ReviewDispatchWorker
@@ -15,7 +15,7 @@ def main() -> None:
     worker = ReviewDispatchWorker(
         engine=engine,
         publisher=RabbitMQReviewPublisher(url=settings.rabbitmq_url or ""),
-        audit_recorder=AuditRecorder(engine),
+        audit_recorder=get_audit_recorder(),
         max_attempts=settings.max_attempts,
         retry_base_seconds=settings.retry_base_seconds,
         retry_max_seconds=settings.retry_max_seconds,
