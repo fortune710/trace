@@ -40,9 +40,9 @@ def test_github_connection_status_is_owner_scoped_and_uses_the_enum(
 
     owner_response = owner.request("GET", "/auth/oauth/github/connection")
     other_response = other.request("GET", "/auth/oauth/github/connection")
-    schema = integration_app.openapi()["paths"]["/auth/oauth/github/connection"][
-        "get"
-    ]["responses"]["200"]["content"]["application/json"]["schema"]
+    schema = integration_app.openapi()["paths"]["/auth/oauth/github/connection"]["get"][
+        "responses"
+    ]["200"]["content"]["application/json"]["schema"]
 
     assert owner_response.status_code == 200, owner_response.text
     assert owner_response.json() == {"provider": "github", "status": "connected"}
