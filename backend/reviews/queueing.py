@@ -48,6 +48,16 @@ class ReviewDispatchMessageV1:
                     "version",
                 }
                 or payload["version"] != 1
+                or type(payload["version"]) is not int
+                or not all(
+                    isinstance(payload[name], str)
+                    for name in (
+                        "idempotency_id",
+                        "owner_id",
+                        "review_agent_id",
+                        "review_id",
+                    )
+                )
             ):
                 raise ValueError
             return cls(

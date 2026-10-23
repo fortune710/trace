@@ -364,6 +364,7 @@ services:
     stop_grace_period: 30s
 
   review-dispatch-worker:
+    restart: unless-stopped
     build:
       context: ./backend
       dockerfile: Dockerfile

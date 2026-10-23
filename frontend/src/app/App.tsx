@@ -12,7 +12,30 @@ import { AgentDetailsPage } from '@/app/agents/agent-details-page'
 import { CredentialsPage, SettingsIndexRedirect } from '@/app/settings/credentials-page'
 
 function App() {
-  return <Routes><Route element={<GuestOnly />}><Route path="/sign-in" element={<SignInPage />} /><Route path="/sign-up" element={<SignUpPage />} /><Route path="/forgot-password" element={<ForgotPasswordPage />} /><Route path="/reset-password" element={<ResetPasswordPage />} /><Route path="/auth/verify" element={<VerifyEmailPage />} /><Route path="/auth/callback" element={<CallbackPage />} /></Route><Route element={<AuthenticatedOnly />}><Route path="/account" element={<AccountPage />} /><Route path="/projects" element={<ProjectsPage />} /><Route path="/projects/:projectId" element={<ProjectDetailsPage />} /><Route path="/agents" element={<AgentsPage />} /><Route path="/agents/:agentId" element={<AgentDetailsPage />} /><Route path="/integrations" element={<IntegrationsPage />} /><Route path="/settings" element={<SettingsIndexRedirect />} /><Route path="/settings/credentials" element={<CredentialsPage />} /><Route path="/learn-more" element={<WorkspacePage section="Learn More" />} /></Route><Route path="*" element={<Navigate to="/account" replace />} /></Routes>
+  return (
+    <Routes>
+      <Route element={<GuestOnly />}>
+        <Route path="/sign-in" element={<SignInPage />} />
+        <Route path="/sign-up" element={<SignUpPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/auth/verify" element={<VerifyEmailPage />} />
+        <Route path="/auth/callback" element={<CallbackPage />} />
+      </Route>
+      <Route element={<AuthenticatedOnly />}>
+        <Route path="/account" element={<AccountPage />} />
+        <Route path="/projects" element={<ProjectsPage />} />
+        <Route path="/projects/:projectId" element={<ProjectDetailsPage />} />
+        <Route path="/agents" element={<AgentsPage />} />
+        <Route path="/agents/:agentId" element={<AgentDetailsPage />} />
+        <Route path="/integrations" element={<IntegrationsPage />} />
+        <Route path="/settings" element={<SettingsIndexRedirect />} />
+        <Route path="/settings/credentials" element={<CredentialsPage />} />
+        <Route path="/learn-more" element={<WorkspacePage section="Learn More" />} />
+      </Route>
+      <Route path="*" element={<Navigate to="/account" replace />} />
+    </Routes>
+  )
 }
 
 export default App

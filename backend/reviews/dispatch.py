@@ -350,5 +350,10 @@ class ReviewDispatchWorker:
 
     def run_forever(self, *, poll_seconds: float = 1.0) -> None:
         while True:
-            if not self.run_once():
+            try:
+                worked = self.run_once()
+            except Exception:  # noqa: BLE001 - keep the durable worker alive
+                logger.error("review_dispatch_iteration_failed")
+                worked = False
+            if not worked:
                 time.sleep(poll_seconds)
