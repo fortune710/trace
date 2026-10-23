@@ -2,7 +2,7 @@
 # Keep these exact pins synchronized with the SDK compatibility test.
 appier==1.46.0
 cachetools==7.2.1
-certifi==2026.7.22
+certifi==2026.10.23
 charset-normalizer==3.5.2
 google-api==0.1.12
 google-api-core==2.41.0

@@ -91,7 +91,10 @@ function useDebouncedAgentSave(agentId: string) {
   const timeout = useRef<number | undefined>(undefined)
   const pending = useRef<AgentUpdate | undefined>(undefined)
   const mutate = useRef(updateAgent.mutate)
-  mutate.current = updateAgent.mutate
+
+  useEffect(() => {
+    mutate.current = updateAgent.mutate
+  }, [updateAgent.mutate])
 
   useEffect(() => {
     return () => {

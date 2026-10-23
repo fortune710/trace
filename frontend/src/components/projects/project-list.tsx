@@ -13,7 +13,7 @@ import {
 import type { Project } from "@/hooks/use-projects"
 
 function formatCategory(category: Project["category"]) {
-  return category.replace("_", " ")
+  return category.replaceAll("_", " ")
 }
 
 function formatImportedAt(value: string) {

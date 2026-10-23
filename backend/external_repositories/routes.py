@@ -44,6 +44,12 @@ def build_router(
     def repository_rate_limiter():
         return rate_limiter_from_settings(settings)
 
+    @lru_cache
+    def catalog_redis_client():
+        """Reuse the application-owned Redis client for catalog searches."""
+
+        return get_redis_client()
+
     async def require_repository_read_limit(
         principal: CurrentPrincipal,
     ) -> None:
@@ -73,7 +79,7 @@ def build_router(
                 query=normalized_query,
                 page=page,
                 page_size=page_size,
-                redis_client=get_redis_client(),
+                redis_client=catalog_redis_client(),
             )
         else:
             result = await asyncio.to_thread(
@@ -123,7 +129,7 @@ def build_router(
                 query=normalized_query,
                 page=page,
                 page_size=page_size,
-                redis_client=get_redis_client(),
+                redis_client=catalog_redis_client(),
             )
         else:
             result = await asyncio.to_thread(
