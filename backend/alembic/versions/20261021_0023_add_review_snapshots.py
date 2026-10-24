@@ -183,9 +183,7 @@ def downgrade() -> None:
     op.execute(
         "DROP FUNCTION IF EXISTS public.trace_prevent_review_agent_snapshot_mutation()"
     )
-    op.execute(
-        "DROP FUNCTION IF EXISTS public.trace_prevent_review_source_mutation()"
-    )
+    op.execute("DROP FUNCTION IF EXISTS public.trace_prevent_review_source_mutation()")
     op.execute(
         "DROP FUNCTION IF EXISTS public.trace_prevent_review_snapshot_mutation()"
     )
