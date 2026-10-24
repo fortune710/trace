@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { act, renderHook } from "@testing-library/react"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { useCreateReview } from "@/hooks/use-reviews"
+import { useCreateReview, useProjectReviews } from "@/hooks/use-reviews"
 import { useRuntimeEnvironment } from "@/hooks/use-runtime-environment"
 import { useSession } from "@/hooks/use-session"
 import { projectsApi, reviewsApi, type Project, type Review } from "@/lib/api"
@@ -88,6 +88,27 @@ const localRecord: DesktopProjectRecord = {
 function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>
 }
+
+describe("useProjectReviews", () => {
+  it("loads reviews filtered to the selected project", async () => {
+    const listReviews = vi.spyOn(reviewsApi, "list").mockResolvedValue({
+      items: [],
+      next_offset: null,
+    })
+
+    const { result } = renderHook(() => useProjectReviews("project-a", 1), {
+      wrapper,
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(listReviews).toHaveBeenCalledWith({
+      projectId: "project-a",
+      page: 1,
+      pageSize: 10,
+    })
+    listReviews.mockRestore()
+  })
+})
 
 describe("useCreateReview", () => {
   beforeEach(() => {

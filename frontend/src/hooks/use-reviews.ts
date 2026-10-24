@@ -17,6 +17,27 @@ import {
 export type { Review }
 
 export const reviewsQueryKey = ["reviews"] as const
+const PROJECT_REVIEWS_PAGE_SIZE = 10
+
+export function useProjectReviews(projectId: string | null, page: number) {
+  return useQuery({
+    queryKey: [...reviewsQueryKey, "project", projectId, page],
+    queryFn: () =>
+      reviewsApi.list({
+        projectId: projectId!,
+        page,
+        pageSize: PROJECT_REVIEWS_PAGE_SIZE,
+      }),
+    enabled: projectId !== null,
+    refetchInterval: (query) =>
+      query.state.data?.items.some(
+        (review) => review.status === "queued" || review.status === "running",
+      )
+        ? 5000
+        : false,
+    retry: false,
+  })
+}
 
 type CreateReviewInput = {
   project: Project
@@ -129,6 +150,11 @@ export function useReview(reviewId: string | undefined) {
     queryKey: [...reviewsQueryKey, reviewId],
     queryFn: () => reviewsApi.get(reviewId!),
     enabled: Boolean(reviewId),
+    refetchInterval: (query) =>
+      query.state.data?.status === "queued" ||
+      query.state.data?.status === "running"
+        ? 5000
+        : false,
     retry: false,
   })
 }

@@ -246,6 +246,11 @@ export type Review = {
   agents: ReviewAgent[]
 }
 
+export type ReviewPage = {
+  items: Review[]
+  next_offset: number | null
+}
+
 export type ReviewCreate = {
   project_id: string
   agent_ids: string[]
@@ -464,6 +469,22 @@ export const agentsApi = {
 }
 
 export const reviewsApi = {
+  list: ({
+    projectId,
+    page,
+    pageSize,
+  }: {
+    projectId: string
+    page: number
+    pageSize: number
+  }) =>
+    request<ReviewPage>(
+      `/api/v1/reviews?${pageQuery({
+        project_id: projectId,
+        page,
+        page_size: pageSize,
+      })}`,
+    ),
   create: (review: ReviewCreate, idempotencyKey: string) =>
     request<Review>("/api/v1/reviews", {
       method: "POST",

@@ -1,5 +1,6 @@
 import { ArrowLeft01Icon, ArrowRight01Icon, Folder01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
+import { Link } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -26,7 +27,11 @@ function formatImportedAt(value: string) {
 
 function ProjectCard({ project }: { project: Project }) {
   return (
-    <article className="group rounded-lg border border-border bg-card p-5 transition-colors hover:border-white/20">
+    <Link
+      to={`/projects/${encodeURIComponent(project.id)}`}
+      aria-label={`View project ${project.name}`}
+      className="group block rounded-lg border border-border bg-card p-5 transition-colors hover:border-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
       <div className="flex items-start justify-between gap-4">
         <div className="flex min-w-0 items-center gap-3">
           <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-secondary text-muted-foreground">
@@ -62,7 +67,7 @@ function ProjectCard({ project }: { project: Project }) {
       <p className="mt-5 text-xs text-muted-foreground">
         {project.imported_at ? `Imported ${formatImportedAt(project.imported_at)}` : "Not imported"}
       </p>
-    </article>
+    </Link>
   )
 }
 
