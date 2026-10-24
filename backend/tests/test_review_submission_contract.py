@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -12,6 +13,9 @@ from projects.models import Project
 from resources.schemas import ReviewCreate
 from resources.services import (
     _idempotency_key_digest,
+    _local_source_identity_hash,
+    _resolve_github_review_snapshot,
+    _resolve_local_review_snapshot,
     _resolve_review_source_revision,
     _review_request_digest,
 )
@@ -76,6 +80,65 @@ def test_review_source_is_derived_only_from_canonical_project_values() -> None:
     ):
         with pytest.raises(ResourceConflict):
             _resolve_review_source_revision(project)
+
+
+def test_local_review_snapshot_requires_a_supported_lowercase_digest_and_identity() -> (
+    None
+):
+    source_id = uuid4()
+    project = Project(
+        source=RepositorySource.LOCAL,
+        local_path_hash=_local_source_identity_hash(source_id),
+    )
+    valid = {
+        "source_id": source_id,
+        "integrity_algorithm": "sha256-directory-manifest-v1",
+        "digest": "a" * 64,
+    }
+
+    assert _resolve_local_review_snapshot(project, valid) == (
+        RepositorySource.LOCAL,
+        str(source_id),
+        "sha256-directory-manifest-v1",
+        "a" * 64,
+    )
+
+    for invalid in (
+        None,
+        {**valid, "integrity_algorithm": "sha512-directory-manifest-v1"},
+        {**valid, "digest": "A" * 64},
+        {**valid, "digest": "a" * 63},
+        {**valid, "source_id": uuid4()},
+    ):
+        with pytest.raises(ResourceConflict):
+            _resolve_local_review_snapshot(project, invalid)
+
+
+def test_github_snapshot_reresolves_the_branch_for_each_new_review() -> None:
+    project = Project(
+        source=RepositorySource.GITHUB,
+        external_repository_id="123",
+        branch_name="main",
+        current_revision="a" * 40,
+    )
+
+    class RepositoryResolver:
+        def __init__(self) -> None:
+            self.revisions = iter(("b" * 40, "c" * 40))
+            self.calls = 0
+
+        def resolve_branch(self, **_kwargs: object):
+            self.calls += 1
+            return SimpleNamespace(), SimpleNamespace(commit_sha=next(self.revisions))
+
+    resolver = RepositoryResolver()
+
+    first = _resolve_github_review_snapshot(project, resolver, uuid4())
+    second = _resolve_github_review_snapshot(project, resolver, uuid4())
+
+    assert first == (RepositorySource.GITHUB, "123", "git-commit-sha1-v1", "b" * 40)
+    assert second == (RepositorySource.GITHUB, "123", "git-commit-sha1-v1", "c" * 40)
+    assert resolver.calls == 2
 
 
 def test_review_dispatch_message_is_identifier_only_and_versioned() -> None:

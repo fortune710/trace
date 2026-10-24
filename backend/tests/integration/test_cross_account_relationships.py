@@ -123,7 +123,7 @@ def test_same_owner_composite_foreign_keys_block_direct_relationship_inserts(
     owner_project = local_project_factory(owner)
     owner_agent = agent_factory(owner)
     foreign_agent = agent_factory(other)
-    review = review_factory(owner, owner_project["id"], [owner_agent["id"]])
+    review = review_factory(owner, owner_project, [owner_agent["id"]])
 
     with (
         pytest.raises(sa.exc.DBAPIError),

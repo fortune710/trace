@@ -15,6 +15,8 @@ EXPECTED_TABLES = {
     "private.credential_reencryption_runs",
     "private.credentials",
     "private.review_dispatch_jobs",
+    "private.review_agent_attempts",
+    "private.review_agent_execution_configs",
     "public.agents",
     "public.external_repositories",
     "public.findings",
@@ -53,6 +55,8 @@ def test_registry_imports_every_authoritative_table_once() -> None:
         "Remediation",
         "Review",
         "ReviewAgent",
+        "ReviewAgentAttempt",
+        "ReviewAgentExecutionConfig",
         "ReviewDispatchJob",
         "User",
     }

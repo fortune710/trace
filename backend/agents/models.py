@@ -52,6 +52,9 @@ class Agent(Base):
     skills: Mapped[list[object]] = mapped_column(
         JSONB, nullable=False, server_default=sa.text("'[]'::jsonb")
     )
+    configuration_version: Mapped[int] = mapped_column(
+        sa.Integer(), nullable=False, server_default=sa.text("1")
+    )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,

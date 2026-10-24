@@ -16,10 +16,11 @@ from auth.errors import ResourceConflict
 from auth.models import AuthUser, UserStatus
 from credentials.models import CredentialKind, CredentialProvider
 from db.rls import principal_transaction
-from db.types import ProjectSourceType
+from db.types import ProjectSourceType, RepositorySource
 from findings.models import Finding, FindingSeverity
 from projects.models import Project
 from remediations.models import Remediation, RemediationStatus
+from resources import services as resource_services
 from resources.services import ArtifactService, ReviewService
 from reviews.models import (
     Review,
@@ -215,7 +216,9 @@ def test_review_submission_idempotency_allows_one_durable_review() -> None:
                     owner_id=owner_id,
                     name="idempotency project",
                     source=ProjectSourceType.LOCAL,
-                    local_path_hash=b"idempotency-project",
+                    local_path_hash=resource_services._local_source_identity_hash(
+                        project_id
+                    ),
                     source_hash=b"s" * 32,
                 )
             )
@@ -235,12 +238,28 @@ def test_review_submission_idempotency_allows_one_durable_review() -> None:
             [
                 lambda: service.create(
                     owner_id=owner_id,
-                    values={"project_id": project_id, "agent_ids": [agent_id]},
+                    values={
+                        "project_id": project_id,
+                        "agent_ids": [agent_id],
+                        "local_source_snapshot": {
+                            "source_id": project_id,
+                            "integrity_algorithm": "sha256-directory-manifest-v1",
+                            "digest": "a" * 64,
+                        },
+                    },
                     idempotency_key="same-submission",
                 ),
                 lambda: service.create(
                     owner_id=owner_id,
-                    values={"project_id": project_id, "agent_ids": [agent_id]},
+                    values={
+                        "project_id": project_id,
+                        "agent_ids": [agent_id],
+                        "local_source_snapshot": {
+                            "source_id": project_id,
+                            "integrity_algorithm": "sha256-directory-manifest-v1",
+                            "digest": "a" * 64,
+                        },
+                    },
                     idempotency_key="same-submission",
                 ),
             ]
@@ -307,7 +326,10 @@ def test_remediation_decision_allows_one_concurrent_mutation() -> None:
                     id=review_id,
                     owner_id=owner_id,
                     project_id=project_id,
-                    source_revision="abc123",
+                    source_revision="a" * 64,
+                    source_kind=RepositorySource.LOCAL,
+                    source_identifier="conflict-local-source",
+                    integrity_algorithm="sha256-directory-manifest-v1",
                     status=ReviewStatus.COMPLETED,
                 )
             )
@@ -316,6 +338,12 @@ def test_remediation_decision_allows_one_concurrent_mutation() -> None:
                     owner_id=owner_id,
                     review_id=review_id,
                     agent_id=agent_id,
+                    agent_display_name="remediation agent",
+                    agent_specialization="security",
+                    agent_model_provider="openai",
+                    agent_model_name="test",
+                    agent_skills=[],
+                    agent_configuration_version=1,
                     status=ReviewAgentStatus.COMPLETED,
                 )
             )

@@ -21,7 +21,9 @@ def test_close_cached_engines_disposes_pools_before_clearing_cache(monkeypatch) 
     monkeypatch.setenv(
         "MAINTENANCE_DATABASE_URL", "postgresql://maintenance.example.test/trace"
     )
-    monkeypatch.setattr(session, "create_engine", lambda *_args, **_kwargs: next(engines))
+    monkeypatch.setattr(
+        session, "create_engine", lambda *_args, **_kwargs: next(engines)
+    )
 
     try:
         assert session.get_engine() is primary

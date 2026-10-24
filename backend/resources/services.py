@@ -27,6 +27,7 @@ from remediations.models import Remediation, RemediationStatus
 from reviews.models import (
     Review,
     ReviewAgent,
+    ReviewAgentExecutionConfig,
     ReviewAgentStatus,
     ReviewDispatchJob,
     ReviewDispatchStatus,
@@ -412,6 +413,7 @@ def _agent_response(agent: Agent) -> dict[str, object]:
         "avatar": agent.avatar,
         "skills": agent.skills,
         "credential_id": agent.credential_id,
+        "configuration_version": agent.configuration_version,
         "created_at": agent.created_at,
         "updated_at": agent.updated_at,
         "disabled_at": agent.disabled_at,
@@ -491,7 +493,11 @@ class AgentService:
                 connection.execute(
                     sa.update(Agent)
                     .where(Agent.id == agent_id, Agent.owner_id == owner_id)
-                    .values(**values, updated_at=sa.func.current_timestamp())
+                    .values(
+                        **values,
+                        configuration_version=Agent.configuration_version + 1,
+                        updated_at=sa.func.current_timestamp(),
+                    )
                 )
                 agent = _orm_scalar_one(
                     connection,
@@ -591,22 +597,20 @@ def _review_response(
                 ReviewAgent.assigned_at,
                 ReviewAgent.started_at.label("assignment_started_at"),
                 ReviewAgent.completed_at.label("assignment_completed_at"),
-                Agent.id.label("agent_id"),
-                Agent.name.label("agent_name"),
-                Agent.review_category.label("agent_review_category"),
-            )
-            .join(
-                Agent,
-                sa.and_(
-                    Agent.id == ReviewAgent.agent_id,
-                    Agent.owner_id == ReviewAgent.owner_id,
-                ),
+                ReviewAgent.agent_id,
+                ReviewAgent.agent_display_name,
+                ReviewAgent.agent_specialization,
+                ReviewAgent.agent_model_provider,
+                ReviewAgent.agent_model_name,
+                ReviewAgent.agent_personality,
+                ReviewAgent.agent_skills,
+                ReviewAgent.agent_configuration_version,
             )
             .where(
                 ReviewAgent.owner_id == owner_id,
                 ReviewAgent.review_id == review_id,
             )
-            .order_by(Agent.id)
+            .order_by(ReviewAgent.agent_id)
         )
         .mappings()
         .all()
@@ -615,6 +619,13 @@ def _review_response(
         "id": review["id"],
         "project_id": review["project_id"],
         "source_revision": review["source_revision"],
+        "source_snapshot": {
+            "source_kind": review["source_kind"],
+            "source_identifier": review["source_identifier"],
+            "integrity_algorithm": review["integrity_algorithm"],
+            "revision": review["source_revision"],
+            "captured_at": review["source_captured_at"],
+        },
         "status": review["status"],
         "started_at": review["started_at"],
         "completed_at": review["completed_at"],
@@ -624,8 +635,13 @@ def _review_response(
             {
                 "assignment_id": assignment["assignment_id"],
                 "agent_id": assignment["agent_id"],
-                "name": assignment["agent_name"],
-                "review_category": assignment["agent_review_category"],
+                "name": assignment["agent_display_name"],
+                "review_category": assignment["agent_specialization"],
+                "model_provider": assignment["agent_model_provider"],
+                "model_name": assignment["agent_model_name"],
+                "personality": assignment["agent_personality"],
+                "skills": assignment["agent_skills"],
+                "configuration_version": assignment["agent_configuration_version"],
                 "status": assignment["assignment_status"],
                 "assigned_at": assignment["assigned_at"],
                 "started_at": assignment["assignment_started_at"],
@@ -637,6 +653,12 @@ def _review_response(
 
 
 _COMMIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
+_LOCAL_SOURCE_ALGORITHM = "sha256-directory-manifest-v1"
+_GITHUB_SOURCE_ALGORITHM = "git-commit-sha1-v1"
+_SENSITIVE_CONFIGURATION_KEY = re.compile(
+    r"(?:credential|token|secret|password|api[_-]?key|private[_-]?key)",
+    re.IGNORECASE,
+)
 
 
 def _idempotency_key_digest(key: str | None) -> bytes:
@@ -652,22 +674,55 @@ def _idempotency_key_digest(key: str | None) -> bytes:
     return hashlib.sha256(key.encode("ascii")).digest()
 
 
-def _review_request_digest(*, project_id: UUID, agent_ids: Sequence[UUID]) -> bytes:
+def _review_request_digest(
+    *,
+    project_id: UUID,
+    agent_ids: Sequence[UUID],
+    local_source_snapshot: object = None,
+) -> bytes:
     """Hash the semantic request shape so selected-agent order does not matter."""
 
     payload = json.dumps(
         {
             "agent_ids": sorted(str(agent_id) for agent_id in agent_ids),
+            "local_source_snapshot": local_source_snapshot,
             "project_id": str(project_id),
         },
         separators=(",", ":"),
         sort_keys=True,
+        default=str,
     )
     return hashlib.sha256(payload.encode("ascii")).digest()
 
 
+def _local_source_identity_hash(source_id: UUID) -> bytes:
+    return hashlib.sha256(
+        b"trace-local-source-id-v1\0" + str(source_id).encode("ascii")
+    ).digest()
+
+
+def _safe_review_agent_skills(skills: list[object]) -> list[object]:
+    """Copy only serializable, non-secret behavioral configuration."""
+
+    def copy_value(value: object) -> object:
+        if value is None or isinstance(value, str | int | float | bool):
+            return value
+        if isinstance(value, list):
+            return [copy_value(item) for item in value]
+        if isinstance(value, dict):
+            copied: dict[str, object] = {}
+            for key, item in value.items():
+                if not isinstance(key, str) or _SENSITIVE_CONFIGURATION_KEY.search(key):
+                    raise ResourceConflict("agent_configuration_unsafe")
+                copied[key] = copy_value(item)
+            return copied
+        raise ResourceConflict("agent_configuration_unsafe")
+
+    return [copy_value(skill) for skill in skills]
+
+
 def _resolve_review_source_revision(project: Project) -> str:
-    """Return the project-owned immutable source value safe to bind to a review."""
+    """Compatibility helper for stored project source values."""
 
     if project.source is RepositorySource.GITHUB:
         revision = project.current_revision
@@ -680,9 +735,56 @@ def _resolve_review_source_revision(project: Project) -> str:
     raise ResourceConflict("project_source_revision_invalid")
 
 
+def _resolve_local_review_snapshot(
+    project: Project, supplied: object
+) -> tuple[RepositorySource, str, str, str]:
+    if not isinstance(supplied, dict):
+        raise ResourceConflict("local_source_snapshot_required")
+    source_id = supplied.get("source_id")
+    algorithm = supplied.get("integrity_algorithm")
+    digest = supplied.get("digest")
+    if (
+        not isinstance(source_id, UUID)
+        or algorithm != _LOCAL_SOURCE_ALGORITHM
+        or not isinstance(digest, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        or project.local_path_hash != _local_source_identity_hash(source_id)
+    ):
+        raise ResourceConflict("project_source_revision_invalid")
+    return RepositorySource.LOCAL, str(source_id), algorithm, digest
+
+
+def _resolve_github_review_snapshot(
+    project: Project, repository_service: Any | None, owner_id: UUID
+) -> tuple[RepositorySource, str, str, str]:
+    repository_id = project.external_repository_id
+    branch_name = project.branch_name
+    if not isinstance(repository_id, str) or not isinstance(branch_name, str):
+        raise ResourceConflict("project_source_revision_invalid")
+    if repository_service is not None:
+        _, branch = repository_service.resolve_branch(
+            owner_id=owner_id,
+            source=RepositorySource.GITHUB.value,
+            repository_identifier=repository_id,
+            branch_name=branch_name,
+        )
+        revision = branch.commit_sha
+    else:
+        revision = project.current_revision
+    if not isinstance(revision, str) or not _COMMIT_SHA.fullmatch(revision):
+        raise ResourceConflict("project_source_revision_invalid")
+    return (
+        RepositorySource.GITHUB,
+        repository_id,
+        _GITHUB_SOURCE_ALGORITHM,
+        revision.lower(),
+    )
+
+
 class ReviewService:
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, repository_service: Any | None = None) -> None:
         self._engine = engine
+        self._repository_service = repository_service
 
     def create(
         self,
@@ -696,7 +798,9 @@ class ReviewService:
             raise ValueError("Review agents must be unique and non-empty")
         key_digest = _idempotency_key_digest(idempotency_key)
         request_digest = _review_request_digest(
-            project_id=values["project_id"], agent_ids=agent_ids
+            project_id=values["project_id"],
+            agent_ids=agent_ids,
+            local_source_snapshot=values.get("local_source_snapshot"),
         )
         try:
             with principal_transaction(self._engine, owner_id) as connection:
@@ -728,7 +832,26 @@ class ReviewService:
                     _raise_access(connection, "project", values["project_id"])
                 if project.archived_at is not None:
                     raise ResourceConflict("project_archived")
-                source_revision = _resolve_review_source_revision(project)
+                if project.source is RepositorySource.LOCAL:
+                    (
+                        source_kind,
+                        source_identifier,
+                        integrity_algorithm,
+                        source_revision,
+                    ) = _resolve_local_review_snapshot(
+                        project, values.get("local_source_snapshot")
+                    )
+                else:
+                    if values.get("local_source_snapshot") is not None:
+                        raise ResourceConflict("github_source_snapshot_forbidden")
+                    (
+                        source_kind,
+                        source_identifier,
+                        integrity_algorithm,
+                        source_revision,
+                    ) = _resolve_github_review_snapshot(
+                        project, self._repository_service, owner_id
+                    )
                 agents: list[Agent] = []
                 for agent_id in agent_ids:
                     agent = cast(
@@ -752,6 +875,9 @@ class ReviewService:
                         owner_id=owner_id,
                         project_id=project.id,
                         source_revision=source_revision,
+                        source_kind=source_kind,
+                        source_identifier=source_identifier,
+                        integrity_algorithm=integrity_algorithm,
                         status=ReviewStatus.QUEUED,
                         idempotency_id=uuid7(),
                         idempotency_key_digest=key_digest,
@@ -764,11 +890,30 @@ class ReviewService:
                         "owner_id": owner_id,
                         "review_id": review_id,
                         "agent_id": agent.id,
+                        "agent_display_name": agent.name,
+                        "agent_specialization": agent.review_category,
+                        "agent_model_provider": _value(agent.model_provider),
+                        "agent_model_name": agent.model_name,
+                        "agent_personality": agent.personality,
+                        "agent_skills": _safe_review_agent_skills(agent.skills),
+                        "agent_configuration_version": agent.configuration_version,
                         "status": ReviewAgentStatus.ASSIGNED,
                     }
                     for agent in agents
                 ]
                 connection.execute(sa.insert(ReviewAgent), assignments)
+                connection.execute(
+                    sa.insert(ReviewAgentExecutionConfig),
+                    [
+                        {
+                            "owner_id": owner_id,
+                            "review_id": review_id,
+                            "review_agent_id": assignment["id"],
+                            "credential_id": agent.credential_id,
+                        }
+                        for assignment, agent in zip(assignments, agents, strict=True)
+                    ],
+                )
                 connection.execute(
                     sa.insert(ReviewDispatchJob),
                     [

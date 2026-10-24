@@ -60,6 +60,9 @@ class Finding(Base):
         PostgreSQLUUID(as_uuid=True), nullable=False
     )
     agent_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=False)
+    content_digest: Mapped[bytes | None] = mapped_column(
+        sa.LargeBinary(), nullable=True
+    )
     category: Mapped[ReviewCategory] = mapped_column(
         native_enum(ReviewCategory, "review_category", "public"), nullable=False
     )
@@ -89,6 +92,15 @@ class Finding(Base):
 
 
 sa.Index("findings_owner_created_idx", Finding.owner_id, Finding.created_at.desc())
+sa.Index(
+    "findings_owner_review_agent_digest_key",
+    Finding.owner_id,
+    Finding.review_id,
+    Finding.agent_id,
+    Finding.content_digest,
+    unique=True,
+    postgresql_where=Finding.content_digest.is_not(None),
+)
 
 
 __all__ = ["Finding", "FindingSeverity", "FindingStatus"]

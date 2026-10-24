@@ -129,7 +129,10 @@ def test_resource_graph_has_forced_rls_and_same_owner_relationships() -> None:
                     id=run_id,
                     owner_id=owner_id,
                     project_id=project_id,
-                    source_revision="abc123",
+                    source_revision="a" * 64,
+                    source_kind=RepositorySource.LOCAL,
+                    source_identifier="rls-local-source",
+                    integrity_algorithm="sha256-directory-manifest-v1",
                 )
             )
             connection.execute(
@@ -137,7 +140,10 @@ def test_resource_graph_has_forced_rls_and_same_owner_relationships() -> None:
                     id=second_run_id,
                     owner_id=owner_id,
                     project_id=project_id,
-                    source_revision="def456",
+                    source_revision="b" * 64,
+                    source_kind=RepositorySource.LOCAL,
+                    source_identifier="rls-local-source",
+                    integrity_algorithm="sha256-directory-manifest-v1",
                 )
             )
             connection.execute(
@@ -145,6 +151,12 @@ def test_resource_graph_has_forced_rls_and_same_owner_relationships() -> None:
                     owner_id=owner_id,
                     review_id=run_id,
                     agent_id=agent_id,
+                    agent_display_name="security agent",
+                    agent_specialization=ReviewCategory.SECURITY,
+                    agent_model_provider="openai",
+                    agent_model_name="test-model",
+                    agent_skills=[],
+                    agent_configuration_version=1,
                     status=ReviewAgentStatus.ASSIGNED,
                 )
             )
@@ -153,6 +165,12 @@ def test_resource_graph_has_forced_rls_and_same_owner_relationships() -> None:
                     owner_id=owner_id,
                     review_id=run_id,
                     agent_id=second_agent_id,
+                    agent_display_name="legal agent",
+                    agent_specialization=ReviewCategory.LEGAL,
+                    agent_model_provider="openai",
+                    agent_model_name="test-model",
+                    agent_skills=[],
+                    agent_configuration_version=1,
                     status=ReviewAgentStatus.ASSIGNED,
                 )
             )
@@ -161,6 +179,12 @@ def test_resource_graph_has_forced_rls_and_same_owner_relationships() -> None:
                     owner_id=owner_id,
                     review_id=second_run_id,
                     agent_id=agent_id,
+                    agent_display_name="security agent",
+                    agent_specialization=ReviewCategory.SECURITY,
+                    agent_model_provider="openai",
+                    agent_model_name="test-model",
+                    agent_skills=[],
+                    agent_configuration_version=1,
                     status=ReviewAgentStatus.ASSIGNED,
                 )
             )

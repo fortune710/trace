@@ -31,6 +31,8 @@ logger = logging.getLogger("trace.review_dispatch")
 REVIEW_DISPATCH_EXCHANGE = "trace.review"
 REVIEW_DISPATCH_QUEUE = "trace.review.dispatch.v1"
 REVIEW_DISPATCH_ROUTING_KEY = "dispatch.v1"
+REVIEW_EXECUTION_DLX = "trace.review.execution.dlx"
+REVIEW_EXECUTION_DEAD_LETTER_QUEUE = "trace.review.execution.dead_letter.v1"
 
 
 class ReviewQueueUnavailable(RuntimeError):
@@ -57,7 +59,22 @@ def declare_review_dispatch_topology(channel: ReviewDispatchChannel) -> None:
         exchange_type="direct",
         durable=True,
     )
-    channel.queue_declare(queue=REVIEW_DISPATCH_QUEUE, durable=True)
+    channel.exchange_declare(
+        exchange=REVIEW_EXECUTION_DLX,
+        exchange_type="fanout",
+        durable=True,
+    )
+    channel.queue_declare(
+        queue=REVIEW_DISPATCH_QUEUE,
+        durable=True,
+        arguments={"x-dead-letter-exchange": REVIEW_EXECUTION_DLX},
+    )
+    channel.queue_declare(queue=REVIEW_EXECUTION_DEAD_LETTER_QUEUE, durable=True)
+    channel.queue_bind(
+        queue=REVIEW_EXECUTION_DEAD_LETTER_QUEUE,
+        exchange=REVIEW_EXECUTION_DLX,
+        routing_key="",
+    )
     channel.queue_bind(
         queue=REVIEW_DISPATCH_QUEUE,
         exchange=REVIEW_DISPATCH_EXCHANGE,
