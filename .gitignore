@@ -1,4 +1,5 @@
 .env
+.env.*
 .ci.env
 frontend/.env.*.local
 frontend/.env.local
