@@ -5,22 +5,14 @@ import './index.css'
 import App from './App.tsx'
 import { Toaster } from '../components/ui/toast.tsx'
 import { TooltipProvider } from '../components/ui/tooltip.tsx'
-import { DesktopProjectBootstrap } from '../components/desktop-project-bootstrap.tsx'
-import { DesktopOAuthBootstrap } from '../hooks/use-desktop-oauth.ts'
-import { SessionBoundary } from '../components/auth/session-boundary.tsx'
 
 const queryClient = new QueryClient()
-
 createRoot(document.getElementById('root')!).render(
   <QueryClientProvider client={queryClient}>
-    <DesktopProjectBootstrap />
     <TooltipProvider>
       <BrowserRouter>
-        <DesktopOAuthBootstrap />
         <Toaster />
-        <SessionBoundary>
-          <App />
-        </SessionBoundary>
+        <App />
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>,

@@ -1,6 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test"
 
-const apiBaseUrl = "http://127.0.0.1:18000"
+const apiBaseUrl = process.env.E2E_API_BASE_URL ?? "http://127.0.0.1:18000"
 const commitSha = "a".repeat(40)
 const project = {
   id: "project-1",

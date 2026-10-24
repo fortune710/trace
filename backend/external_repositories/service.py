@@ -8,6 +8,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -495,6 +496,7 @@ class RepositoryService:
     ) -> None:
         self._engine = engine
         self._credential_service = credential_service
+        self._settings = settings
         self._github_client = github_client or GitHubClient(
             base_url=settings.github_api_url
         )
@@ -846,6 +848,29 @@ class RepositoryService:
             )
         except (CredentialNotFound, CredentialServiceError):
             raise GithubAuthorizationRequired()
+
+        from auth.oauth import (
+            OAuthRejected,
+            OAuthUnavailable,
+            _github_access_token_expiration,
+            refresh_github_credential,
+        )
+
+        expiration = _github_access_token_expiration(payload)
+        if expiration is not None and not isinstance(expiration, datetime):
+            raise GithubAuthorizationRequired()
+        if expiration is not None and expiration <= datetime.now(UTC):
+            try:
+                payload = refresh_github_credential(
+                    service=self._credential_service,
+                    settings=self._settings,
+                    owner_id=owner_id,
+                    credential_id=connection["credential_id"],
+                )
+            except (OAuthRejected, CredentialServiceError):
+                raise GithubAuthorizationRequired() from None
+            except OAuthUnavailable as error:
+                raise ProviderUnavailable() from error
         token = payload.get("access_token")
         if not isinstance(token, str) or not token:
             raise GithubAuthorizationRequired()

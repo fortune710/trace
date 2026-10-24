@@ -1,8 +1,9 @@
-import { Navigate, Outlet, useLocation } from 'react-router-dom'
-import { AuthLoading } from '@/components/auth/layout'
-import { rememberReturnTo } from '@/app/auth/return-to'
-import { useSession } from '@/hooks/use-session'
-import { useSessionBoundary } from '@/components/auth/session-boundary-context'
+import { Navigate, Outlet, useLocation } from "react-router-dom"
+
+import { rememberReturnTo } from "@/app/auth/return-to"
+import { AuthLoading } from "@/components/auth/layout"
+import { useSessionBoundary } from "@/components/auth/session-boundary-context"
+import { useSession } from "@/hooks/use-session"
 
 export function AuthenticatedOnly() {
   const session = useSession()

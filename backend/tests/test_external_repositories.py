@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+from datetime import UTC, datetime, timedelta
 from email.message import Message
 from uuid import uuid4
 
@@ -266,6 +267,67 @@ def test_repository_logs_contain_safe_provider_metadata_only(
     assert record.outcome == "accepted"
     assert "synthetic-token" not in caplog.text
     assert "Authorization" not in caplog.text
+
+
+def test_repository_service_refreshes_an_expired_github_access_token(
+    monkeypatch,
+) -> None:
+    owner_id = uuid4()
+    credential_id = uuid4()
+    captured: dict[str, object] = {}
+
+    class FakeCredentialMetadata:
+        provider = CredentialProvider.GITHUB
+
+    class FakeCredentialService:
+        def metadata(self, *, owner_id, credential_id):
+            return FakeCredentialMetadata()
+
+        def decrypt_for_provider_call(self, *, owner_id, credential_id):
+            return {
+                "access_token": "expired-token",
+                "access_token_expires_at": (
+                    datetime.now(UTC) - timedelta(minutes=1)
+                ).isoformat(),
+            }
+
+    class FakeGitHubClient:
+        def list_repositories(self, *, access_token, page, page_size):
+            captured["access_token"] = access_token
+            return RepositoryPageResult(items=[], next_page=None)
+
+    def fake_refresh(**kwargs):
+        captured["refresh"] = kwargs
+        return {"access_token": "refreshed-token"}
+
+    monkeypatch.setattr(
+        "external_repositories.service._active_connection",
+        lambda *_args, **_kwargs: {"credential_id": credential_id},
+    )
+    monkeypatch.setattr("auth.oauth.refresh_github_credential", fake_refresh)
+    credential_service = FakeCredentialService()
+    settings = AuthSettings()
+    service = RepositoryService(
+        engine=object(),
+        credential_service=credential_service,
+        settings=settings,
+        github_client=FakeGitHubClient(),
+    )
+
+    service.list_repositories(
+        owner_id=owner_id,
+        source="github",
+        page=1,
+        page_size=50,
+    )
+
+    assert captured["access_token"] == "refreshed-token"
+    assert captured["refresh"] == {
+        "service": credential_service,
+        "settings": settings,
+        "owner_id": owner_id,
+        "credential_id": credential_id,
+    }
 
 
 def test_repository_service_create_branch_uses_owner_credential_and_base_sha(

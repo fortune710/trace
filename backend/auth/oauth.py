@@ -18,11 +18,11 @@ from uuid import UUID
 
 import jwt
 import sqlalchemy as sa
-from fastapi import FastAPI, Response
+from fastapi import FastAPI
 from fastapi import Request as FastAPIRequest
 from fastapi.responses import RedirectResponse
 from jwt import PyJWKClient
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 from redis.exceptions import RedisError
 
 from audit.emit import enqueue_audit
@@ -61,8 +61,6 @@ from external_repositories.service import (
 )
 
 _STATE_TTL_SECONDS = 600
-_DESKTOP_HANDOFF_TTL_SECONDS = 60
-DESKTOP_OAUTH_REDIRECT_URI = "trace://oauth/callback"
 OAUTH_CALLBACK_ROUTE = "/auth/oauth/{provider}/callback"
 GITHUB_CONNECT_START_ROUTE = "/auth/oauth/github/connect/start"
 
@@ -77,7 +75,6 @@ class OAuthRejected(ValueError):
 
 class OAuthPurpose(StrEnum):
     LOGIN = "login"
-    DESKTOP_LOGIN = "desktop_login"
     REPOSITORY_CONNECTION = "repository_connection"
 
 
@@ -102,14 +99,6 @@ class OAuthTransaction:
     purpose: OAuthPurpose = OAuthPurpose.LOGIN
     user_id: str | None = None
     session_id: str | None = None
-    desktop_challenge_hash: str | None = None
-
-
-class DesktopOAuthExchangeRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    code: str = Field(min_length=16, max_length=512)
-    verifier: str = Field(min_length=16, max_length=512)
 
 
 @dataclass(frozen=True)
@@ -134,22 +123,15 @@ class OAuthStateStore:
         purpose: OAuthPurpose = OAuthPurpose.LOGIN,
         user_id: UUID | None = None,
         session_id: UUID | None = None,
-        desktop_challenge_hash: str | None = None,
     ) -> tuple[str, str, str | None]:
         if purpose == OAuthPurpose.REPOSITORY_CONNECTION and (
             user_id is None or session_id is None
         ):
             raise ValueError("OAuth connection owner and session are required")
-        if purpose in {OAuthPurpose.LOGIN, OAuthPurpose.DESKTOP_LOGIN} and (
+        if purpose == OAuthPurpose.LOGIN and (
             user_id is not None or session_id is not None
         ):
             raise ValueError("OAuth login cannot carry a connection owner")
-        if purpose == OAuthPurpose.DESKTOP_LOGIN and (
-            not desktop_challenge_hash or destination != DESKTOP_OAUTH_REDIRECT_URI
-        ):
-            raise ValueError("Desktop OAuth challenge is required")
-        if purpose != OAuthPurpose.DESKTOP_LOGIN and desktop_challenge_hash is not None:
-            raise ValueError("Desktop OAuth challenge is not valid for this flow")
         state = generate_opaque_token()
         verifier = generate_opaque_token()
         nonce = (
@@ -166,7 +148,6 @@ class OAuthStateStore:
             purpose=purpose,
             user_id=str(user_id) if user_id is not None else None,
             session_id=str(session_id) if session_id is not None else None,
-            desktop_challenge_hash=desktop_challenge_hash,
         )
         try:
             created = await self._redis.set(
@@ -201,7 +182,6 @@ class OAuthStateStore:
                 purpose=OAuthPurpose(decoded.get("purpose", OAuthPurpose.LOGIN)),
                 user_id=decoded.get("user_id"),
                 session_id=decoded.get("session_id"),
-                desktop_challenge_hash=decoded.get("desktop_challenge_hash"),
             )
             if (
                 transaction.provider
@@ -217,23 +197,11 @@ class OAuthStateStore:
                     )
                 )
                 or (
-                    transaction.purpose
-                    in {OAuthPurpose.LOGIN, OAuthPurpose.DESKTOP_LOGIN}
+                    transaction.purpose == OAuthPurpose.LOGIN
                     and (
                         transaction.user_id is not None
                         or transaction.session_id is not None
                     )
-                )
-                or (
-                    transaction.purpose == OAuthPurpose.DESKTOP_LOGIN
-                    and (
-                        transaction.destination != DESKTOP_OAUTH_REDIRECT_URI
-                        or not transaction.desktop_challenge_hash
-                    )
-                )
-                or (
-                    transaction.purpose == OAuthPurpose.LOGIN
-                    and transaction.desktop_challenge_hash is not None
                 )
             ):
                 raise ValueError
@@ -243,76 +211,6 @@ class OAuthStateStore:
 
     def _key(self, state: str) -> str:
         return f"trace:oauth:v1:{self._digest(state)}"
-
-    def _digest(self, value: str) -> str:
-        return hmac.new(
-            self._state_key, value.encode("utf-8"), hashlib.sha256
-        ).hexdigest()
-
-
-class DesktopOAuthHandoffStore:
-    def __init__(self, *, redis_client, state_key: bytes) -> None:
-        self._redis = redis_client
-        self._state_key = state_key
-
-    async def create(self, *, tokens: SessionTokens, challenge_hash: str) -> str:
-        code = generate_opaque_token()
-        payload = {
-            "access_token": tokens.access_token,
-            "refresh_token": tokens.refresh_token,
-            "session_id": str(tokens.session_id),
-            "challenge_hash": challenge_hash,
-        }
-        try:
-            created = await self._redis.set(
-                self._key(code),
-                json.dumps(payload, separators=(",", ":")),
-                ex=_DESKTOP_HANDOFF_TTL_SECONDS,
-                nx=True,
-            )
-        except RedisError as error:
-            raise OAuthUnavailable("OAuth handoff storage is unavailable") from error
-        if not created:
-            raise OAuthUnavailable("OAuth handoff storage is unavailable")
-        return code
-
-    async def consume(self, *, code: str, verifier: str) -> SessionTokens:
-        if not code or len(code) > 512 or not verifier or len(verifier) > 512:
-            raise OAuthRejected("OAuth exchange is invalid")
-        if not _is_pkce_challenge(verifier):
-            raise OAuthRejected("OAuth exchange is invalid")
-        try:
-            raw = await self._redis.getdel(self._key(code))
-        except RedisError as error:
-            raise OAuthUnavailable("OAuth handoff storage is unavailable") from error
-        if not raw:
-            raise OAuthRejected("OAuth exchange is invalid")
-        try:
-            payload = json.loads(raw)
-            challenge_hash = payload["challenge_hash"]
-            expected_challenge_hash = self._digest(_pkce_challenge(verifier))
-            if not isinstance(challenge_hash, str) or not hmac.compare_digest(
-                challenge_hash, expected_challenge_hash
-            ):
-                raise OAuthRejected("OAuth exchange is invalid")
-            access_token = payload["access_token"]
-            refresh_token = payload["refresh_token"]
-            session_id = UUID(payload["session_id"])
-            if (
-                not isinstance(access_token, str)
-                or not access_token
-                or not isinstance(refresh_token, str)
-                or not refresh_token
-            ):
-                raise ValueError
-            return SessionTokens(access_token, refresh_token, session_id)
-        except OAuthRejected:
-            raise
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-            raise OAuthRejected("OAuth exchange is invalid") from error
-
-    def _key(self, code: str) -> str:
-        return f"trace:oauth:desktop-handoff:v1:{self._digest(code)}"
 
     def _digest(self, value: str) -> str:
         return hmac.new(
@@ -330,7 +228,6 @@ def install_oauth_routes(
     credentials: CredentialService | None = None
     limiter = None
     store = None
-    handoffs = None
 
     def auth_service() -> AuthService:
         nonlocal service
@@ -364,19 +261,6 @@ def install_oauth_routes(
                 ),
             )
         return store
-
-    def handoff_store() -> DesktopOAuthHandoffStore:
-        nonlocal handoffs
-        if handoffs is None:
-            assert settings.token_hash_key is not None
-            handoffs = DesktopOAuthHandoffStore(
-                redis_client=get_redis_client(),
-                state_key=decode_base64url_key(
-                    settings.token_hash_key.get_secret_value(),
-                    name="AUTH_TOKEN_HASH_KEY",
-                ),
-            )
-        return handoffs
 
     def audit(
         request: FastAPIRequest,
@@ -459,94 +343,6 @@ def install_oauth_routes(
         return RedirectResponse(
             f"{provider_config.authorize_url}?{urlencode(parameters)}", status_code=302
         )
-
-    @app.get("/auth/oauth/{provider}/desktop/start")
-    async def desktop_oauth_start(
-        request: FastAPIRequest, provider: str, challenge: str | None = None
-    ):
-        provider_config = _provider_configuration(
-            settings, provider, purpose=OAuthPurpose.DESKTOP_LOGIN
-        )
-        if not _is_pkce_challenge(challenge):
-            raise _invalid_request()
-        try:
-            await enforce_rate_limit(
-                rate_limiter(),
-                policy=AUTH_RATE_LIMIT_POLICIES["auth.oauth_start.ip"],
-                subject=request.client.host if request.client else "unknown",
-            )
-            assert challenge is not None
-            state, verifier, nonce = await state_store().create(
-                provider=provider,
-                destination=DESKTOP_OAUTH_REDIRECT_URI,
-                user_agent=request.headers.get("user-agent"),
-                purpose=OAuthPurpose.DESKTOP_LOGIN,
-                desktop_challenge_hash=_digest_with_key(
-                    challenge, settings.token_hash_key
-                ),
-            )
-        except OAuthUnavailable as error:
-            raise _unavailable() from error
-        except ValueError as error:
-            raise _invalid_request() from error
-        parameters = {
-            "client_id": provider_config.client_id,
-            "redirect_uri": provider_config.redirect_uri,
-            "response_type": "code",
-            "scope": provider_config.scope,
-            "state": state,
-            "code_challenge": _pkce_challenge(verifier),
-            "code_challenge_method": "S256",
-        }
-        if nonce:
-            parameters["nonce"] = nonce
-        audit(
-            request,
-            event="oauth",
-            outcome="accepted",
-            reason="desktop_authorization_started",
-            status_code=302,
-            provider=provider,
-        )
-        return RedirectResponse(
-            f"{provider_config.authorize_url}?{urlencode(parameters)}", status_code=302
-        )
-
-    @app.post("/auth/oauth/desktop/exchange")
-    async def desktop_oauth_exchange(
-        request: FastAPIRequest,
-        body: DesktopOAuthExchangeRequest,
-        response: Response,
-    ) -> dict[str, str]:
-        await enforce_rate_limit(
-            rate_limiter(),
-            policy=AUTH_RATE_LIMIT_POLICIES["auth.oauth_desktop_exchange.ip"],
-            subject=request.client.host if request.client else "unknown",
-        )
-        try:
-            tokens = await handoff_store().consume(
-                code=body.code, verifier=body.verifier
-            )
-            csrf_token = _set_session(
-                response,
-                tokens.access_token,
-                tokens.refresh_token,
-                tokens.session_id,
-                settings,
-            )
-        except OAuthUnavailable as error:
-            raise _unavailable() from error
-        except OAuthRejected as error:
-            raise _invalid_request() from error
-        audit(
-            request,
-            event="oauth",
-            outcome="accepted",
-            reason="desktop_session_exchanged",
-            status_code=200,
-            provider="desktop",
-        )
-        return {"message": "Authenticated.", "csrf_token": csrf_token}
 
     @app.post(GITHUB_CONNECT_START_ROUTE)
     async def github_connect_start(
@@ -760,45 +556,10 @@ def install_oauth_routes(
             )
             return response
 
-        assert session_tokens is not None
-        if transaction.purpose == OAuthPurpose.DESKTOP_LOGIN:
-            assert transaction.desktop_challenge_hash is not None
-            try:
-                code = await handoff_store().create(
-                    tokens=session_tokens,
-                    challenge_hash=transaction.desktop_challenge_hash,
-                )
-            except OAuthUnavailable:
-                audit(
-                    request,
-                    event="oauth",
-                    outcome="rejected",
-                    reason="dependency_unavailable",
-                    status_code=503,
-                    provider=provider,
-                )
-                return _oauth_failure_redirect(
-                    DESKTOP_OAUTH_REDIRECT_URI,
-                    request_id,
-                    purpose=OAuthPurpose.DESKTOP_LOGIN,
-                )
-            response = RedirectResponse(
-                f"{DESKTOP_OAUTH_REDIRECT_URI}?{urlencode({'code': code})}",
-                status_code=303,
-            )
-            audit(
-                request,
-                event="oauth",
-                outcome="accepted",
-                reason="desktop_handoff_created",
-                status_code=303,
-                provider=provider,
-            )
-            return response
-
         response = RedirectResponse(
             f"{transaction.destination.rstrip('/')}/auth/callback", status_code=303
         )
+        assert session_tokens is not None
         _set_session(
             response,
             session_tokens.access_token,
@@ -1219,18 +980,6 @@ def _pkce_challenge(verifier: str) -> str:
     )
 
 
-def _is_pkce_challenge(value: str | None) -> bool:
-    if value is None or len(value) != 43:
-        return False
-    return all(character.isalnum() or character in "-_" for character in value)
-
-
-def _digest_with_key(value: str, secret) -> str:
-    assert secret is not None
-    key = decode_base64url_key(secret.get_secret_value(), name="AUTH_TOKEN_HASH_KEY")
-    return hmac.new(key, value.encode("utf-8"), hashlib.sha256).hexdigest()
-
-
 def _destination(settings: AuthSettings, requested: str | None) -> str:
     destination = requested or settings.frontend_url
     parsed = urlparse(destination)
@@ -1246,12 +995,12 @@ def _destination(settings: AuthSettings, requested: str | None) -> str:
 
 
 def _set_session(
-    response: Response,
+    response: RedirectResponse,
     access_token: str,
     refresh_token: str,
     session_id: UUID,
     settings: AuthSettings,
-) -> str:
+) -> None:
     set_auth_cookies(
         response,
         access_token=access_token,
@@ -1262,13 +1011,11 @@ def _set_session(
     csrf_key = decode_base64url_key(
         settings.csrf_hmac_key.get_secret_value(), name="AUTH_CSRF_HMAC_KEY"
     )
-    csrf_token = issue_csrf_token(session_id=session_id, key=csrf_key)
     set_csrf_cookie(
         response,
-        csrf_token=csrf_token,
+        csrf_token=issue_csrf_token(session_id=session_id, key=csrf_key),
         settings=settings,
     )
-    return csrf_token
 
 
 def _oauth_failure_redirect(
@@ -1282,11 +1029,6 @@ def _oauth_failure_redirect(
             destination,
             outcome="failed",
             request_id=request_id,
-        )
-    if purpose == OAuthPurpose.DESKTOP_LOGIN:
-        return RedirectResponse(
-            f"{DESKTOP_OAUTH_REDIRECT_URI}?{urlencode({'error': 'oauth_failed', 'request_id': request_id})}",
-            status_code=303,
         )
     return RedirectResponse(
         f"{destination.rstrip('/')}/auth/callback?{urlencode({'error': 'oauth_failed', 'request_id': request_id})}",

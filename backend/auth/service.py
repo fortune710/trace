@@ -11,7 +11,6 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.engine import Engine
 
-from agents.defaults import seed_default_agents
 from auth.config import AuthSettings
 from auth.credentials import (
     CredentialCipher,
@@ -44,7 +43,7 @@ from auth.tokens import (
     jwt_service_from_settings,
 )
 from auth.uuids import uuid7
-from db.rls import principal_transaction, set_principal_context
+from db.rls import principal_transaction
 from users.models import User
 
 
@@ -131,8 +130,6 @@ class AuthService:
                 connection.execute(
                     sa.insert(User).values(id=user_id, display_name=display_name)
                 )
-                set_principal_context(connection, user_id)
-                seed_default_agents(connection, owner_id=user_id)
                 connection.execute(
                     sa.insert(AuthIdentity).values(
                         id=uuid7(),
@@ -347,8 +344,6 @@ class AuthService:
                 connection.execute(
                     sa.insert(User).values(id=user_id, display_name=display_name)
                 )
-                set_principal_context(connection, user_id)
-                seed_default_agents(connection, owner_id=user_id)
                 connection.execute(
                     sa.insert(AuthIdentity).values(
                         id=uuid7(),
