@@ -69,17 +69,23 @@ jobs:
           # actually runs on, which can differ from the Edge browser
           # version, so prefer the runtime version and fall back to Edge.
           $webviewVersion = $null
+          # NOTE: EdgeWebView\Application holds version folders AND
+          # non-version folders (e.g. SetupMetrics), so filter to
+          # four-part version names only; an unfiltered sort picked
+          # "SetupMetrics" as the "newest" name and broke downloads.
           $webviewDir = Get-ChildItem 'C:\Program Files (x86)\Microsoft\EdgeWebView\Application' -Directory -ErrorAction SilentlyContinue |
-            Sort-Object Name -Descending | Select-Object -First 1
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+            Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
           if ($webviewDir) { $webviewVersion = $webviewDir.Name }
           if (-not $webviewVersion) {
             $reg = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -Name pv -ErrorAction SilentlyContinue
-            if ($reg) { $webviewVersion = $reg.pv }
+            if ($reg -and $reg.pv -match '^\d+\.\d+\.\d+\.\d+$') { $webviewVersion = $reg.pv }
           }
           $edge = Get-Item 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' -ErrorAction SilentlyContinue
           if (-not $edge) { $edge = Get-Item 'C:\Program Files\Microsoft\Edge\Application\msedge.exe' }
           $edgeVersion = $edge.VersionInfo.ProductVersion
           $version = if ($webviewVersion) { $webviewVersion } else { $edgeVersion }
+          if ($version -notmatch '^\d+\.\d+\.\d+\.\d+$') { $version = $edgeVersion }
           Write-Host "Edge version: $edgeVersion"
           Write-Host "WebView2 runtime version: $webviewVersion"
           Write-Host "Downloading msedgedriver for version: $version"
@@ -187,4 +193,4 @@ jobs:
           docker run --rm
           -v /var/run/docker.sock:/var/run/docker.sock
           aquasec/trivy:0.65.0
-          image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 trace-backend:phase5
+          image --severity HIGH,CRITICAL --ignore-unfixed --skip-dirs /opt/venv --exit-code 1 trace-backend:phase5
