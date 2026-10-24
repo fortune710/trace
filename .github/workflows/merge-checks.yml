@@ -55,14 +55,32 @@ jobs:
       - run: cargo install tauri-driver --locked
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: bun run tauri:build -- --debug
-      - run: bun run test:e2e:desktop
+      # tauri-driver is Linux/Windows-only: on macOS it exits immediately
+      # with "tauri-driver is not supported on this platform", so the
+      # WebDriver run is skipped there (build + cargo test still verify
+      # the macOS bundle) and runs where the driver works.
+      - name: Install Edge WebDriver (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # tauri-driver delegates to the platform's native driver on
+          # Windows, so msedgedriver matching the installed Edge version
+          # must be on PATH or session creation fails with a bare 500.
+          $edge = Get-Item 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' -ErrorAction SilentlyContinue
+          if (-not $edge) { $edge = Get-Item 'C:\Program Files\Microsoft\Edge\Application\msedge.exe' }
+          $version = $edge.VersionInfo.ProductVersion
+          $zip = "$env:RUNNER_TEMP\edgedriver.zip"
+          Invoke-WebRequest -Uri "https://msedgedriver.azureedge.net/$version/edgedriver_win64.zip" -OutFile $zip
+          $dir = "$env:RUNNER_TEMP\edgedriver"
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+      - if: runner.os != 'macOS'
+        run: bun run test:e2e:desktop
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: desktop-e2e-${{ matrix.os }}
-          path: |
-            frontend/test-results
-            frontend/src-tauri/target/debug
+          path: frontend/test-results
           if-no-files-found: ignore
 
   migrations-and-integration:

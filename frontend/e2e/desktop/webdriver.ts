@@ -16,10 +16,23 @@ export class WebDriverClient {
 
   private async request<T>(requestPath: string, init: RequestInit = {}): Promise<T> {
     const response = await fetch(`${this.baseUrl}${requestPath}`, init)
-    const payload = await response.json() as { value?: T; message?: string; error?: string }
+    const payload = await response.json() as {
+      value?: T & { message?: string; error?: string }
+      message?: string
+      error?: string
+    }
 
     if (!response.ok || payload.error) {
-      throw new Error(payload.message ?? payload.error ?? `WebDriver request failed: ${response.status}`)
+      // W3C drivers nest the failure under `value` ({ value: { error, message } });
+      // reading only top-level fields used to reduce a session failure to a bare
+      // "WebDriver request failed: 500" with the driver's explanation discarded.
+      throw new Error(
+        payload.message ??
+          payload.error ??
+          payload.value?.message ??
+          payload.value?.error ??
+          `WebDriver request failed: ${response.status}`,
+      )
     }
 
     return payload.value as T
