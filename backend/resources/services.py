@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from collections.abc import Callable, Sequence
 from enum import Enum
-from typing import Any, NoReturn, Protocol, cast
+from typing import Any, NoReturn, cast
 from uuid import UUID
 
 import sqlalchemy as sa
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from agents.catalog import supports_model
 from agents.models import Agent
 from artifacts.models import LocalFileBackup, PullRequest
 from auth.errors import AuthorizationDenied, ResourceConflict, ResourceNotFound
@@ -21,26 +25,17 @@ from findings.models import Finding, FindingStatus
 from projects.models import Project, ProjectCategory
 from remediations.models import Remediation, RemediationStatus
 from reviews.models import (
-    ReviewRun,
-    ReviewRunAgent,
-    ReviewRunAgentStatus,
-    ReviewRunCategory,
+    Review,
+    ReviewAgent,
+    ReviewAgentExecutionConfig,
+    ReviewAgentStatus,
+    ReviewDispatchJob,
+    ReviewDispatchStatus,
     ReviewStatus,
 )
 
 
-class ReviewDispatcher(Protocol):
-    def dispatch(self, *, review_id: UUID, owner_id: UUID) -> None: ...
-
-
-class NoopReviewDispatcher:
-    """API-phase dispatcher; execution workers can replace this adapter."""
-
-    def dispatch(self, *, review_id: UUID, owner_id: UUID) -> None:
-        return None
-
-
-class ReviewDispatchUnavailable(RuntimeError):
+class InvalidIdempotencyKey(ValueError):
     pass
 
 
@@ -415,9 +410,10 @@ def _agent_response(agent: Agent) -> dict[str, object]:
         "review_category": agent.review_category,
         "model_provider": agent.model_provider,
         "model_name": agent.model_name,
+        "avatar": agent.avatar,
         "skills": agent.skills,
-        "fallback_order": agent.fallback_order,
         "credential_id": agent.credential_id,
+        "configuration_version": agent.configuration_version,
         "created_at": agent.created_at,
         "updated_at": agent.updated_at,
         "disabled_at": agent.disabled_at,
@@ -453,6 +449,8 @@ class AgentService:
         return _agent_response(agent)
 
     def create(self, *, owner_id: UUID, values: dict[str, Any]) -> dict[str, object]:
+        if not supports_model(values["model_provider"], values["model_name"]):
+            raise UnsupportedAgentModel()
         try:
             with principal_transaction(self._engine, owner_id) as connection:
                 self._validate_credential(
@@ -485,6 +483,9 @@ class AgentService:
             with principal_transaction(self._engine, owner_id) as connection:
                 agent = self._owned_agent(connection, owner_id, agent_id)
                 model_provider = values.get("model_provider", agent.model_provider)
+                model_name = values.get("model_name", agent.model_name)
+                if not supports_model(model_provider, model_name):
+                    raise UnsupportedAgentModel()
                 credential_id = values.get("credential_id", agent.credential_id)
                 self._validate_credential(
                     connection, owner_id, credential_id, model_provider
@@ -492,7 +493,11 @@ class AgentService:
                 connection.execute(
                     sa.update(Agent)
                     .where(Agent.id == agent_id, Agent.owner_id == owner_id)
-                    .values(**values, updated_at=sa.func.current_timestamp())
+                    .values(
+                        **values,
+                        configuration_version=Agent.configuration_version + 1,
+                        updated_at=sa.func.current_timestamp(),
+                    )
                 )
                 agent = _orm_scalar_one(
                     connection,
@@ -562,8 +567,12 @@ class AgentService:
         )
         if credential is None:
             _raise_access(connection, "credential", credential_id)
-        if credential.provider.value != model_provider:
+        if credential.provider.value != _value(model_provider):
             raise ResourceConflict("credential_provider_mismatch")
+
+
+class UnsupportedAgentModel(ValueError):
+    """Raised when an agent request uses a provider/model pair outside the catalog."""
 
 
 def _review_response(
@@ -571,50 +580,37 @@ def _review_response(
 ) -> dict[str, object]:
     review = (
         connection.execute(
-            sa.select(ReviewRun.__table__).where(
-                ReviewRun.id == review_id, ReviewRun.owner_id == owner_id
+            sa.select(Review.__table__).where(
+                Review.id == review_id, Review.owner_id == owner_id
             )
         )
         .mappings()
         .one_or_none()
     )
     if review is None:
-        _raise_access(connection, "review_run", review_id)
-    categories = (
-        connection.execute(
-            sa.select(ReviewRunCategory.category)
-            .where(
-                ReviewRunCategory.owner_id == owner_id,
-                ReviewRunCategory.review_run_id == review_id,
-            )
-            .order_by(ReviewRunCategory.category)
-        )
-        .scalars()
-        .all()
-    )
+        _raise_access(connection, "review", review_id)
     assigned = (
         connection.execute(
             sa.select(
-                ReviewRunAgent.status.label("assignment_status"),
-                ReviewRunAgent.assigned_at,
-                ReviewRunAgent.started_at.label("assignment_started_at"),
-                ReviewRunAgent.completed_at.label("assignment_completed_at"),
-                Agent.id.label("agent_id"),
-                Agent.name.label("agent_name"),
-                Agent.review_category.label("agent_review_category"),
-            )
-            .join(
-                Agent,
-                sa.and_(
-                    Agent.id == ReviewRunAgent.agent_id,
-                    Agent.owner_id == ReviewRunAgent.owner_id,
-                ),
+                ReviewAgent.id.label("assignment_id"),
+                ReviewAgent.status.label("assignment_status"),
+                ReviewAgent.assigned_at,
+                ReviewAgent.started_at.label("assignment_started_at"),
+                ReviewAgent.completed_at.label("assignment_completed_at"),
+                ReviewAgent.agent_id,
+                ReviewAgent.agent_display_name,
+                ReviewAgent.agent_specialization,
+                ReviewAgent.agent_model_provider,
+                ReviewAgent.agent_model_name,
+                ReviewAgent.agent_personality,
+                ReviewAgent.agent_skills,
+                ReviewAgent.agent_configuration_version,
             )
             .where(
-                ReviewRunAgent.owner_id == owner_id,
-                ReviewRunAgent.review_run_id == review_id,
+                ReviewAgent.owner_id == owner_id,
+                ReviewAgent.review_id == review_id,
             )
-            .order_by(Agent.fallback_order, Agent.id)
+            .order_by(ReviewAgent.agent_id)
         )
         .mappings()
         .all()
@@ -623,7 +619,13 @@ def _review_response(
         "id": review["id"],
         "project_id": review["project_id"],
         "source_revision": review["source_revision"],
-        "selected_categories": categories,
+        "source_snapshot": {
+            "source_kind": review["source_kind"],
+            "source_identifier": review["source_identifier"],
+            "integrity_algorithm": review["integrity_algorithm"],
+            "revision": review["source_revision"],
+            "captured_at": review["source_captured_at"],
+        },
         "status": review["status"],
         "started_at": review["started_at"],
         "completed_at": review["completed_at"],
@@ -631,9 +633,15 @@ def _review_response(
         "updated_at": review["updated_at"],
         "agents": [
             {
+                "assignment_id": assignment["assignment_id"],
                 "agent_id": assignment["agent_id"],
-                "name": assignment["agent_name"],
-                "review_category": assignment["agent_review_category"],
+                "name": assignment["agent_display_name"],
+                "review_category": assignment["agent_specialization"],
+                "model_provider": assignment["agent_model_provider"],
+                "model_name": assignment["agent_model_name"],
+                "personality": assignment["agent_personality"],
+                "skills": assignment["agent_skills"],
+                "configuration_version": assignment["agent_configuration_version"],
                 "status": assignment["assignment_status"],
                 "assigned_at": assignment["assigned_at"],
                 "started_at": assignment["assignment_started_at"],
@@ -644,20 +652,172 @@ def _review_response(
     }
 
 
-class ReviewService:
-    def __init__(
-        self, engine: Engine, dispatcher: ReviewDispatcher | None = None
-    ) -> None:
-        self._engine = engine
-        self._dispatcher = dispatcher or NoopReviewDispatcher()
+_COMMIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
+_LOCAL_SOURCE_ALGORITHM = "sha256-directory-manifest-v1"
+_GITHUB_SOURCE_ALGORITHM = "git-commit-sha1-v1"
+_SENSITIVE_CONFIGURATION_KEY = re.compile(
+    r"(?:credential|token|secret|password|api[_-]?key|private[_-]?key)",
+    re.IGNORECASE,
+)
 
-    def create(self, *, owner_id: UUID, values: dict[str, Any]) -> dict[str, object]:
-        categories = list(dict.fromkeys(values["selected_categories"]))
-        if len(categories) != len(values["selected_categories"]):
-            raise ValueError("Review categories must be unique")
-        agent_ids = values.get("agent_ids")
+
+def _idempotency_key_digest(key: str | None) -> bytes:
+    """Validate an opaque HTTP idempotency key and retain only its digest."""
+
+    if (
+        key is None
+        or not 1 <= len(key) <= 255
+        or key.strip() != key
+        or any(not 0x21 <= ord(character) <= 0x7E for character in key)
+    ):
+        raise InvalidIdempotencyKey("Idempotency-Key is invalid")
+    return hashlib.sha256(key.encode("ascii")).digest()
+
+
+def _review_request_digest(
+    *,
+    project_id: UUID,
+    agent_ids: Sequence[UUID],
+    local_source_snapshot: object = None,
+) -> bytes:
+    """Hash the semantic request shape so selected-agent order does not matter."""
+
+    payload = json.dumps(
+        {
+            "agent_ids": sorted(str(agent_id) for agent_id in agent_ids),
+            "local_source_snapshot": local_source_snapshot,
+            "project_id": str(project_id),
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("ascii")).digest()
+
+
+def _local_source_identity_hash(source_id: UUID) -> bytes:
+    return hashlib.sha256(
+        b"trace-local-source-id-v1\0" + str(source_id).encode("ascii")
+    ).digest()
+
+
+def _safe_review_agent_skills(skills: list[object]) -> list[object]:
+    """Copy only serializable, non-secret behavioral configuration."""
+
+    def copy_value(value: object) -> object:
+        if value is None or isinstance(value, str | int | float | bool):
+            return value
+        if isinstance(value, list):
+            return [copy_value(item) for item in value]
+        if isinstance(value, dict):
+            copied: dict[str, object] = {}
+            for key, item in value.items():
+                if not isinstance(key, str) or _SENSITIVE_CONFIGURATION_KEY.search(key):
+                    raise ResourceConflict("agent_configuration_unsafe")
+                copied[key] = copy_value(item)
+            return copied
+        raise ResourceConflict("agent_configuration_unsafe")
+
+    return [copy_value(skill) for skill in skills]
+
+
+def _resolve_review_source_revision(project: Project) -> str:
+    """Compatibility helper for stored project source values."""
+
+    if project.source is RepositorySource.GITHUB:
+        revision = project.current_revision
+        if isinstance(revision, str) and _COMMIT_SHA.fullmatch(revision):
+            return revision.lower()
+    elif project.source is RepositorySource.LOCAL:
+        source_hash = project.source_hash
+        if isinstance(source_hash, bytes) and len(source_hash) == 32:
+            return source_hash.hex()
+    raise ResourceConflict("project_source_revision_invalid")
+
+
+def _resolve_local_review_snapshot(
+    project: Project, supplied: object
+) -> tuple[RepositorySource, str, str, str]:
+    if not isinstance(supplied, dict):
+        raise ResourceConflict("local_source_snapshot_required")
+    source_id = supplied.get("source_id")
+    algorithm = supplied.get("integrity_algorithm")
+    digest = supplied.get("digest")
+    if (
+        not isinstance(source_id, UUID)
+        or algorithm != _LOCAL_SOURCE_ALGORITHM
+        or not isinstance(digest, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        or project.local_path_hash != _local_source_identity_hash(source_id)
+    ):
+        raise ResourceConflict("project_source_revision_invalid")
+    return RepositorySource.LOCAL, str(source_id), algorithm, digest
+
+
+def _resolve_github_review_snapshot(
+    project: Project, repository_service: Any | None, owner_id: UUID
+) -> tuple[RepositorySource, str, str, str]:
+    repository_id = project.external_repository_id
+    branch_name = project.branch_name
+    if not isinstance(repository_id, str) or not isinstance(branch_name, str):
+        raise ResourceConflict("project_source_revision_invalid")
+    if repository_service is not None:
+        _, branch = repository_service.resolve_branch(
+            owner_id=owner_id,
+            source=RepositorySource.GITHUB.value,
+            repository_identifier=repository_id,
+            branch_name=branch_name,
+        )
+        revision = branch.commit_sha
+    else:
+        revision = project.current_revision
+    if not isinstance(revision, str) or not _COMMIT_SHA.fullmatch(revision):
+        raise ResourceConflict("project_source_revision_invalid")
+    return (
+        RepositorySource.GITHUB,
+        repository_id,
+        _GITHUB_SOURCE_ALGORITHM,
+        revision.lower(),
+    )
+
+
+class ReviewService:
+    def __init__(self, engine: Engine, repository_service: Any | None = None) -> None:
+        self._engine = engine
+        self._repository_service = repository_service
+
+    def create(
+        self,
+        *,
+        owner_id: UUID,
+        values: dict[str, Any],
+        idempotency_key: str | None,
+    ) -> dict[str, object]:
+        agent_ids = values["agent_ids"]
+        if not agent_ids or len(set(agent_ids)) != len(agent_ids):
+            raise ValueError("Review agents must be unique and non-empty")
+        key_digest = _idempotency_key_digest(idempotency_key)
+        request_digest = _review_request_digest(
+            project_id=values["project_id"],
+            agent_ids=agent_ids,
+            local_source_snapshot=values.get("local_source_snapshot"),
+        )
         try:
             with principal_transaction(self._engine, owner_id) as connection:
+                existing = (
+                    connection.execute(
+                        sa.select(Review.__table__).where(
+                            Review.owner_id == owner_id,
+                            Review.idempotency_key_digest == key_digest,
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if existing is not None:
+                    if existing["request_digest"] != request_digest:
+                        raise ResourceConflict("idempotency_key_reused")
+                    return _review_response(connection, owner_id, existing["id"])
                 project = cast(
                     Project | None,
                     _orm_scalar_one_or_none(
@@ -665,90 +825,127 @@ class ReviewService:
                         sa.select(Project).where(
                             Project.id == values["project_id"],
                             Project.owner_id == owner_id,
-                            Project.archived_at.is_(None),
                         ),
                     ),
                 )
                 if project is None:
                     _raise_access(connection, "project", values["project_id"])
-                if agent_ids is None:
-                    agents = cast(
-                        list[Agent],
-                        _orm_scalars_all(
-                            connection,
-                            sa.select(Agent)
-                            .where(
-                                Agent.owner_id == owner_id,
-                                Agent.disabled_at.is_(None),
-                                Agent.review_category.in_(categories),
-                            )
-                            .order_by(Agent.fallback_order, Agent.id),
-                        ),
+                if project.archived_at is not None:
+                    raise ResourceConflict("project_archived")
+                if project.source is RepositorySource.LOCAL:
+                    (
+                        source_kind,
+                        source_identifier,
+                        integrity_algorithm,
+                        source_revision,
+                    ) = _resolve_local_review_snapshot(
+                        project, values.get("local_source_snapshot")
                     )
                 else:
-                    if len(set(agent_ids)) != len(agent_ids):
-                        raise ValueError("Review agents must be unique")
-                    agents = cast(
-                        list[Agent],
-                        _orm_scalars_all(
+                    if values.get("local_source_snapshot") is not None:
+                        raise ResourceConflict("github_source_snapshot_forbidden")
+                    (
+                        source_kind,
+                        source_identifier,
+                        integrity_algorithm,
+                        source_revision,
+                    ) = _resolve_github_review_snapshot(
+                        project, self._repository_service, owner_id
+                    )
+                agents: list[Agent] = []
+                for agent_id in agent_ids:
+                    agent = cast(
+                        Agent | None,
+                        _orm_scalar_one_or_none(
                             connection,
                             sa.select(Agent).where(
-                                Agent.owner_id == owner_id,
-                                Agent.id.in_(agent_ids),
-                                Agent.disabled_at.is_(None),
+                                Agent.id == agent_id, Agent.owner_id == owner_id
                             ),
                         ),
                     )
-                    if len(agents) != len(agent_ids):
-                        missing = next(
-                            agent_id
-                            for agent_id in agent_ids
-                            if agent_id not in {agent.id for agent in agents}
-                        )
-                        _raise_access(connection, "agent", missing)
-                    if any(agent.review_category not in categories for agent in agents):
-                        raise ResourceConflict("agent_category_mismatch")
-                if not agents:
-                    raise ResourceConflict("no_matching_agents")
+                    if agent is None:
+                        _raise_access(connection, "agent", agent_id)
+                    if agent.disabled_at is not None:
+                        raise ResourceConflict("agent_disabled")
+                    agents.append(agent)
                 review_id = uuid7()
                 connection.execute(
-                    sa.insert(ReviewRun).values(
+                    sa.insert(Review).values(
                         id=review_id,
                         owner_id=owner_id,
                         project_id=project.id,
-                        source_revision=values["source_revision"],
+                        source_revision=source_revision,
+                        source_kind=source_kind,
+                        source_identifier=source_identifier,
+                        integrity_algorithm=integrity_algorithm,
                         status=ReviewStatus.QUEUED,
+                        idempotency_id=uuid7(),
+                        idempotency_key_digest=key_digest,
+                        request_digest=request_digest,
                     )
                 )
+                assignments = [
+                    {
+                        "id": uuid7(),
+                        "owner_id": owner_id,
+                        "review_id": review_id,
+                        "agent_id": agent.id,
+                        "agent_display_name": agent.name,
+                        "agent_specialization": agent.review_category,
+                        "agent_model_provider": _value(agent.model_provider),
+                        "agent_model_name": agent.model_name,
+                        "agent_personality": agent.personality,
+                        "agent_skills": _safe_review_agent_skills(agent.skills),
+                        "agent_configuration_version": agent.configuration_version,
+                        "status": ReviewAgentStatus.ASSIGNED,
+                    }
+                    for agent in agents
+                ]
+                connection.execute(sa.insert(ReviewAgent), assignments)
                 connection.execute(
-                    sa.insert(ReviewRunCategory),
+                    sa.insert(ReviewAgentExecutionConfig),
                     [
                         {
                             "owner_id": owner_id,
-                            "review_run_id": review_id,
-                            "category": category,
+                            "review_id": review_id,
+                            "review_agent_id": assignment["id"],
+                            "credential_id": agent.credential_id,
                         }
-                        for category in categories
+                        for assignment, agent in zip(assignments, agents, strict=True)
                     ],
                 )
                 connection.execute(
-                    sa.insert(ReviewRunAgent),
+                    sa.insert(ReviewDispatchJob),
                     [
                         {
+                            "idempotency_id": uuid7(),
                             "owner_id": owner_id,
-                            "review_run_id": review_id,
-                            "agent_id": agent.id,
-                            "status": ReviewRunAgentStatus.ASSIGNED,
+                            "review_id": review_id,
+                            "review_agent_id": assignment["id"],
+                            "status": ReviewDispatchStatus.PENDING,
                         }
-                        for agent in agents
+                        for assignment in assignments
                     ],
                 )
         except sa.exc.IntegrityError as error:
+            # A concurrent identical request can win the unique idempotency
+            # index after this transaction performed its initial lookup.
+            with principal_transaction(self._engine, owner_id) as connection:
+                existing = (
+                    connection.execute(
+                        sa.select(Review.__table__).where(
+                            Review.owner_id == owner_id,
+                            Review.idempotency_key_digest == key_digest,
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if existing is not None:
+                    if existing["request_digest"] != request_digest:
+                        raise ResourceConflict("idempotency_key_reused") from error
+                    return _review_response(connection, owner_id, existing["id"])
             raise ResourceConflict("review_conflict") from error
-        try:
-            self._dispatcher.dispatch(review_id=review_id, owner_id=owner_id)
-        except Exception as error:
-            raise ReviewDispatchUnavailable from error
         with principal_transaction(self._engine, owner_id) as connection:
             response = _review_response(connection, owner_id, review_id)
         return response
@@ -763,16 +960,16 @@ class ReviewService:
         offset: int,
     ) -> tuple[list[dict[str, object]], int | None]:
         with principal_transaction(self._engine, owner_id) as connection:
-            query = sa.select(ReviewRun).where(ReviewRun.owner_id == owner_id)
+            query = sa.select(Review).where(Review.owner_id == owner_id)
             if project_id is not None:
-                query = query.where(ReviewRun.project_id == project_id)
+                query = query.where(Review.project_id == project_id)
             if status is not None:
-                query = query.where(ReviewRun.status == status)
+                query = query.where(Review.status == status)
             reviews = cast(
-                list[ReviewRun],
+                list[Review],
                 _orm_scalars_all(
                     connection,
-                    query.order_by(ReviewRun.created_at.desc(), ReviewRun.id.desc())
+                    query.order_by(Review.created_at.desc(), Review.id.desc())
                     .offset(offset)
                     .limit(limit + 1),
                 ),
@@ -789,130 +986,27 @@ class ReviewService:
 
     def cancel(self, *, owner_id: UUID, review_id: UUID) -> dict[str, object]:
         with principal_transaction(self._engine, owner_id) as connection:
-            review = self._owned_review(connection, owner_id, review_id)
-            if review["status"] not in {ReviewStatus.QUEUED, ReviewStatus.RUNNING}:
-                raise ResourceConflict("review_state_conflict")
-            connection.execute(
-                sa.update(ReviewRun)
-                .where(ReviewRun.id == review_id, ReviewRun.owner_id == owner_id)
-                .values(
-                    status=ReviewStatus.CANCELLED,
-                    updated_at=sa.func.current_timestamp(),
-                )
-            )
-            return _review_response(connection, owner_id, review_id)
-
-    def retry(self, *, owner_id: UUID, review_id: UUID) -> dict[str, object]:
-        observed_version = self._read_retry_version(
-            owner_id=owner_id, review_id=review_id
-        )
-
-        with principal_transaction(self._engine, owner_id) as connection:
-            original = self._owned_review(
+            review = self._owned_review(
                 connection, owner_id, review_id, for_update=True
             )
-            if original["retry_version"] != observed_version:
-                raise ResourceConflict("review_retry_conflict")
-            if original["status"] not in {
-                ReviewStatus.FAILED,
-                ReviewStatus.CANCELLED,
-            }:
+            if review["status"] is not ReviewStatus.QUEUED:
                 raise ResourceConflict("review_state_conflict")
-            categories = (
-                connection.execute(
-                    sa.select(ReviewRunCategory.category).where(
-                        ReviewRunCategory.owner_id == owner_id,
-                        ReviewRunCategory.review_run_id == review_id,
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            agents = (
-                connection.execute(
-                    sa.select(Agent.__table__)
-                    .join(
-                        ReviewRunAgent,
-                        sa.and_(
-                            ReviewRunAgent.agent_id == Agent.id,
-                            ReviewRunAgent.owner_id == Agent.owner_id,
-                        ),
-                    )
-                    .where(
-                        ReviewRunAgent.owner_id == owner_id,
-                        ReviewRunAgent.review_run_id == review_id,
-                        Agent.disabled_at.is_(None),
-                    )
-                )
-                .mappings()
-                .all()
-            )
-            if not agents:
-                raise ResourceConflict("no_matching_agents")
-            new_id = uuid7()
+            now = sa.func.current_timestamp()
             connection.execute(
-                sa.insert(ReviewRun).values(
-                    id=new_id,
-                    owner_id=owner_id,
-                    project_id=original["project_id"],
-                    source_revision=original["source_revision"],
-                    status=ReviewStatus.QUEUED,
-                )
-            )
-            connection.execute(
-                sa.insert(ReviewRunCategory),
-                [
-                    {
-                        "owner_id": owner_id,
-                        "review_run_id": new_id,
-                        "category": category,
-                    }
-                    for category in categories
-                ],
-            )
-            connection.execute(
-                sa.insert(ReviewRunAgent),
-                [
-                    {
-                        "owner_id": owner_id,
-                        "review_run_id": new_id,
-                        "agent_id": agent["id"],
-                        "status": ReviewRunAgentStatus.ASSIGNED,
-                    }
-                    for agent in agents
-                ],
-            )
-            result = connection.execute(
-                sa.update(ReviewRun)
-                .where(
-                    ReviewRun.id == review_id,
-                    ReviewRun.owner_id == owner_id,
-                    ReviewRun.retry_version == observed_version,
-                )
+                sa.update(Review)
+                .where(Review.id == review_id, Review.owner_id == owner_id)
                 .values(
-                    retry_version=ReviewRun.retry_version + 1,
-                    updated_at=sa.func.current_timestamp(),
+                    status=ReviewStatus.CANCELLED,
+                    updated_at=now,
                 )
             )
-            if result.rowcount != 1:
-                raise ResourceConflict("review_retry_conflict")
-        try:
-            self._dispatcher.dispatch(review_id=new_id, owner_id=owner_id)
-        except Exception as error:
-            raise ReviewDispatchUnavailable from error
-        return self.get(owner_id=owner_id, review_id=new_id)
-
-    def _read_retry_version(self, *, owner_id: UUID, review_id: UUID) -> int:
-        with principal_transaction(self._engine, owner_id) as connection:
-            observed_version = connection.execute(
-                sa.select(ReviewRun.retry_version).where(
-                    ReviewRun.id == review_id,
-                    ReviewRun.owner_id == owner_id,
-                )
-            ).scalar_one_or_none()
-            if observed_version is None:
-                _raise_access(connection, "review_run", review_id)
-            return observed_version
+            connection.execute(
+                sa.text(
+                    "SELECT private.cancel_review_dispatch_jobs(:owner_id, :review_id)"
+                ),
+                {"owner_id": owner_id, "review_id": review_id},
+            )
+            return _review_response(connection, owner_id, review_id)
 
     @staticmethod
     def _owned_review(
@@ -922,14 +1016,14 @@ class ReviewService:
         *,
         for_update: bool = False,
     ) -> sa.RowMapping:
-        query = sa.select(ReviewRun.__table__).where(
-            ReviewRun.id == review_id, ReviewRun.owner_id == owner_id
+        query = sa.select(Review.__table__).where(
+            Review.id == review_id, Review.owner_id == owner_id
         )
         if for_update:
             query = query.with_for_update()
         review = connection.execute(query).mappings().one_or_none()
         if review is None:
-            _raise_access(connection, "review_run", review_id)
+            _raise_access(connection, "review", review_id)
         return review
 
 
@@ -948,14 +1042,14 @@ class FindingService:
     ) -> tuple[list[dict[str, object]], int | None]:
         with principal_transaction(self._engine, owner_id) as connection:
             review = connection.execute(
-                sa.select(ReviewRun.id).where(
-                    ReviewRun.id == review_id, ReviewRun.owner_id == owner_id
+                sa.select(Review.id).where(
+                    Review.id == review_id, Review.owner_id == owner_id
                 )
             ).scalar_one_or_none()
             if review is None:
-                _raise_access(connection, "review_run", review_id)
+                _raise_access(connection, "review", review_id)
             query = sa.select(Finding).where(
-                Finding.owner_id == owner_id, Finding.review_run_id == review_id
+                Finding.owner_id == owner_id, Finding.review_id == review_id
             )
             for field in ("category", "severity", "status", "agent_id"):
                 if filters.get(field) is not None:
@@ -1027,7 +1121,7 @@ class FindingService:
 def _finding_response(finding: Finding) -> dict[str, object]:
     return {
         "id": finding.id,
-        "review_run_id": finding.review_run_id,
+        "review_id": finding.review_id,
         "agent_id": finding.agent_id,
         "category": finding.category,
         "severity": finding.severity,
@@ -1051,12 +1145,12 @@ class ArtifactService:
     ) -> dict[str, object]:
         with principal_transaction(self._engine, owner_id) as connection:
             row = connection.execute(
-                sa.select(Finding.id, ReviewRun.project_id)
+                sa.select(Finding.id, Review.project_id)
                 .join(
-                    ReviewRun,
+                    Review,
                     sa.and_(
-                        ReviewRun.id == Finding.review_run_id,
-                        ReviewRun.owner_id == Finding.owner_id,
+                        Review.id == Finding.review_id,
+                        Review.owner_id == Finding.owner_id,
                     ),
                 )
                 .where(Finding.id == finding_id, Finding.owner_id == owner_id)

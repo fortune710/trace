@@ -1,15 +1,11 @@
 """Review business-service exports."""
 
 from resources.services import (
-    NoopReviewDispatcher,
-    ReviewDispatcher,
-    ReviewDispatchUnavailable,
+    InvalidIdempotencyKey,
     ReviewService,
 )
 
 __all__ = [
-    "NoopReviewDispatcher",
-    "ReviewDispatchUnavailable",
-    "ReviewDispatcher",
+    "InvalidIdempotencyKey",
     "ReviewService",
 ]

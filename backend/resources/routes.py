@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import Depends, FastAPI, Query, Request, Response, status
 
+from agents.catalog import model_catalog_response
 from audit.emit import enqueue_audit
 from audit.outbox import AuditRecorder
 from auth.audit import AuditHasher, log_auth_event
@@ -20,9 +21,11 @@ from auth.credentials import credential_cipher_from_settings
 from auth.csrf import validate_csrf_token
 from auth.errors import (
     AuthError,
+    RepositoryInvalidRequest,
     ResourceConflict,
     ResourceNotFound,
     ResourceUnavailable,
+    ReviewRequestInvalid,
 )
 from auth.principal import CurrentPrincipal
 from auth.rate_limit import (
@@ -39,6 +42,7 @@ from projects.models import ProjectCategory
 from remediations.models import RemediationStatus
 from resources.schemas import (
     AgentCreate,
+    AgentModelCatalogResponse,
     AgentPage,
     AgentResponse,
     AgentUpdate,
@@ -64,10 +68,10 @@ from resources.services import (
     AgentService,
     ArtifactService,
     FindingService,
+    InvalidIdempotencyKey,
     ProjectService,
-    ReviewDispatcher,
-    ReviewDispatchUnavailable,
     ReviewService,
+    UnsupportedAgentModel,
 )
 from reviews.models import ReviewCategory, ReviewStatus
 
@@ -76,7 +80,6 @@ def install_resource_routes(
     app: FastAPI,
     settings: AuthSettings,
     audit_hasher: AuditHasher | None = None,
-    dispatcher: ReviewDispatcher | None = None,
     audit_recorder: AuditRecorder | None = None,
 ) -> None:
     @lru_cache
@@ -100,7 +103,7 @@ def install_resource_routes(
 
     @lru_cache
     def review_service() -> ReviewService:
-        return ReviewService(get_engine(), dispatcher)
+        return ReviewService(get_engine(), repository_service=repository_service())
 
     @lru_cache
     def finding_service() -> FindingService:
@@ -244,6 +247,11 @@ def install_resource_routes(
         )
         return {"items": items, "next_offset": next_offset}
 
+    @app.get("/agents/catalog", response_model=AgentModelCatalogResponse)
+    def get_agent_model_catalog(principal: CurrentPrincipal) -> dict[str, object]:
+        del principal
+        return model_catalog_response()
+
     @app.post(
         "/agents", response_model=AgentResponse, status_code=status.HTTP_201_CREATED
     )
@@ -251,10 +259,13 @@ def install_resource_routes(
         request: Request, body: AgentCreate, principal: CurrentPrincipal
     ) -> dict[str, object]:
         _require_csrf(request, principal, settings)
-        result = agent_service().create(
-            owner_id=principal.user_id,
-            values=body.model_dump(),
-        )
+        try:
+            result = agent_service().create(
+                owner_id=principal.user_id,
+                values=body.model_dump(),
+            )
+        except UnsupportedAgentModel as error:
+            raise RepositoryInvalidRequest() from error
         _audit(request, audit_hasher, audit_recorder, "agent", "created")
         return result
 
@@ -270,11 +281,14 @@ def install_resource_routes(
         principal: CurrentPrincipal,
     ) -> dict[str, object]:
         _require_csrf(request, principal, settings)
-        result = agent_service().update(
-            owner_id=principal.user_id,
-            agent_id=agent_id,
-            values=body.model_dump(exclude_unset=True),
-        )
+        try:
+            result = agent_service().update(
+                owner_id=principal.user_id,
+                agent_id=agent_id,
+                values=body.model_dump(exclude_unset=True),
+            )
+        except UnsupportedAgentModel as error:
+            raise RepositoryInvalidRequest() from error
         _audit(request, audit_hasher, audit_recorder, "agent", "updated")
         return result
 
@@ -292,18 +306,39 @@ def install_resource_routes(
         response_model=ReviewResponse,
         status_code=status.HTTP_202_ACCEPTED,
         dependencies=[Depends(require_review_submit_limit)],
+        openapi_extra={
+            "parameters": [
+                {
+                    "name": "Idempotency-Key",
+                    "in": "header",
+                    "required": True,
+                    "schema": {"type": "string", "minLength": 1, "maxLength": 255},
+                }
+            ]
+        },
     )
     def create_review(
-        request: Request, body: ReviewCreate, principal: CurrentPrincipal
+        request: Request,
+        body: ReviewCreate,
+        principal: CurrentPrincipal,
     ) -> dict[str, object]:
         _require_csrf(request, principal, settings)
         try:
             result = review_service().create(
-                owner_id=principal.user_id, values=body.model_dump()
+                owner_id=principal.user_id,
+                values=body.model_dump(),
+                idempotency_key=request.headers.get("Idempotency-Key"),
             )
-        except ReviewDispatchUnavailable as error:
-            raise ResourceUnavailable() from error
-        _audit(request, audit_hasher, audit_recorder, "review", "queued")
+        except InvalidIdempotencyKey as error:
+            raise ReviewRequestInvalid() from error
+        _audit(
+            request,
+            audit_hasher,
+            audit_recorder,
+            "review",
+            "queued",
+            status_code=status.HTTP_202_ACCEPTED,
+        )
         return result
 
     @app.get("/reviews", response_model=ReviewPage)
@@ -336,20 +371,6 @@ def install_resource_routes(
             owner_id=principal.user_id, review_id=review_id
         )
         _audit(request, audit_hasher, audit_recorder, "review", "cancelled")
-        return result
-
-    @app.post("/reviews/{review_id}/retry", response_model=ReviewResponse)
-    def retry_review(
-        request: Request, review_id: UUID, principal: CurrentPrincipal
-    ) -> dict[str, object]:
-        _require_csrf(request, principal, settings)
-        try:
-            result = review_service().retry(
-                owner_id=principal.user_id, review_id=review_id
-            )
-        except ReviewDispatchUnavailable as error:
-            raise ResourceUnavailable() from error
-        _audit(request, audit_hasher, audit_recorder, "review", "retried")
         return result
 
     @app.get("/reviews/{review_id}/findings", response_model=FindingPage)
@@ -638,6 +659,8 @@ def _audit(
     recorder: AuditRecorder | None,
     event: str,
     reason: str,
+    *,
+    status_code: int = status.HTTP_200_OK,
 ) -> None:
     log_auth_event(
         event=event,
@@ -645,7 +668,7 @@ def _audit(
         reason=reason,
         request_id=getattr(request.state, "request_id", "unavailable"),
         route=request.url.path,
-        status_code=200,
+        status_code=status_code,
         audit_hasher=hasher,
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
@@ -659,7 +682,7 @@ def _audit(
             "resource": event,
             "operation": reason,
             "route": request.url.path,
-            "status_code": "200",
+            "status_code": str(status_code),
         },
     )
 

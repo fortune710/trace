@@ -151,6 +151,19 @@ class RepositoryInvalidRequest(AuthError):
         )
 
 
+class ReviewRequestInvalid(AuthError):
+    """Safe validation response for headers required by review submission."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            code="invalid_request",
+            message="The request could not be processed.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            event="request",
+            reason="review_submission_invalid",
+        )
+
+
 class BranchConflict(AuthError):
     def __init__(self) -> None:
         super().__init__(
@@ -194,6 +207,10 @@ def _request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "unavailable")
 
 
+def _is_review_submission(request: Request) -> bool:
+    return request.method == "POST" and request.url.path.endswith("/reviews")
+
+
 def _error_response(
     *,
     code: str,
@@ -231,9 +248,14 @@ def install_auth_error_handlers(
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
+        is_review_submission = _is_review_submission(request)
         enqueue_audit(
             audit_recorder,
-            event_type=f"{error.event}.rejected",
+            event_type=(
+                "review.submission.rejected"
+                if is_review_submission
+                else f"{error.event}.rejected"
+            ),
             request_id=_request_id(request),
             owner_id=getattr(request.state, "principal_user_id", None),
             fields={
@@ -241,6 +263,7 @@ def install_auth_error_handlers(
                 "reason": error.reason,
                 "route": request.url.path,
                 "status_code": str(error.status_code),
+                **({"resource": "review"} if is_review_submission else {}),
             },
         )
         return _error_response(
@@ -255,32 +278,46 @@ def install_auth_error_handlers(
     async def request_validation_error_handler(
         request: Request, error: RequestValidationError
     ) -> JSONResponse:
+        is_review_submission_body = _is_review_submission(request) and any(
+            item.get("loc", [None])[0] == "body" for item in error.errors()
+        )
+        response_status = (
+            status.HTTP_422_UNPROCESSABLE_CONTENT
+            if is_review_submission_body
+            else status.HTTP_400_BAD_REQUEST
+        )
         log_auth_event(
             event="request",
             outcome="rejected",
             reason="invalid_input",
             request_id=_request_id(request),
             route=request.url.path,
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=response_status,
             audit_hasher=audit_hasher,
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
+        is_review_submission = _is_review_submission(request)
         enqueue_audit(
             audit_recorder,
-            event_type="request.rejected",
+            event_type=(
+                "review.submission.rejected"
+                if is_review_submission
+                else "request.rejected"
+            ),
             request_id=_request_id(request),
             owner_id=getattr(request.state, "principal_user_id", None),
             fields={
                 "outcome": "rejected",
                 "reason": "invalid_input",
                 "route": request.url.path,
-                "status_code": str(status.HTTP_400_BAD_REQUEST),
+                "status_code": str(response_status),
+                **({"resource": "review"} if is_review_submission else {}),
             },
         )
         return _error_response(
             code="invalid_request",
             message="The request could not be processed.",
             request_id=_request_id(request),
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=response_status,
         )

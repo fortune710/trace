@@ -82,6 +82,7 @@ class AuthSettings(BaseSettings):
     csrf_cookie_name: str = "trace_csrf"
     cookie_same_site: Literal["lax", "none", "strict"] = "lax"
     allowed_origins: list[str] = Field(default_factory=list)
+    desktop_allowed_origins: list[str] = Field(default_factory=list)
     github_client_id: str | None = None
     github_client_secret: SecretStr | None = None
     github_redirect_uri: str | None = None
@@ -230,10 +231,25 @@ class AuthSettings(BaseSettings):
                 "SameSite=None cookies require the Secure attribute"
             )
 
-        if "*" in self.allowed_origins:
+        if "*" in self.allowed_origins or "*" in self.desktop_allowed_origins:
             raise AuthenticationConfigurationError(
                 "Wildcard origins are not permitted for credentialed authentication"
             )
+
+        for origin in self.desktop_allowed_origins:
+            parsed_origin = urlparse(origin)
+            if (
+                parsed_origin.scheme not in {"http", "https", "tauri"}
+                or not parsed_origin.netloc
+                or parsed_origin.username
+                or parsed_origin.password
+                or parsed_origin.path not in {"", "/"}
+                or parsed_origin.query
+                or parsed_origin.fragment
+            ):
+                raise AuthenticationConfigurationError(
+                    "Desktop authentication origins are invalid"
+                )
 
         self._validate_oauth_provider_urls()
 

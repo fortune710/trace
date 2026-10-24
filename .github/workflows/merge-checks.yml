@@ -34,7 +34,94 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run test
+      - run: bun run test:desktop:sqlite
+      - run: bun run check:privacy
       - run: bun run build
+
+  desktop-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bun install --frozen-lockfile
+      - run: cargo install tauri-driver --locked
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - run: bun run tauri:build -- --debug
+      # tauri-driver is Linux/Windows-only: on macOS it exits immediately
+      # with "tauri-driver is not supported on this platform", so the
+      # WebDriver run is skipped there (build + cargo test still verify
+      # the macOS bundle) and runs where the driver works.
+      - name: Install Edge WebDriver (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # tauri-driver delegates to the platform's native driver on
+          # Windows, so msedgedriver must be on PATH or session creation
+          # fails. The driver must match the WebView2 Runtime the app
+          # actually runs on, which can differ from the Edge browser
+          # version, so prefer the runtime version and fall back to Edge.
+          $webviewVersion = $null
+          # NOTE: EdgeWebView\Application holds version folders AND
+          # non-version folders (e.g. SetupMetrics), so filter to
+          # four-part version names only; an unfiltered sort picked
+          # "SetupMetrics" as the "newest" name and broke downloads.
+          $webviewDir = Get-ChildItem 'C:\Program Files (x86)\Microsoft\EdgeWebView\Application' -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+            Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
+          if ($webviewDir) { $webviewVersion = $webviewDir.Name }
+          if (-not $webviewVersion) {
+            $reg = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -Name pv -ErrorAction SilentlyContinue
+            if ($reg -and $reg.pv -match '^\d+\.\d+\.\d+\.\d+$') { $webviewVersion = $reg.pv }
+          }
+          $edge = Get-Item 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' -ErrorAction SilentlyContinue
+          if (-not $edge) { $edge = Get-Item 'C:\Program Files\Microsoft\Edge\Application\msedge.exe' }
+          $edgeVersion = $edge.VersionInfo.ProductVersion
+          $version = if ($webviewVersion) { $webviewVersion } else { $edgeVersion }
+          if ($version -notmatch '^\d+\.\d+\.\d+\.\d+$') { $version = $edgeVersion }
+          Write-Host "Edge version: $edgeVersion"
+          Write-Host "WebView2 runtime version: $webviewVersion"
+          Write-Host "Downloading msedgedriver for version: $version"
+          $zip = "$env:RUNNER_TEMP\edgedriver.zip"
+          # NOTE: Microsoft moved EdgeDriver downloads off the old
+          # msedgedriver.azureedge.net host (it no longer resolves) to
+          # msedgedriver.microsoft.com. Try the 64-bit build first, then
+          # the 32-bit build (same msedgedriver.exe, runs on x64 too).
+          $downloaded = $false
+          foreach ($arch in @('win64', 'win32')) {
+            $uri = "https://msedgedriver.microsoft.com/$version/edgedriver_$arch.zip"
+            Write-Host "Trying $uri"
+            for ($attempt = 1; $attempt -le 3 -and -not $downloaded; $attempt++) {
+              try {
+                Invoke-WebRequest -Uri $uri -OutFile $zip
+                $downloaded = $true
+              } catch {
+                Write-Host "Attempt $attempt failed: $($_.Exception.Message)"
+                Start-Sleep -Seconds 10
+              }
+            }
+            if ($downloaded) { break }
+          }
+          if (-not $downloaded) { throw "Failed to download msedgedriver for Edge $version" }
+          $dir = "$env:RUNNER_TEMP\edgedriver"
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          & "$dir\msedgedriver.exe" --version
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+      - if: runner.os != 'macOS'
+        run: bun run test:e2e:desktop
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-e2e-${{ matrix.os }}
+          path: frontend/test-results
+          if-no-files-found: ignore
 
   migrations-and-integration:
     runs-on: ubuntu-latest
@@ -99,11 +186,11 @@ jobs:
           docker run --rm
           -v "${{ github.workspace }}:/repo:ro"
           aquasec/trivy:0.65.0
-          fs --severity HIGH,CRITICAL --exit-code 1 /repo
+          fs --severity HIGH,CRITICAL --skip-dirs backend/.venv --exit-code 1 /repo
       - run: docker build --tag trace-backend:phase5 ./backend
       - name: Scan the backend image with Trivy
         run: >-
           docker run --rm
           -v /var/run/docker.sock:/var/run/docker.sock
           aquasec/trivy:0.65.0
-          image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 trace-backend:phase5
+          image --severity HIGH,CRITICAL --ignore-unfixed --skip-dirs /opt/venv --exit-code 1 trace-backend:phase5

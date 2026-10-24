@@ -13,11 +13,11 @@ from pydantic import (
 )
 
 from credentials.models import CredentialKind, CredentialProvider
-from db.types import RepositoryProvider, RepositorySource
+from db.types import ModelProvider, RepositoryProvider, RepositorySource
 from findings.models import FindingSeverity, FindingStatus
 from projects.models import ProjectCategory
 from remediations.models import RemediationStatus
-from reviews.models import ReviewCategory, ReviewRunAgentStatus, ReviewStatus
+from reviews.models import ReviewAgentStatus, ReviewCategory, ReviewStatus
 
 
 class RequestModel(BaseModel):
@@ -163,14 +163,17 @@ class AgentCreate(RequestModel):
     name: ShortName
     personality: Annotated[str, StringConstraints(max_length=4000)] | None = None
     review_category: ReviewCategory
-    model_provider: Annotated[
-        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
-    ]
+    model_provider: ModelProvider
     model_name: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
     ]
+    avatar: (
+        Annotated[
+            str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2048)
+        ]
+        | None
+    ) = None
     skills: list[dict[str, object] | str] = Field(default_factory=list, max_length=64)
-    fallback_order: int = Field(default=0, ge=0, le=1000)
     credential_id: UUID | None = None
 
 
@@ -178,20 +181,20 @@ class AgentUpdate(RequestModel):
     name: ShortName | None = None
     personality: Annotated[str, StringConstraints(max_length=4000)] | None = None
     review_category: ReviewCategory | None = None
-    model_provider: (
-        Annotated[
-            str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
-        ]
-        | None
-    ) = None
+    model_provider: ModelProvider | None = None
     model_name: (
         Annotated[
             str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
         ]
         | None
     ) = None
+    avatar: (
+        Annotated[
+            str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2048)
+        ]
+        | None
+    ) = None
     skills: list[dict[str, object] | str] | None = Field(default=None, max_length=64)
-    fallback_order: int | None = Field(default=None, ge=0, le=1000)
     credential_id: UUID | None = None
 
 
@@ -200,11 +203,12 @@ class AgentResponse(RequestModel):
     name: str
     personality: str | None
     review_category: ReviewCategory
-    model_provider: str
+    model_provider: ModelProvider
     model_name: str
+    avatar: str | None
     skills: list[dict[str, object] | str]
-    fallback_order: int
     credential_id: UUID | None
+    configuration_version: int
     created_at: datetime
     updated_at: datetime
     disabled_at: datetime | None
@@ -215,30 +219,60 @@ class AgentPage(RequestModel):
     next_offset: int | None
 
 
+class AgentModelOption(RequestModel):
+    id: str
+    label: str
+
+
+class AgentModelProviderOption(RequestModel):
+    id: ModelProvider
+    label: str
+    models: list[AgentModelOption]
+
+
+class AgentModelCatalogResponse(RequestModel):
+    providers: list[AgentModelProviderOption]
+
+
+class LocalSourceSnapshot(RequestModel):
+    source_id: UUID
+    integrity_algorithm: Annotated[
+        str, StringConstraints(pattern=r"^sha256-directory-manifest-v1$")
+    ]
+    digest: HashString
+
+
 class ReviewCreate(RequestModel):
     project_id: UUID
-    source_revision: Annotated[
-        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)
-    ]
-    selected_categories: list[ReviewCategory] = Field(min_length=1, max_length=5)
-    agent_ids: list[UUID] | None = Field(default=None, max_length=100)
+    agent_ids: list[UUID] = Field(min_length=1, max_length=100)
+    local_source_snapshot: LocalSourceSnapshot | None = None
 
     @model_validator(mode="after")
     def validate_unique_values(self) -> ReviewCreate:
-        if len(set(self.selected_categories)) != len(self.selected_categories):
-            raise ValueError("review categories must be unique")
-        if self.agent_ids is not None and len(set(self.agent_ids)) != len(
-            self.agent_ids
-        ):
+        if len(set(self.agent_ids)) != len(self.agent_ids):
             raise ValueError("review agents must be unique")
         return self
 
 
+class ReviewSourceSnapshotResponse(RequestModel):
+    source_kind: RepositorySource
+    source_identifier: str
+    integrity_algorithm: str
+    revision: str
+    captured_at: datetime
+
+
 class ReviewAgentResponse(RequestModel):
+    assignment_id: UUID
     agent_id: UUID
     name: str
     review_category: ReviewCategory
-    status: ReviewRunAgentStatus
+    model_provider: str
+    model_name: str
+    personality: str | None
+    skills: list[dict[str, object] | str]
+    configuration_version: int
+    status: ReviewAgentStatus
     assigned_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
@@ -248,7 +282,7 @@ class ReviewResponse(RequestModel):
     id: UUID
     project_id: UUID
     source_revision: str
-    selected_categories: list[ReviewCategory]
+    source_snapshot: ReviewSourceSnapshotResponse
     status: ReviewStatus
     started_at: datetime | None
     completed_at: datetime | None
@@ -264,7 +298,7 @@ class ReviewPage(RequestModel):
 
 class FindingResponse(RequestModel):
     id: UUID
-    review_run_id: UUID
+    review_id: UUID
     agent_id: UUID
     category: ReviewCategory
     severity: FindingSeverity

@@ -34,13 +34,13 @@ class Finding(Base):
     __table_args__ = (
         sa.UniqueConstraint("owner_id", "id", name="findings_owner_id_id_key"),
         sa.ForeignKeyConstraint(
-            ["owner_id", "review_run_id", "agent_id"],
+            ["owner_id", "review_id", "agent_id"],
             [
-                "public.review_run_agents.owner_id",
-                "public.review_run_agents.review_run_id",
-                "public.review_run_agents.agent_id",
+                "public.review_agents.owner_id",
+                "public.review_agents.review_id",
+                "public.review_agents.agent_id",
             ],
-            name="findings_owner_run_agent_fkey",
+            name="findings_owner_review_agent_fkey",
             ondelete="RESTRICT",
         ),
         {"schema": "public"},
@@ -56,10 +56,13 @@ class Finding(Base):
         sa.ForeignKey("public.users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    review_run_id: Mapped[UUID] = mapped_column(
+    review_id: Mapped[UUID] = mapped_column(
         PostgreSQLUUID(as_uuid=True), nullable=False
     )
     agent_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=False)
+    content_digest: Mapped[bytes | None] = mapped_column(
+        sa.LargeBinary(), nullable=True
+    )
     category: Mapped[ReviewCategory] = mapped_column(
         native_enum(ReviewCategory, "review_category", "public"), nullable=False
     )
@@ -89,6 +92,15 @@ class Finding(Base):
 
 
 sa.Index("findings_owner_created_idx", Finding.owner_id, Finding.created_at.desc())
+sa.Index(
+    "findings_owner_review_agent_digest_key",
+    Finding.owner_id,
+    Finding.review_id,
+    Finding.agent_id,
+    Finding.content_digest,
+    unique=True,
+    postgresql_where=Finding.content_digest.is_not(None),
+)
 
 
 __all__ = ["Finding", "FindingSeverity", "FindingStatus"]

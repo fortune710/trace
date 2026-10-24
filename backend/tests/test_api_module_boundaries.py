@@ -57,7 +57,7 @@ def test_feature_packages_expose_modular_model_imports():
     from findings.models import Finding
     from projects.models import Project
     from remediations.models import Remediation
-    from reviews.models import ReviewRun, ReviewRunAgent, ReviewRunCategory
+    from reviews.models import Review, ReviewAgent
 
     assert all(
         model.__table__.metadata is Project.__table__.metadata
@@ -68,8 +68,7 @@ def test_feature_packages_expose_modular_model_imports():
             Remediation,
             PullRequest,
             LocalFileBackup,
-            ReviewRun,
-            ReviewRunAgent,
-            ReviewRunCategory,
+            Review,
+            ReviewAgent,
         )
     )

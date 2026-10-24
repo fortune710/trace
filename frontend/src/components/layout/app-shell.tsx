@@ -16,7 +16,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <SidebarTrigger />
           <span className="ml-2 font-mono text-sm tracking-tight">trace</span>
         </header>
-        <div className="min-h-svh bg-background">{children}</div>
+        <main className="min-h-svh bg-background">{children}</main>
       </SidebarInset>
     </SidebarProvider>
   )
