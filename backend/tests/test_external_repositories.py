@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 from email.message import Message
@@ -118,6 +119,58 @@ def test_github_client_creates_branch_from_exact_commit(monkeypatch) -> None:
             ).encode("utf-8"),
         )
     ]
+
+
+def test_github_client_reads_paths_and_files_at_an_immutable_revision(
+    monkeypatch,
+) -> None:
+    requests: list[str] = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(request.full_url)
+        if "/git/trees/" in request.full_url:
+            return _response(
+                {
+                    "truncated": False,
+                    "tree": [
+                        {"path": "README.md", "type": "blob"},
+                        {"path": "backend/main.py", "type": "blob"},
+                        {"path": "backend", "type": "tree"},
+                    ],
+                }
+            )
+        return _response(
+            {
+                "type": "file",
+                "encoding": "base64",
+                "content": base64.b64encode(b"print('ready')\n").decode("ascii"),
+            }
+        )
+
+    monkeypatch.setattr("external_repositories.service.urlopen", fake_urlopen)
+    client = GitHubClient(base_url="https://github.example.test")
+    repository = client._repository_record(_repository_payload())
+    revision = "a" * 40
+
+    paths, truncated = client.list_paths_at_revision(
+        access_token="synthetic-token",
+        repository=repository,
+        revision=revision,
+        path_prefix="backend",
+        max_results=10,
+    )
+    contents = client.read_file_at_revision(
+        access_token="synthetic-token",
+        repository=repository,
+        revision=revision,
+        path="backend/main.py",
+    )
+
+    assert paths == ["backend/main.py"]
+    assert truncated is False
+    assert contents == "print('ready')\n"
+    assert f"/git/trees/{revision}?recursive=1" in requests[0]
+    assert f"/contents/backend/main.py?ref={revision}" in requests[1]
 
 
 def test_repository_service_rejects_invalid_branch_base_revision() -> None:
@@ -405,14 +458,18 @@ def _catalog_service(monkeypatch, github_client):
         RepositoryService(
             engine=object(),
             credential_service=FakeCredentialService(),
-            settings=type("Settings", (), {"github_api_url": "https://github.example"})(),
+            settings=type(
+                "Settings", (), {"github_api_url": "https://github.example"}
+            )(),
             github_client=github_client,
         ),
         owner_id,
     )
 
 
-def test_repository_query_uses_a_bounded_owner_scoped_catalog_cache(monkeypatch) -> None:
+def test_repository_query_uses_a_bounded_owner_scoped_catalog_cache(
+    monkeypatch,
+) -> None:
     class FakeGitHubClient:
         repository_calls = 0
 
@@ -494,7 +551,9 @@ def test_branch_query_uses_a_separate_catalog_cache(monkeypatch) -> None:
                 web_url="https://github.com/trace-labs/trace-dashboard",
             )
 
-        def list_branches(self, *, access_token, repository, page, page_size, query=None):
+        def list_branches(
+            self, *, access_token, repository, page, page_size, query=None
+        ):
             self.branch_calls += 1
             assert (page, page_size, query) == (1, 100, None)
             return RepositoryPageResult(
@@ -599,9 +658,12 @@ def test_repository_routes_expose_a_bounded_query_parameter() -> None:
 
     for path in ("/repositories", "/repositories/{repository_identifier}/branches"):
         parameters = {
-            parameter["name"]: parameter for parameter in paths[path]["get"]["parameters"]
+            parameter["name"]: parameter
+            for parameter in paths[path]["get"]["parameters"]
         }
-        assert {item.get("maxLength") for item in parameters["query"]["schema"]["anyOf"]} == {
+        assert {
+            item.get("maxLength") for item in parameters["query"]["schema"]["anyOf"]
+        } == {
             100,
             None,
         }

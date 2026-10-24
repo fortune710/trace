@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import re
@@ -53,6 +54,7 @@ __all__ = [
 _GITHUB_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 _GITHUB_REPOSITORY_ID = re.compile(r"^[1-9][0-9]{0,18}$")
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+_MAX_REVIEW_FILE_BYTES = 512 * 1024
 _GITHUB_API_VERSION = "2022-11-28"
 _CATALOG_CACHE_LIMIT = 100
 _CATALOG_CACHE_TTL_SECONDS = 300
@@ -268,6 +270,87 @@ class GitHubClient:
             access_token=access_token,
         )
         return self._repository_record(payload)
+
+    def list_paths_at_revision(
+        self,
+        *,
+        access_token: str,
+        repository: RepositoryRecord,
+        revision: str,
+        path_prefix: str | None,
+        max_results: int,
+    ) -> tuple[list[str], bool]:
+        """List file paths from exactly one immutable Git commit."""
+        if not _GITHUB_SHA.fullmatch(revision) or not 1 <= max_results <= 500:
+            raise RepositoryProviderError(kind="malformed_response")
+        payload, _headers = self._request_json(
+            method="GET",
+            path=(
+                f"/repos/{quote(repository.owner_login, safe='')}/"
+                f"{quote(repository.name, safe='')}/git/trees/{revision}?recursive=1"
+            ),
+            access_token=access_token,
+        )
+        if not isinstance(payload, dict) or payload.get("truncated") is True:
+            raise RepositoryProviderError(kind="malformed_response")
+        entries = payload.get("tree")
+        if not isinstance(entries, list):
+            raise RepositoryProviderError(kind="malformed_response")
+        normalized_prefix = _review_path_prefix(path_prefix)
+        paths: list[str] = []
+        has_more = False
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("type") != "blob":
+                continue
+            path = entry.get("path")
+            if not isinstance(path, str) or not _is_safe_review_path(path):
+                raise RepositoryProviderError(kind="malformed_response")
+            if normalized_prefix and not path.startswith(normalized_prefix):
+                continue
+            if len(paths) == max_results:
+                has_more = True
+                break
+            paths.append(path)
+        return paths, has_more
+
+    def read_file_at_revision(
+        self,
+        *,
+        access_token: str,
+        repository: RepositoryRecord,
+        revision: str,
+        path: str,
+    ) -> str:
+        """Read one UTF-8 text file from exactly one immutable Git commit."""
+        if not _GITHUB_SHA.fullmatch(revision) or not _is_safe_review_path(path):
+            raise RepositoryProviderError(kind="malformed_response")
+        payload, _headers = self._request_json(
+            method="GET",
+            path=(
+                f"/repos/{quote(repository.owner_login, safe='')}/"
+                f"{quote(repository.name, safe='')}/contents/"
+                f"{quote(path, safe='/')}?ref={revision}"
+            ),
+            access_token=access_token,
+        )
+        if not isinstance(payload, dict) or payload.get("type") != "file":
+            raise RepositoryProviderError(kind="malformed_response")
+        encoded_content = payload.get("content")
+        encoding = payload.get("encoding")
+        if not isinstance(encoded_content, str) or encoding != "base64":
+            raise RepositoryProviderError(kind="malformed_response")
+        try:
+            content = base64.b64decode(
+                "".join(encoded_content.splitlines()), validate=True
+            )
+        except (ValueError, UnicodeEncodeError) as error:
+            raise RepositoryProviderError(kind="malformed_response") from error
+        if len(content) > _MAX_REVIEW_FILE_BYTES:
+            raise RepositoryProviderError(kind="malformed_response")
+        try:
+            return content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise RepositoryProviderError(kind="malformed_response") from error
 
     def list_branches(
         self,
@@ -576,8 +659,9 @@ class RepositoryService:
             records,
             page=page,
             page_size=page_size,
-            matches=lambda record: query in record.name.casefold()
-            or query in record.full_name.casefold(),
+            matches=lambda record: (
+                query in record.name.casefold() or query in record.full_name.casefold()
+            ),
         )
 
     def list_branches(
@@ -607,6 +691,62 @@ class RepositoryService:
         except RepositoryProviderError as error:
             _log_provider_call("list_branches", error.kind)
             raise _provider_error(error, operation="repository") from error
+
+    def list_paths(
+        self,
+        *,
+        owner_id: UUID,
+        repository_identifier: str,
+        revision: str,
+        path_prefix: str | None,
+        max_results: int,
+    ) -> tuple[list[str], bool]:
+        """List bounded paths for an agent's immutable GitHub review target."""
+        repository_identifier = _validate_repository_identifier(repository_identifier)
+        token = self._access_token(
+            owner_id=owner_id, provider=RepositoryProvider.GITHUB
+        )
+        try:
+            repository = self._github_client.get_repository(
+                access_token=token, repository_identifier=repository_identifier
+            )
+            return self._github_client.list_paths_at_revision(
+                access_token=token,
+                repository=repository,
+                revision=revision,
+                path_prefix=path_prefix,
+                max_results=max_results,
+            )
+        except RepositoryProviderError as error:
+            _log_provider_call("list_paths", error.kind)
+            raise _provider_error(error, operation="review_source") from error
+
+    def read_file(
+        self,
+        *,
+        owner_id: UUID,
+        repository_identifier: str,
+        revision: str,
+        path: str,
+    ) -> str:
+        """Read one bounded text file for an agent's immutable GitHub review target."""
+        repository_identifier = _validate_repository_identifier(repository_identifier)
+        token = self._access_token(
+            owner_id=owner_id, provider=RepositoryProvider.GITHUB
+        )
+        try:
+            repository = self._github_client.get_repository(
+                access_token=token, repository_identifier=repository_identifier
+            )
+            return self._github_client.read_file_at_revision(
+                access_token=token,
+                repository=repository,
+                revision=revision,
+                path=path,
+            )
+        except RepositoryProviderError as error:
+            _log_provider_call("read_file", error.kind)
+            raise _provider_error(error, operation="review_source") from error
 
     async def search_branches(
         self,
@@ -788,8 +928,9 @@ class RepositoryService:
             records,
             page=page,
             page_size=page_size,
-            matches=lambda record: query in record.name.casefold()
-            or query in record.full_name.casefold(),
+            matches=lambda record: (
+                query in record.name.casefold() or query in record.full_name.casefold()
+            ),
         )
 
     def _search_branches_from_provider(
@@ -915,6 +1056,24 @@ def _provider(source: str | RepositoryProvider) -> RepositoryProvider:
         )
     except ValueError as error:
         raise UnsupportedSource() from error
+
+
+def _review_path_prefix(path_prefix: str | None) -> str:
+    if path_prefix is None or not path_prefix.strip():
+        return ""
+    normalized = path_prefix.strip().rstrip("/")
+    if not _is_safe_review_path(normalized):
+        raise RepositoryProviderError(kind="malformed_response")
+    return f"{normalized}/"
+
+
+def _is_safe_review_path(path: str) -> bool:
+    return bool(
+        path
+        and not path.startswith("/")
+        and "\x00" not in path
+        and all(part not in {"", ".", ".."} for part in path.split("/"))
+    )
 
 
 def _validate_repository_identifier(value: str) -> str:
