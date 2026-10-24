@@ -38,14 +38,14 @@ Trace serves one person per account. Team workspaces, GitLab imports, ZIP upload
 
 #### Agent configuration
 
-- **FR-09 Agent catalog:** WHEN a builder opens the agent workspace THEN Trace SHALL list system agents and builder-created agents with their assigned review category, status, provider, selected model, skills, and fallback order.
-- **FR-10 Custom agents:** WHEN a builder supplies a unique agent name, personality, one review category, model provider, model, and skills THEN Trace SHALL create an agent owned by that builder. Trace SHALL allow only one assigned review category per agent: Security, Engineering, Product, Legal, or Accessibility.
+- **FR-09 Agent catalog:** WHEN a builder opens the agent workspace THEN Trace SHALL list that builder's default and custom agents with their avatar, assigned review category, status, provider, selected model, and skills.
+- **FR-10 Custom agents:** WHEN a builder supplies a unique agent name, personality, one review category, model provider, model, and skills THEN Trace SHALL create an agent owned by that builder. Trace SHALL allow only one assigned review category per agent: Security, Engineering, Product, Legal, Accessibility, or Marketing.
 - **FR-11 Provider access:** WHEN a builder configures an agent THEN Trace SHALL offer Trace-managed model access by default and let the builder select a supported bring-your-own-key provider credential.
 - **FR-12 Fallback providers:** WHEN a selected provider returns an availability, rate-limit, or capacity failure THEN Trace SHALL retry the work with the next configured provider and record the provider used for the completed attempt.
 
 #### Reviews and findings
 
-- **FR-13 Review selection:** WHEN a builder starts a review THEN Trace SHALL require a project, source revision, and one or more review categories: Security, Engineering, Product, Legal, or Accessibility. Trace SHALL assign only agents whose review category matches a selected category.
+- **FR-13 Review selection:** WHEN a builder starts a review THEN Trace SHALL require a project, source revision, and one or more explicitly selected enabled agents owned by that builder. An agent's review category is metadata for browsing and filtering, not a review-level selection.
 - **FR-14 Review lifecycle:** WHEN Trace accepts a review request THEN Trace SHALL show queued, running, completed, failed, or cancelled status and the assigned agents with their review categories.
 - **FR-15 Findings:** WHEN an agent identifies a risk THEN Trace SHALL store and display a title, review category, severity, explanation, affected file or source location when available, evidence, recommendation, reviewing agent, and review timestamp.
 - **FR-16 Finding triage:** WHEN a builder views a completed review THEN Trace SHALL let the builder filter findings by review category, severity, status, and agent, and mark a finding as open, accepted, resolved, or dismissed with a reason.
@@ -116,8 +116,8 @@ Trace serves one person per account. Team workspaces, GitLab imports, ZIP upload
 
 - **Account:** ID, sign-in method, encrypted OAuth connections, created date, and consent records.
 - **Project:** ID, owner account ID, name, project category, source type, repository reference or device-local path reference, source hash, and current source revision.
-- **Agent:** ID, owner account ID, name, personality, assigned review category, skills, provider, model, fallback order, and encrypted BYOK reference when selected.
-- **Review run:** ID, project ID, source revision, selected review categories, assigned agents, lifecycle status, provider attempts, timestamps, and error class.
+- **Agent:** ID, owner account ID, default-agent key when applicable, name, avatar, personality, assigned review category, skills, provider, model, and encrypted BYOK reference when selected.
+- **Review run:** ID, project ID, source revision, assigned agents, lifecycle status, provider attempts, timestamps, and error class.
 - **Finding:** ID, review run ID, category, severity, title, explanation, evidence, location, recommendation, triage status, and reviewer agent.
 - **Remediation:** ID, finding ID, proposed diff, builder approval record, output type, local file path or pull-request URL, and source revision.
 

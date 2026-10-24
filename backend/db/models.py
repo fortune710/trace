@@ -32,6 +32,7 @@ from credentials.models import (
 )
 from db.types import (
     CredentialEncryptionProvider,
+    ModelProvider,
     ProjectSourceType,
     RepositoryProvider,
     RepositorySource,
@@ -43,10 +44,11 @@ from findings.models import Finding, FindingSeverity, FindingStatus
 from projects.models import Project, ProjectCategory
 from remediations.models import Remediation, RemediationStatus
 from reviews.models import (
-    ReviewRun,
-    ReviewRunAgent,
-    ReviewRunAgentStatus,
-    ReviewRunCategory,
+    Review,
+    ReviewAgent,
+    ReviewAgentStatus,
+    ReviewDispatchJob,
+    ReviewDispatchStatus,
     ReviewStatus,
 )
 from users.models import User
@@ -76,6 +78,7 @@ __all__ = [
     "FindingStatus",
     "IdentityProvider",
     "LocalFileBackup",
+    "ModelProvider",
     "PasswordCredential",
     "PasswordRecoveryToken",
     "Project",
@@ -87,11 +90,12 @@ __all__ = [
     "RemediationStatus",
     "RepositoryProvider",
     "RepositorySource",
+    "Review",
+    "ReviewAgent",
+    "ReviewAgentStatus",
     "ReviewCategory",
-    "ReviewRun",
-    "ReviewRunAgent",
-    "ReviewRunAgentStatus",
-    "ReviewRunCategory",
+    "ReviewDispatchJob",
+    "ReviewDispatchStatus",
     "ReviewStatus",
     "User",
     "UserStatus",

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import { toast } from "@/components/ui/toast"
 import { ApiError } from "@/lib/api"
+import { LocalProjectCreationError } from "@/lib/desktop-projects"
 import {
   projectCreatedToast,
   projectErrorCopy,
@@ -45,6 +46,14 @@ describe("project feedback", () => {
   it("uses an operation-safe fallback for fetch and create failures", () => {
     expect(projectErrorCopy(new Error("network"), "branches")).toMatchObject({ title: "Could not load branches" })
     expect(projectErrorCopy(new Error("network"), "create")).toMatchObject({ title: "Project could not be created" })
+  })
+
+  it("explains that a local folder is already connected", () => {
+    expect(projectErrorCopy(new LocalProjectCreationError("already_exists"), "create")).toEqual({
+      type: "error",
+      title: "Project already connected",
+      description: "Choose a different folder or open the existing local project.",
+    })
   })
 
   it("shows a single toast for a repository-fetch failure", () => {

@@ -44,14 +44,16 @@ class Agent(Base):
     )
     model_provider: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     model_name: Mapped[str] = mapped_column(sa.Text(), nullable=False)
+    avatar: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+    default_key: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     credential_id: Mapped[UUID | None] = mapped_column(
         PostgreSQLUUID(as_uuid=True), nullable=True
     )
     skills: Mapped[list[object]] = mapped_column(
         JSONB, nullable=False, server_default=sa.text("'[]'::jsonb")
     )
-    fallback_order: Mapped[int] = mapped_column(
-        sa.Integer(), nullable=False, server_default=sa.text("0")
+    configuration_version: Mapped[int] = mapped_column(
+        sa.Integer(), nullable=False, server_default=sa.text("1")
     )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
@@ -70,6 +72,13 @@ class Agent(Base):
 
 sa.Index("agents_owner_created_idx", Agent.owner_id, Agent.created_at.desc())
 sa.Index("agents_owner_credential_idx", Agent.owner_id, Agent.credential_id)
+sa.Index(
+    "agents_owner_default_key_unique",
+    Agent.owner_id,
+    Agent.default_key,
+    unique=True,
+    postgresql_where=Agent.default_key.is_not(None),
+)
 
 
 __all__ = ["Agent"]

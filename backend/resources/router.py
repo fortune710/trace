@@ -14,13 +14,11 @@ from audit.outbox import AuditRecorder
 from auth.audit import AuditHasher
 from auth.config import AuthSettings
 from resources.routes import install_resource_routes
-from resources.services import ReviewDispatcher
 
 
 def build_resource_router(
     settings: AuthSettings,
     audit_hasher: AuditHasher | None = None,
-    dispatcher: ReviewDispatcher | None = None,
     audit_recorder: AuditRecorder | None = None,
 ) -> APIRouter:
     """Build the existing resource handlers without registering old paths.
@@ -36,7 +34,6 @@ def build_resource_router(
         temporary_app,
         settings,
         audit_hasher,
-        dispatcher,
         audit_recorder,
     )
     router = APIRouter()

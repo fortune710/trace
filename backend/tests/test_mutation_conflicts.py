@@ -16,16 +16,16 @@ from auth.errors import ResourceConflict
 from auth.models import AuthUser, UserStatus
 from credentials.models import CredentialKind, CredentialProvider
 from db.rls import principal_transaction
-from db.types import ProjectSourceType
+from db.types import ProjectSourceType, RepositorySource
 from findings.models import Finding, FindingSeverity
 from projects.models import Project
 from remediations.models import Remediation, RemediationStatus
+from resources import services as resource_services
 from resources.services import ArtifactService, ReviewService
 from reviews.models import (
-    ReviewRun,
-    ReviewRunAgent,
-    ReviewRunAgentStatus,
-    ReviewRunCategory,
+    Review,
+    ReviewAgent,
+    ReviewAgentStatus,
     ReviewStatus,
 )
 from users.models import User
@@ -64,17 +64,6 @@ class BlockingCredentialService(CredentialService):
         row = super()._mutation_row(owner_id=owner_id, credential_id=credential_id)
         self._barrier.wait(timeout=10)
         return row
-
-
-class BlockingReviewService(ReviewService):
-    def __init__(self, *, barrier: Barrier, **kwargs: object) -> None:
-        super().__init__(**kwargs)  # type: ignore[arg-type]
-        self._barrier = barrier
-
-    def _read_retry_version(self, *, owner_id: UUID, review_id: UUID) -> int:
-        version = super()._read_retry_version(owner_id=owner_id, review_id=review_id)
-        self._barrier.wait(timeout=10)
-        return version
 
 
 class BlockingArtifactService(ArtifactService):
@@ -211,77 +200,88 @@ def test_credential_revoke_and_rotate_allow_one_concurrent_mutation() -> None:
 
 
 @pytest.mark.integration
-def test_review_retry_allows_one_concurrent_retry_and_future_retry() -> None:
+def test_review_submission_idempotency_allows_one_durable_review() -> None:
     engine = sa.create_engine(_database_url())
     owner_id = uuid4()
     project_id = uuid4()
     agent_id = uuid4()
-    review_id = uuid4()
     try:
         with engine.begin() as connection:
-            _create_user(connection, owner_id, "mutation-review")
+            _create_user(connection, owner_id, "submission-idempotency")
 
         with principal_transaction(engine, owner_id) as connection:
             connection.execute(
                 sa.insert(Project).values(
                     id=project_id,
                     owner_id=owner_id,
-                    name="retry project",
+                    name="idempotency project",
                     source=ProjectSourceType.LOCAL,
-                    local_path_hash=b"retry-project",
+                    local_path_hash=resource_services._local_source_identity_hash(
+                        project_id
+                    ),
+                    source_hash=b"s" * 32,
                 )
             )
             connection.execute(
                 sa.insert(Agent).values(
                     id=agent_id,
                     owner_id=owner_id,
-                    name="retry agent",
+                    name="idempotency agent",
                     review_category="security",
-                    model_provider="trace",
+                    model_provider="openai",
                     model_name="test",
                 )
             )
-            connection.execute(
-                sa.insert(ReviewRun).values(
-                    id=review_id,
-                    owner_id=owner_id,
-                    project_id=project_id,
-                    source_revision="abc123",
-                    status=ReviewStatus.FAILED,
-                )
-            )
-            connection.execute(
-                sa.insert(ReviewRunCategory).values(
-                    owner_id=owner_id,
-                    review_run_id=review_id,
-                    category="security",
-                )
-            )
-            connection.execute(
-                sa.insert(ReviewRunAgent).values(
-                    owner_id=owner_id,
-                    review_run_id=review_id,
-                    agent_id=agent_id,
-                    status=ReviewRunAgentStatus.ASSIGNED,
-                )
-            )
 
-        service = BlockingReviewService(engine=engine, barrier=Barrier(2))
+        service = ReviewService(engine)
         results = _run_concurrently(
             [
-                lambda: service.retry(owner_id=owner_id, review_id=review_id),
-                lambda: service.retry(owner_id=owner_id, review_id=review_id),
+                lambda: service.create(
+                    owner_id=owner_id,
+                    values={
+                        "project_id": project_id,
+                        "agent_ids": [agent_id],
+                        "local_source_snapshot": {
+                            "source_id": project_id,
+                            "integrity_algorithm": "sha256-directory-manifest-v1",
+                            "digest": "a" * 64,
+                        },
+                    },
+                    idempotency_key="same-submission",
+                ),
+                lambda: service.create(
+                    owner_id=owner_id,
+                    values={
+                        "project_id": project_id,
+                        "agent_ids": [agent_id],
+                        "local_source_snapshot": {
+                            "source_id": project_id,
+                            "integrity_algorithm": "sha256-directory-manifest-v1",
+                            "digest": "a" * 64,
+                        },
+                    },
+                    idempotency_key="same-submission",
+                ),
             ]
         )
-        successful = [result for result in results if isinstance(result, dict)]
-        conflicts = [result for result in results if isinstance(result, Exception)]
-        assert len(successful) == 1
-        assert len(conflicts) == 1
-        assert isinstance(conflicts[0], ResourceConflict)
+        assert all(isinstance(result, dict) for result in results)
+        assert (
+            len({result["id"] for result in results if isinstance(result, dict)}) == 1
+        )
 
-        # The original failed review remains retryable for a later operation.
-        later = ReviewService(engine).retry(owner_id=owner_id, review_id=review_id)
-        assert later["status"] == ReviewStatus.QUEUED
+        with principal_transaction(engine, owner_id) as connection:
+            assert (
+                connection.execute(
+                    sa.select(sa.func.count()).select_from(Review)
+                ).scalar_one()
+                == 1
+            )
+            assert (
+                connection.execute(
+                    sa.select(sa.func.count()).select_from(ReviewAgent)
+                ).scalar_one()
+                == 1
+            )
     finally:
         with engine.begin() as connection:
             connection.execute(sa.delete(AuthUser).where(AuthUser.id == owner_id))
@@ -317,39 +317,41 @@ def test_remediation_decision_allows_one_concurrent_mutation() -> None:
                     owner_id=owner_id,
                     name="remediation agent",
                     review_category="security",
-                    model_provider="trace",
+                    model_provider="openai",
                     model_name="test",
                 )
             )
             connection.execute(
-                sa.insert(ReviewRun).values(
+                sa.insert(Review).values(
                     id=review_id,
                     owner_id=owner_id,
                     project_id=project_id,
-                    source_revision="abc123",
+                    source_revision="a" * 64,
+                    source_kind=RepositorySource.LOCAL,
+                    source_identifier="conflict-local-source",
+                    integrity_algorithm="sha256-directory-manifest-v1",
                     status=ReviewStatus.COMPLETED,
                 )
             )
             connection.execute(
-                sa.insert(ReviewRunCategory).values(
+                sa.insert(ReviewAgent).values(
                     owner_id=owner_id,
-                    review_run_id=review_id,
-                    category="security",
-                )
-            )
-            connection.execute(
-                sa.insert(ReviewRunAgent).values(
-                    owner_id=owner_id,
-                    review_run_id=review_id,
+                    review_id=review_id,
                     agent_id=agent_id,
-                    status=ReviewRunAgentStatus.COMPLETED,
+                    agent_display_name="remediation agent",
+                    agent_specialization="security",
+                    agent_model_provider="openai",
+                    agent_model_name="test",
+                    agent_skills=[],
+                    agent_configuration_version=1,
+                    status=ReviewAgentStatus.COMPLETED,
                 )
             )
             connection.execute(
                 sa.insert(Finding).values(
                     id=finding_id,
                     owner_id=owner_id,
-                    review_run_id=review_id,
+                    review_id=review_id,
                     agent_id=agent_id,
                     category="security",
                     severity=FindingSeverity.HIGH,

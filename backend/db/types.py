@@ -34,6 +34,14 @@ class ReviewCategory(str, Enum):
     PRODUCT = "product"
     LEGAL = "legal"
     ACCESSIBILITY = "accessibility"
+    MARKETING = "marketing"
+
+
+class ModelProvider(str, Enum):
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+    GOOGLE = "google"
+    XAI = "xai"
 
 
 class CredentialEncryptionProvider(str, Enum):
