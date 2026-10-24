@@ -11,9 +11,7 @@ from main import create_app
 pytestmark = pytest.mark.integration
 
 
-def _application_connection_count(
-    engine: sa.Engine, application_name: str
-) -> int:
+def _application_connection_count(engine: sa.Engine, application_name: str) -> int:
     with engine.connect() as connection:
         return connection.execute(
             sa.text(
@@ -49,7 +47,9 @@ def test_repeated_app_lifecycles_dispose_cached_postgresql_pools(
                 connection.execute(sa.text("SELECT 1"))
 
             assert get_engine.cache_info().currsize == 0
-            assert _application_connection_count(integration_engine, application_name) == 0
+            assert (
+                _application_connection_count(integration_engine, application_name) == 0
+            )
     finally:
         get_audit_recorder.cache_clear()
         close_cached_engines()

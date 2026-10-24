@@ -21,9 +21,12 @@ def _table_exists(table_name: str) -> bool:
     """Check the current schema without failing on partially provisioned databases."""
     return bool(
         op.get_bind()
-        .execute(sa.text("SELECT to_regclass(:table_name) IS NOT NULL"), {
-            "table_name": f"public.{table_name}",
-        })
+        .execute(
+            sa.text("SELECT to_regclass(:table_name) IS NOT NULL"),
+            {
+                "table_name": f"public.{table_name}",
+            },
+        )
         .scalar()
     )
 
@@ -60,9 +63,7 @@ def downgrade() -> None:
             ),
             nullable=False,
         ),
-        sa.ForeignKeyConstraint(
-            ["owner_id"], ["public.users.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["owner_id"], ["public.users.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             ["owner_id", "review_run_id"],
             ["public.review_runs.owner_id", "public.review_runs.id"],

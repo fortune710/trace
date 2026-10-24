@@ -15,12 +15,19 @@ pub fn run() {
             sql: include_str!("../migrations/002_local_project_uniqueness.sql"),
             kind: tauri_plugin_sql::MigrationKind::Up,
         },
+        tauri_plugin_sql::Migration {
+            version: 3,
+            description: "allow local projects to retain a backend identity",
+            sql: include_str!("../migrations/003_local_project_api_identity.sql"),
+            kind: tauri_plugin_sql::MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             folder_picker::pick_local_folder,
-            folder_picker::validate_local_folder
+            folder_picker::validate_local_folder,
+            folder_picker::capture_local_source_snapshot
         ])
         .plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {}))
         .plugin(tauri_plugin_deep_link::init())

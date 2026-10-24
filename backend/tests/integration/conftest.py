@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -229,18 +230,21 @@ def local_project_factory():
     def create(
         account: TestAccount, *, name: str = "integration-project"
     ) -> dict[str, Any]:
+        source_id = uuid4()
         response = account.request(
             "POST",
             "/api/v1/projects",
             json={
                 "name": name,
                 "source": "local",
-                "local_path_hash": (uuid4().hex + uuid4().hex)[:64],
+                "local_path_hash": hashlib.sha256(
+                    b"trace-local-source-id-v1\0" + str(source_id).encode("ascii")
+                ).hexdigest(),
                 "source_hash": (uuid4().hex + uuid4().hex)[:64],
             },
         )
         assert response.status_code == 201, response.text
-        return response.json()
+        return {**response.json(), "_local_source_id": str(source_id)}
 
     return create
 
@@ -324,7 +328,7 @@ def agent_factory():
 def review_factory():
     def create(
         account: TestAccount,
-        project_id: UUID,
+        project: dict[str, Any],
         agent_ids: list[UUID],
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
@@ -332,8 +336,13 @@ def review_factory():
             "POST",
             "/api/v1/reviews",
             json={
-                "project_id": str(project_id),
+                "project_id": str(project["id"]),
                 "agent_ids": [str(agent_id) for agent_id in agent_ids],
+                "local_source_snapshot": {
+                    "source_id": project["_local_source_id"],
+                    "integrity_algorithm": "sha256-directory-manifest-v1",
+                    "digest": "a" * 64,
+                },
             },
             headers={"Idempotency-Key": idempotency_key or str(uuid4())},
         )
@@ -359,7 +368,10 @@ def artifact_graph_factory(integration_engine):
                     id=review_id,
                     owner_id=account.user_id,
                     project_id=project_id,
-                    source_revision="integration-revision",
+                    source_revision="a" * 64,
+                    source_kind=RepositorySource.LOCAL,
+                    source_identifier="integration-local-source",
+                    integrity_algorithm="sha256-directory-manifest-v1",
                     status=ReviewStatus.COMPLETED,
                 )
             )
@@ -368,6 +380,12 @@ def artifact_graph_factory(integration_engine):
                     owner_id=account.user_id,
                     review_id=review_id,
                     agent_id=agent_id,
+                    agent_display_name="integration agent",
+                    agent_specialization="security",
+                    agent_model_provider="openai",
+                    agent_model_name="gpt-6.1-sol",
+                    agent_skills=[],
+                    agent_configuration_version=1,
                     status=ReviewAgentStatus.COMPLETED,
                 )
             )

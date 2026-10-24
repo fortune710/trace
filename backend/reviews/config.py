@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,3 +23,46 @@ class ReviewDispatchSettings(BaseSettings):
             raise RuntimeError("Review dispatch RabbitMQ configuration is incomplete")
         if self.retry_max_seconds < self.retry_base_seconds:
             raise RuntimeError("Review dispatch retry configuration is invalid")
+
+
+class AgentExecutionSettings(BaseSettings):
+    """Configuration for mandatory-traced model execution."""
+
+    rabbitmq_url: str | None = Field(
+        default=None, validation_alias="REVIEW_RABBITMQ_URL"
+    )
+    langsmith_tracing: bool = Field(default=False, validation_alias="LANGSMITH_TRACING")
+    langsmith_api_key: SecretStr | None = Field(
+        default=None, validation_alias="LANGSMITH_API_KEY"
+    )
+    langsmith_endpoint: str | None = Field(
+        default=None, validation_alias="LANGSMITH_ENDPOINT"
+    )
+    langsmith_project: str = Field(
+        default="trace", validation_alias="LANGSMITH_PROJECT"
+    )
+    openai_api_key: SecretStr | None = Field(
+        default=None, validation_alias="AGENT_OPENAI_API_KEY"
+    )
+    anthropic_api_key: SecretStr | None = Field(
+        default=None, validation_alias="AGENT_ANTHROPIC_API_KEY"
+    )
+    google_api_key: SecretStr | None = Field(
+        default=None, validation_alias="AGENT_GOOGLE_API_KEY"
+    )
+    xai_api_key: SecretStr | None = Field(
+        default=None, validation_alias="AGENT_XAI_API_KEY"
+    )
+
+    model_config = SettingsConfigDict(extra="ignore")
+
+    def validate_for_execution(self) -> None:
+        if not self.rabbitmq_url or len(self.rabbitmq_url) > 2_048:
+            raise RuntimeError("Review execution RabbitMQ configuration is incomplete")
+        if not self.langsmith_tracing:
+            raise RuntimeError("LangSmith tracing is required for agent execution")
+        if (
+            self.langsmith_api_key is None
+            or not self.langsmith_api_key.get_secret_value()
+        ):
+            raise RuntimeError("LangSmith API key is required for agent execution")

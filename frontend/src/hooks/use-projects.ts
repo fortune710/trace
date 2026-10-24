@@ -90,7 +90,9 @@ export function useProject(projectId: string | undefined) {
     queryKey: [...projectsQueryKey, "desktop", "detail", accountId, projectId],
     queryFn: async () => {
       const database = await getLocalProjectsDatabase()
-      const project = await database.get(accountId!, projectId!)
+      const project =
+        (await database.get(accountId!, projectId!)) ??
+        (await database.getByApiProjectId(accountId!, projectId!))
       return project ? toProjectResponse(project) : null
     },
     enabled: runtime.isTauri && Boolean(accountId) && Boolean(projectId) && sync.isReady,

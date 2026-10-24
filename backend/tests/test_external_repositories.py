@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+from datetime import UTC, datetime, timedelta
 from email.message import Message
 from uuid import uuid4
 
@@ -268,6 +269,67 @@ def test_repository_logs_contain_safe_provider_metadata_only(
     assert "Authorization" not in caplog.text
 
 
+def test_repository_service_refreshes_an_expired_github_access_token(
+    monkeypatch,
+) -> None:
+    owner_id = uuid4()
+    credential_id = uuid4()
+    captured: dict[str, object] = {}
+
+    class FakeCredentialMetadata:
+        provider = CredentialProvider.GITHUB
+
+    class FakeCredentialService:
+        def metadata(self, *, owner_id, credential_id):
+            return FakeCredentialMetadata()
+
+        def decrypt_for_provider_call(self, *, owner_id, credential_id):
+            return {
+                "access_token": "expired-token",
+                "access_token_expires_at": (
+                    datetime.now(UTC) - timedelta(minutes=1)
+                ).isoformat(),
+            }
+
+    class FakeGitHubClient:
+        def list_repositories(self, *, access_token, page, page_size):
+            captured["access_token"] = access_token
+            return RepositoryPageResult(items=[], next_page=None)
+
+    def fake_refresh(**kwargs):
+        captured["refresh"] = kwargs
+        return {"access_token": "refreshed-token"}
+
+    monkeypatch.setattr(
+        "external_repositories.service._active_connection",
+        lambda *_args, **_kwargs: {"credential_id": credential_id},
+    )
+    monkeypatch.setattr("auth.oauth.refresh_github_credential", fake_refresh)
+    credential_service = FakeCredentialService()
+    settings = AuthSettings()
+    service = RepositoryService(
+        engine=object(),
+        credential_service=credential_service,
+        settings=settings,
+        github_client=FakeGitHubClient(),
+    )
+
+    service.list_repositories(
+        owner_id=owner_id,
+        source="github",
+        page=1,
+        page_size=50,
+    )
+
+    assert captured["access_token"] == "refreshed-token"
+    assert captured["refresh"] == {
+        "service": credential_service,
+        "settings": settings,
+        "owner_id": owner_id,
+        "credential_id": credential_id,
+    }
+
+
 def test_repository_service_create_branch_uses_owner_credential_and_base_sha(
     monkeypatch,
 ) -> None:
@@ -405,14 +467,18 @@ def _catalog_service(monkeypatch, github_client):
         RepositoryService(
             engine=object(),
             credential_service=FakeCredentialService(),
-            settings=type("Settings", (), {"github_api_url": "https://github.example"})(),
+            settings=type(
+                "Settings", (), {"github_api_url": "https://github.example"}
+            )(),
             github_client=github_client,
         ),
         owner_id,
     )
 
 
-def test_repository_query_uses_a_bounded_owner_scoped_catalog_cache(monkeypatch) -> None:
+def test_repository_query_uses_a_bounded_owner_scoped_catalog_cache(
+    monkeypatch,
+) -> None:
     class FakeGitHubClient:
         repository_calls = 0
 
@@ -494,7 +560,9 @@ def test_branch_query_uses_a_separate_catalog_cache(monkeypatch) -> None:
                 web_url="https://github.com/trace-labs/trace-dashboard",
             )
 
-        def list_branches(self, *, access_token, repository, page, page_size, query=None):
+        def list_branches(
+            self, *, access_token, repository, page, page_size, query=None
+        ):
             self.branch_calls += 1
             assert (page, page_size, query) == (1, 100, None)
             return RepositoryPageResult(
@@ -599,9 +667,12 @@ def test_repository_routes_expose_a_bounded_query_parameter() -> None:
 
     for path in ("/repositories", "/repositories/{repository_identifier}/branches"):
         parameters = {
-            parameter["name"]: parameter for parameter in paths[path]["get"]["parameters"]
+            parameter["name"]: parameter
+            for parameter in paths[path]["get"]["parameters"]
         }
-        assert {item.get("maxLength") for item in parameters["query"]["schema"]["anyOf"]} == {
+        assert {
+            item.get("maxLength") for item in parameters["query"]["schema"]["anyOf"]
+        } == {
             100,
             None,
         }

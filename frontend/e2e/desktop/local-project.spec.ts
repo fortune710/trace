@@ -3,13 +3,14 @@ import { createWriteStream } from "node:fs"
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
+import { fileURLToPath } from "node:url"
 import path from "node:path"
 
 import { assertPathFree } from "../../src/test/path-redaction"
 import { startDesktopTestApi } from "./test-api"
 import { WebDriverClient } from "./webdriver"
 
-const frontendDirectory = path.resolve(import.meta.dir, "../..")
+const frontendDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const repositoryDirectory = path.resolve(frontendDirectory, "..")
 
 type DesktopDriver = {

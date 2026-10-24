@@ -162,6 +162,7 @@ export function useLocalFolderPicker(): UseLocalFolderPickerResult {
         canonicalPath: nativeSelection.canonicalPath,
         availability: "available",
         lastValidatedAt: new Date().toISOString(),
+        apiProjectId: null,
       })
 
       const previousSourceId = sourceIdRef.current

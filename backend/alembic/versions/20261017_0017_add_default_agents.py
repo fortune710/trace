@@ -20,9 +20,12 @@ depends_on = None
 def _relation_exists(relation_name: str) -> bool:
     return bool(
         op.get_bind()
-        .execute(sa.text("SELECT to_regclass(:relation_name) IS NOT NULL"), {
-            "relation_name": relation_name,
-        })
+        .execute(
+            sa.text("SELECT to_regclass(:relation_name) IS NOT NULL"),
+            {
+                "relation_name": relation_name,
+            },
+        )
         .scalar()
     )
 

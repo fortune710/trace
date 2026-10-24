@@ -8,6 +8,14 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
+def _local_snapshot(project: dict[str, object]) -> dict[str, str]:
+    return {
+        "source_id": str(project["_local_source_id"]),
+        "integrity_algorithm": "sha256-directory-manifest-v1",
+        "digest": "a" * 64,
+    }
+
+
 def test_review_owner_can_queue_and_cancel_explicit_assignments(
     account_pair,
     local_project_factory,
@@ -21,7 +29,7 @@ def test_review_owner_can_queue_and_cancel_explicit_assignments(
 
     review = review_factory(
         owner,
-        project_id=project["id"],
+        project=project,
         agent_ids=[
             first_agent["id"],
             second_agent["id"],
@@ -54,8 +62,8 @@ def test_one_agent_can_be_reused_and_foreign_review_access_is_denied(
     owner, other = account_pair
     project = local_project_factory(owner)
     agent = agent_factory(owner)
-    first = review_factory(owner, project["id"], [agent["id"]])
-    second = review_factory(owner, project["id"], [agent["id"]])
+    first = review_factory(owner, project, [agent["id"]])
+    second = review_factory(owner, project, [agent["id"]])
     assert first["id"] != second["id"]
 
     for method, path, body in (
@@ -111,6 +119,7 @@ def test_review_rejects_foreign_project_and_foreign_agent(
         json={
             "project_id": owner_project["id"],
             "agent_ids": [foreign_agent["id"]],
+            "local_source_snapshot": _local_snapshot(owner_project),
         },
         headers={"Idempotency-Key": str(UUID(int=2))},
     )
@@ -130,6 +139,7 @@ def test_review_submission_validates_request_source_state_and_idempotency(
     body = {
         "project_id": project["id"],
         "agent_ids": [first_agent["id"], second_agent["id"]],
+        "local_source_snapshot": _local_snapshot(project),
     }
 
     missing_key = owner.request("POST", "/api/v1/reviews", json=body)
@@ -177,7 +187,7 @@ def test_review_submission_validates_request_source_state_and_idempotency(
         headers={"Idempotency-Key": "review-submission"},
     )
     assert created.status_code == 202
-    assert created.json()["source_revision"] == project["source_hash"]
+    assert created.json()["source_revision"] == "a" * 64
     assert len(created.json()["agents"]) == 2
 
     replayed = owner.request(
@@ -186,6 +196,7 @@ def test_review_submission_validates_request_source_state_and_idempotency(
         json={
             "project_id": project["id"],
             "agent_ids": [second_agent["id"], first_agent["id"]],
+            "local_source_snapshot": _local_snapshot(project),
         },
         headers={"Idempotency-Key": "review-submission"},
     )
@@ -195,7 +206,11 @@ def test_review_submission_validates_request_source_state_and_idempotency(
     conflicting_reuse = owner.request(
         "POST",
         "/api/v1/reviews",
-        json={"project_id": project["id"], "agent_ids": [first_agent["id"]]},
+        json={
+            "project_id": project["id"],
+            "agent_ids": [first_agent["id"]],
+            "local_source_snapshot": _local_snapshot(project),
+        },
         headers={"Idempotency-Key": "review-submission"},
     )
     assert conflicting_reuse.status_code == 409
@@ -203,7 +218,11 @@ def test_review_submission_validates_request_source_state_and_idempotency(
     distinct_submission = owner.request(
         "POST",
         "/api/v1/reviews",
-        json={"project_id": project["id"], "agent_ids": [first_agent["id"]]},
+        json={
+            "project_id": project["id"],
+            "agent_ids": [first_agent["id"]],
+            "local_source_snapshot": _local_snapshot(project),
+        },
         headers={"Idempotency-Key": "review-submission-2"},
     )
     assert distinct_submission.status_code == 202
@@ -230,7 +249,11 @@ def test_review_submission_rejects_missing_resources_and_unusable_owned_state(
     missing_agent = owner.request(
         "POST",
         "/api/v1/reviews",
-        json={"project_id": project["id"], "agent_ids": [str(uuid4())]},
+        json={
+            "project_id": project["id"],
+            "agent_ids": [str(uuid4())],
+            "local_source_snapshot": _local_snapshot(project),
+        },
         headers={"Idempotency-Key": "missing-agent"},
     )
     assert missing_agent.status_code == 404
@@ -264,7 +287,11 @@ def test_review_submission_rejects_missing_resources_and_unusable_owned_state(
     disabled_agent = owner.request(
         "POST",
         "/api/v1/reviews",
-        json={"project_id": project["id"], "agent_ids": [agent["id"]]},
+        json={
+            "project_id": project["id"],
+            "agent_ids": [agent["id"]],
+            "local_source_snapshot": _local_snapshot(project),
+        },
         headers={"Idempotency-Key": "disabled-agent"},
     )
     assert disabled_agent.status_code == 409
@@ -275,7 +302,11 @@ def test_review_submission_rejects_missing_resources_and_unusable_owned_state(
     archived_project = owner.request(
         "POST",
         "/api/v1/reviews",
-        json={"project_id": project["id"], "agent_ids": [replacement_agent["id"]]},
+        json={
+            "project_id": project["id"],
+            "agent_ids": [replacement_agent["id"]],
+            "local_source_snapshot": _local_snapshot(project),
+        },
         headers={"Idempotency-Key": "archived-project"},
     )
     assert archived_project.status_code == 409
@@ -298,6 +329,7 @@ def test_review_validation_uses_project_then_requested_agent_order_without_write
         json={
             "project_id": project["id"],
             "agent_ids": [foreign_agent["id"], missing_agent],
+            "local_source_snapshot": _local_snapshot(project),
         },
         headers={"Idempotency-Key": "foreign-before-missing"},
     )
@@ -311,6 +343,7 @@ def test_review_validation_uses_project_then_requested_agent_order_without_write
         json={
             "project_id": project["id"],
             "agent_ids": [missing_agent, foreign_agent["id"]],
+            "local_source_snapshot": _local_snapshot(project),
         },
         headers={"Idempotency-Key": "missing-before-foreign"},
     )
@@ -380,7 +413,11 @@ def test_review_response_never_exposes_submission_secret_or_local_path(
     created = owner.request(
         "POST",
         "/api/v1/reviews",
-        json={"project_id": project["id"], "agent_ids": [agent["id"]]},
+        json={
+            "project_id": project["id"],
+            "agent_ids": [agent["id"]],
+            "local_source_snapshot": _local_snapshot(project),
+        },
         headers={"Idempotency-Key": raw_key},
     )
     assert created.status_code == 202
@@ -419,7 +456,7 @@ def test_review_audits_are_allowlisted_and_never_echo_submission_values(
 
     created = review_factory(
         owner,
-        project_id=project["id"],
+        project=project,
         agent_ids=[agent["id"]],
         idempotency_key=raw_idempotency_key,
     )

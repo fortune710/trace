@@ -5,6 +5,16 @@ The `source` query parameter is required on every repository route. GitHub is
 the only supported source today; future providers must implement the same
 provider boundary before being added to the accepted values.
 
+## GitHub OAuth scope
+
+GitHub sign-in requests `read:user user:email`. Repository connection requests
+`read:user user:email repo`. GitHub's classic OAuth `repo` scope grants the
+private-repository read and branch-write access required by this flow;
+`public_repo` excludes private repositories. Trace limits its use to the
+authenticated owner's repository connection and keeps the token inside the
+backend credential boundary. GitHub Apps use fine-grained installed permissions
+instead of OAuth scopes. See [GitHub's OAuth scope reference](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps).
+
 ## Routes
 
 ### `GET /api/v1/repositories?source=github&page=1&page_size=50`

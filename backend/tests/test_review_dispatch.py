@@ -17,6 +17,8 @@ from reviews.dispatch import (
     REVIEW_DISPATCH_EXCHANGE,
     REVIEW_DISPATCH_QUEUE,
     REVIEW_DISPATCH_ROUTING_KEY,
+    REVIEW_EXECUTION_DEAD_LETTER_QUEUE,
+    REVIEW_EXECUTION_DLX,
     RabbitMQReviewPublisher,
     ReviewDispatchWorker,
     ReviewQueueUnavailable,
@@ -112,18 +114,25 @@ def test_review_dispatch_topology_is_durable_and_versioned() -> None:
 
     assert {item.get("exchange") for item in channel.declarations} == {
         REVIEW_DISPATCH_EXCHANGE,
+        REVIEW_EXECUTION_DLX,
         None,
     }
-    assert channel.declarations[1] == {
+    assert channel.declarations[2] == {
         "queue": REVIEW_DISPATCH_QUEUE,
         "durable": True,
+        "arguments": {"x-dead-letter-exchange": REVIEW_EXECUTION_DLX},
     }
     assert channel.bindings == [
+        {
+            "queue": REVIEW_EXECUTION_DEAD_LETTER_QUEUE,
+            "exchange": REVIEW_EXECUTION_DLX,
+            "routing_key": "",
+        },
         {
             "queue": REVIEW_DISPATCH_QUEUE,
             "exchange": REVIEW_DISPATCH_EXCHANGE,
             "routing_key": REVIEW_DISPATCH_ROUTING_KEY,
-        }
+        },
     ]
 
 
@@ -178,7 +187,9 @@ def _assert_review_audit_payload_is_safe(value: object) -> None:
         assert forbidden not in encoded
 
 
-def test_review_resource_audit_events_are_allowlisted_for_submission_and_cancellation() -> None:
+def test_review_resource_audit_events_are_allowlisted_for_submission_and_cancellation() -> (
+    None
+):
     recorder = RecordingAuditRecorder()
     request = _request("/api/v1/reviews", owner_id=OWNER_ID)
 
@@ -260,7 +271,9 @@ def test_review_submission_rejection_audit_is_allowlisted() -> None:
     _assert_review_audit_payload_is_safe([response.json(), recorder.events])
 
 
-def test_review_dispatch_audit_events_contain_only_allowlisted_operational_data() -> None:
+def test_review_dispatch_audit_events_contain_only_allowlisted_operational_data() -> (
+    None
+):
     recorder = RecordingAuditRecorder()
     worker = ReviewDispatchWorker(
         engine=cast(Any, object()),

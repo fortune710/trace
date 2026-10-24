@@ -12,6 +12,7 @@ try {
   const migrationFiles = [
     "../../frontend/src-tauri/migrations/001_desktop_projects.sql",
     "../../frontend/src-tauri/migrations/002_local_project_uniqueness.sql",
+    "../../frontend/src-tauri/migrations/003_local_project_api_identity.sql",
   ]
 
   for (const migrationFile of migrationFiles) {
@@ -41,6 +42,16 @@ try {
 
   assert.equal(count("local_sources", "account-a"), 1)
   assert.equal(count("desktop_projects", "account-a"), 1)
+
+  database.exec(
+    "UPDATE desktop_projects SET api_project_id = 'backend-local-a' WHERE id = 'local:a'",
+  )
+  assert.equal(
+    database
+      .query("SELECT api_project_id FROM desktop_projects WHERE id = 'local:a'")
+      .get()?.api_project_id,
+    "backend-local-a",
+  )
   assert.equal(count("local_sources", "account-b"), 0)
   assert.equal(count("desktop_projects", "account-b"), 0)
 

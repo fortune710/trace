@@ -208,6 +208,7 @@ class AgentResponse(RequestModel):
     avatar: str | None
     skills: list[dict[str, object] | str]
     credential_id: UUID | None
+    configuration_version: int
     created_at: datetime
     updated_at: datetime
     disabled_at: datetime | None
@@ -233,9 +234,18 @@ class AgentModelCatalogResponse(RequestModel):
     providers: list[AgentModelProviderOption]
 
 
+class LocalSourceSnapshot(RequestModel):
+    source_id: UUID
+    integrity_algorithm: Annotated[
+        str, StringConstraints(pattern=r"^sha256-directory-manifest-v1$")
+    ]
+    digest: HashString
+
+
 class ReviewCreate(RequestModel):
     project_id: UUID
     agent_ids: list[UUID] = Field(min_length=1, max_length=100)
+    local_source_snapshot: LocalSourceSnapshot | None = None
 
     @model_validator(mode="after")
     def validate_unique_values(self) -> ReviewCreate:
@@ -244,11 +254,24 @@ class ReviewCreate(RequestModel):
         return self
 
 
+class ReviewSourceSnapshotResponse(RequestModel):
+    source_kind: RepositorySource
+    source_identifier: str
+    integrity_algorithm: str
+    revision: str
+    captured_at: datetime
+
+
 class ReviewAgentResponse(RequestModel):
     assignment_id: UUID
     agent_id: UUID
     name: str
     review_category: ReviewCategory
+    model_provider: str
+    model_name: str
+    personality: str | None
+    skills: list[dict[str, object] | str]
+    configuration_version: int
     status: ReviewAgentStatus
     assigned_at: datetime
     started_at: datetime | None
@@ -259,6 +282,7 @@ class ReviewResponse(RequestModel):
     id: UUID
     project_id: UUID
     source_revision: str
+    source_snapshot: ReviewSourceSnapshotResponse
     status: ReviewStatus
     started_at: datetime | None
     completed_at: datetime | None
