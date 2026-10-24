@@ -16,13 +16,15 @@ from langsmith.run_helpers import tracing_context
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
+from agents.execution.agent import Agent, FindingOutput, ReviewTarget
 from agents.execution.orchestrator import OrchestratorAgent
 from agents.execution.redaction import redact_text
-from agents.execution.runtime import Agent, FindingOutput, ReviewTarget
+from agents.execution.tools import ToolExecutionContext
 from auth.credential_service import CredentialService, CredentialServiceError
 from auth.uuids import uuid7
 from credentials.models import CredentialProvider
 from db.rls import principal_transaction
+from external_repositories.service import RepositoryService
 from findings.models import Finding
 from reviews.config import AgentExecutionSettings
 from reviews.models import (
@@ -63,10 +65,12 @@ class ReviewExecutionService:
         *,
         engine: Engine,
         credential_service: CredentialService,
+        repository_service: RepositoryService,
         settings: AgentExecutionSettings,
     ) -> None:
         self._engine = engine
         self._credential_service = credential_service
+        self._repository_service = repository_service
         self._settings = settings
         self._settings.validate_for_execution()
         langsmith_api_key = self._settings.langsmith_api_key
@@ -118,12 +122,20 @@ class ReviewExecutionService:
                     source_identifier=review.source_identifier,
                     source_revision=review.source_revision,
                 )
+                tool_context = ToolExecutionContext(
+                    owner_id=owner_id,
+                    source_kind=review.source_kind.value,
+                    source_identifier=review.source_identifier,
+                    source_revision=review.source_revision,
+                    repository_service=self._repository_service,
+                )
                 for selected_agent in selected_agent_executions:
                     self._execute_selected_agent(
                         owner_id=owner_id,
                         review=review,
                         selected_agent=selected_agent,
                         review_target=review_target,
+                        tool_context=tool_context,
                         dispatch_id=dispatch_id,
                     )
             self._finalize_review_status(owner_id=owner_id, review_id=review_id)
@@ -205,6 +217,7 @@ class ReviewExecutionService:
         review: Review,
         selected_agent: SelectedAgentExecution,
         review_target: ReviewTarget,
+        tool_context: ToolExecutionContext,
         dispatch_id: UUID,
     ) -> None:
         review_agent = selected_agent.review_agent
@@ -222,6 +235,7 @@ class ReviewExecutionService:
             )
             finding_batch = self._orchestrator.run(
                 review_target=review_target,
+                tool_context=tool_context,
                 agents=(runtime_agent,),
             )[0]
             self._persist_findings(

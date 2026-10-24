@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 from datetime import UTC, datetime, timedelta
@@ -119,6 +120,58 @@ def test_github_client_creates_branch_from_exact_commit(monkeypatch) -> None:
             ).encode("utf-8"),
         )
     ]
+
+
+def test_github_client_reads_paths_and_files_at_an_immutable_revision(
+    monkeypatch,
+) -> None:
+    requests: list[str] = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(request.full_url)
+        if "/git/trees/" in request.full_url:
+            return _response(
+                {
+                    "truncated": False,
+                    "tree": [
+                        {"path": "README.md", "type": "blob"},
+                        {"path": "backend/main.py", "type": "blob"},
+                        {"path": "backend", "type": "tree"},
+                    ],
+                }
+            )
+        return _response(
+            {
+                "type": "file",
+                "encoding": "base64",
+                "content": base64.b64encode(b"print('ready')\n").decode("ascii"),
+            }
+        )
+
+    monkeypatch.setattr("external_repositories.service.urlopen", fake_urlopen)
+    client = GitHubClient(base_url="https://github.example.test")
+    repository = client._repository_record(_repository_payload())
+    revision = "a" * 40
+
+    paths, truncated = client.list_paths_at_revision(
+        access_token="synthetic-token",
+        repository=repository,
+        revision=revision,
+        path_prefix="backend",
+        max_results=10,
+    )
+    contents = client.read_file_at_revision(
+        access_token="synthetic-token",
+        repository=repository,
+        revision=revision,
+        path="backend/main.py",
+    )
+
+    assert paths == ["backend/main.py"]
+    assert truncated is False
+    assert contents == "print('ready')\n"
+    assert f"/git/trees/{revision}?recursive=1" in requests[0]
+    assert f"/contents/backend/main.py?ref={revision}" in requests[1]
 
 
 def test_repository_service_rejects_invalid_branch_base_revision() -> None:

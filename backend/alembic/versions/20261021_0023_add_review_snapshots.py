@@ -109,20 +109,14 @@ def upgrade() -> None:
         )
         """
     )
-    # NB: one trigger function shared by both tables cannot work: PL/pgSQL
-    # resolves NEW/OLD field references against the first table's row type
-    # the function is planned with, so an UPDATE on reviews failed with
-    # 'record "new" has no field "agent_id"' (and vice versa for
-    # source_revision on review_agents). Keep one function per table, each
-    # referencing only its own table's columns.
     op.execute(
         """
-        CREATE OR REPLACE FUNCTION public.trace_prevent_review_source_mutation()
+        CREATE OR REPLACE FUNCTION public.trace_prevent_review_snapshot_mutation()
         RETURNS trigger
         LANGUAGE plpgsql
         AS $function$
         BEGIN
-          IF (
+          IF TG_TABLE_NAME = 'reviews' AND (
             NEW.source_revision IS DISTINCT FROM OLD.source_revision OR
             NEW.source_kind IS DISTINCT FROM OLD.source_kind OR
             NEW.source_identifier IS DISTINCT FROM OLD.source_identifier OR
@@ -131,18 +125,7 @@ def upgrade() -> None:
           ) THEN
             RAISE EXCEPTION 'review source snapshot is immutable';
           END IF;
-          RETURN NEW;
-        END
-        $function$;
-        CREATE TRIGGER reviews_snapshot_immutable
-          BEFORE UPDATE ON public.reviews
-          FOR EACH ROW EXECUTE FUNCTION public.trace_prevent_review_source_mutation();
-        CREATE OR REPLACE FUNCTION public.trace_prevent_review_agent_snapshot_mutation()
-        RETURNS trigger
-        LANGUAGE plpgsql
-        AS $function$
-        BEGIN
-          IF (
+          IF TG_TABLE_NAME = 'review_agents' AND (
             NEW.agent_id IS DISTINCT FROM OLD.agent_id OR
             NEW.agent_display_name IS DISTINCT FROM OLD.agent_display_name OR
             NEW.agent_specialization IS DISTINCT FROM OLD.agent_specialization OR
@@ -157,21 +140,13 @@ def upgrade() -> None:
           RETURN NEW;
         END
         $function$;
+        CREATE TRIGGER reviews_snapshot_immutable
+          BEFORE UPDATE ON public.reviews
+          FOR EACH ROW EXECUTE FUNCTION public.trace_prevent_review_snapshot_mutation();
         CREATE TRIGGER review_agents_snapshot_immutable
           BEFORE UPDATE ON public.review_agents
-          FOR EACH ROW EXECUTE FUNCTION public.trace_prevent_review_agent_snapshot_mutation();
+          FOR EACH ROW EXECUTE FUNCTION public.trace_prevent_review_snapshot_mutation();
         """
-    )
-    # The app (trace_app) and worker (trace_internal) roles both touch
-    # attempt rows; default privileges cover trace_app only, so grant both
-    # explicitly, as 0020 did for private.review_dispatch_jobs.
-    op.execute(
-        "GRANT SELECT, INSERT, UPDATE, DELETE "
-        "ON private.review_agent_attempts TO trace_app"
-    )
-    op.execute(
-        "GRANT SELECT, INSERT, UPDATE, DELETE "
-        "ON private.review_agent_attempts TO trace_internal"
     )
 
 
@@ -180,10 +155,6 @@ def downgrade() -> None:
         "DROP TRIGGER IF EXISTS review_agents_snapshot_immutable ON public.review_agents"
     )
     op.execute("DROP TRIGGER IF EXISTS reviews_snapshot_immutable ON public.reviews")
-    op.execute(
-        "DROP FUNCTION IF EXISTS public.trace_prevent_review_agent_snapshot_mutation()"
-    )
-    op.execute("DROP FUNCTION IF EXISTS public.trace_prevent_review_source_mutation()")
     op.execute(
         "DROP FUNCTION IF EXISTS public.trace_prevent_review_snapshot_mutation()"
     )

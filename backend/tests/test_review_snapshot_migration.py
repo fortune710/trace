@@ -39,14 +39,7 @@ def _contract_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[sa.Engine]:
         with admin_engine.connect() as connection:
             connection.execute(sa.text(f'CREATE DATABASE "{database_name}"'))
         contract_url = migration_url.set(database=database_name)
-        # NB: str(URL) masks the password with "***" (SQLAlchemy renders
-        # passwords hidden by default), so pass the URL through with the
-        # password intact or Alembic connects with a literal "***" password
-        # and Postgres rejects it with "password authentication failed".
-        monkeypatch.setenv(
-            "MIGRATION_DATABASE_URL",
-            contract_url.render_as_string(hide_password=False),
-        )
+        monkeypatch.setenv("MIGRATION_DATABASE_URL", str(contract_url))
         command.upgrade(_alembic_config(), _PRE_SNAPSHOT_REVISION)
         engine = sa.create_engine(contract_url)
         yield engine

@@ -8,13 +8,15 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-from agents.execution.runtime import Agent, FindingBatch, ReviewTarget
+from agents.execution.agent import Agent, FindingBatch, ReviewTarget
+from agents.execution.tools import ToolExecutionContext
 
 
 class ReviewGraphState(TypedDict):
     """State owned by the orchestrator agent."""
 
     review_target: ReviewTarget
+    tool_context: ToolExecutionContext
     agents: tuple[Agent, ...]
     results: Annotated[list[FindingBatch], operator.add]
 
@@ -23,6 +25,7 @@ class ReviewSubagentState(TypedDict):
     """The isolated state passed to one spawned review subagent."""
 
     review_target: ReviewTarget
+    tool_context: ToolExecutionContext
     agent: Agent
 
 
@@ -37,12 +40,17 @@ class OrchestratorAgent:
         self._graph = graph.compile()
 
     def run(
-        self, *, review_target: ReviewTarget, agents: tuple[Agent, ...]
+        self,
+        *,
+        review_target: ReviewTarget,
+        tool_context: ToolExecutionContext,
+        agents: tuple[Agent, ...],
     ) -> list[FindingBatch]:
         """Delegate the prepared source to exactly the selected runtime agents."""
         state = self._graph.invoke(
             {
                 "review_target": review_target,
+                "tool_context": tool_context,
                 "agents": agents,
                 "results": [],
             }
@@ -57,6 +65,7 @@ class OrchestratorAgent:
                 "run_review_subagent",
                 {
                     "review_target": state["review_target"],
+                    "tool_context": state["tool_context"],
                     "agent": agent,
                 },
             )
@@ -68,7 +77,14 @@ class OrchestratorAgent:
         state: ReviewSubagentState,
     ) -> dict[str, list[FindingBatch]]:
         """Return this subagent's validated findings to the orchestrator."""
-        return {"results": [state["agent"].run(review_target=state["review_target"])]}
+        return {
+            "results": [
+                state["agent"].run(
+                    review_target=state["review_target"],
+                    tool_context=state["tool_context"],
+                )
+            ]
+        }
 
 
 # Preserve the initial public name for callers that adopted it before the

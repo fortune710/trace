@@ -11,6 +11,7 @@ from auth.config import AuthSettings
 from auth.credential_service import CredentialService
 from auth.credentials import credential_cipher_from_settings
 from db.session import get_engine
+from external_repositories.service import RepositoryService
 from reviews.config import AgentExecutionSettings
 from reviews.dispatch import (
     REVIEW_DISPATCH_QUEUE,
@@ -31,9 +32,15 @@ def run() -> None:
     credentials = CredentialService(
         engine=engine, cipher=credential_cipher_from_settings(auth_settings)
     )
+    repository_service = RepositoryService(
+        engine=engine,
+        credential_service=credentials,
+        settings=auth_settings,
+    )
     service = ReviewExecutionService(
         engine=engine,
         credential_service=credentials,
+        repository_service=repository_service,
         settings=execution_settings,
     )
     connection = _open_connection(execution_settings.rabbitmq_url or "")
