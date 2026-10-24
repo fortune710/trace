@@ -1,5 +1,7 @@
 .env
+.env.production
 .ci.env
+production-secrets/
 frontend/.env.*.local
 frontend/.env.local
 node_modules

@@ -30,4 +30,8 @@ fi
 
 # Dependencies must be installed explicitly with `uv sync --locked`; startup never
 # downloads packages or changes the lockfile.
+if [[ "${AUTH_ENVIRONMENT:-development}" == "production" ]]; then
+  exec uv run --offline --no-sync --locked uvicorn main:app --host 0.0.0.0 --port 8000
+fi
+
 exec uv run --offline --no-sync --locked uvicorn main:app --reload --host 0.0.0.0 --port 8000
