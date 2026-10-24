@@ -69,8 +69,8 @@ jobs:
           $edge = Get-Item 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' -ErrorAction SilentlyContinue
           if (-not $edge) { $edge = Get-Item 'C:\Program Files\Microsoft\Edge\Application\msedge.exe' }
           $version = $edge.VersionInfo.ProductVersion
-          $zip = "$env:RUNNER_TEMP\edgedriver.zip"
           Write-Host "Installed Edge version: $version"
+          $zip = "$env:RUNNER_TEMP\edgedriver.zip"
           # NOTE: Microsoft moved EdgeDriver downloads off the old
           # msedgedriver.azureedge.net host (it no longer resolves) to
           # msedgedriver.microsoft.com. Try the 64-bit build first, then
@@ -83,14 +83,14 @@ jobs:
               try {
                 Invoke-WebRequest -Uri $uri -OutFile $zip
                 $downloaded = $true
-            } catch {
-              Write-Host "Attempt $attempt failed: $($_.Exception.Message)"
-              Start-Sleep -Seconds 10
+              } catch {
+                Write-Host "Attempt $attempt failed: $($_.Exception.Message)"
+                Start-Sleep -Seconds 10
+              }
+            }
+            if ($downloaded) { break }
           }
-      }
-      if ($downloaded) { break }
-  }
-  if (-not $downloaded) { throw "Failed to download msedgedriver for Edge $version" }
+          if (-not $downloaded) { throw "Failed to download msedgedriver for Edge $version" }
           $dir = "$env:RUNNER_TEMP\edgedriver"
           Expand-Archive -Path $zip -DestinationPath $dir -Force
           Add-Content -Path $env:GITHUB_PATH -Value $dir
