@@ -64,12 +64,25 @@ jobs:
         shell: pwsh
         run: |
           # tauri-driver delegates to the platform's native driver on
-          # Windows, so msedgedriver matching the installed Edge version
-          # must be on PATH or session creation fails with a bare 500.
+          # Windows, so msedgedriver must be on PATH or session creation
+          # fails. The driver must match the WebView2 Runtime the app
+          # actually runs on, which can differ from the Edge browser
+          # version, so prefer the runtime version and fall back to Edge.
+          $webviewVersion = $null
+          $webviewDir = Get-ChildItem 'C:\Program Files (x86)\Microsoft\EdgeWebView\Application' -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending | Select-Object -First 1
+          if ($webviewDir) { $webviewVersion = $webviewDir.Name }
+          if (-not $webviewVersion) {
+            $reg = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -Name pv -ErrorAction SilentlyContinue
+            if ($reg) { $webviewVersion = $reg.pv }
+          }
           $edge = Get-Item 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' -ErrorAction SilentlyContinue
           if (-not $edge) { $edge = Get-Item 'C:\Program Files\Microsoft\Edge\Application\msedge.exe' }
-          $version = $edge.VersionInfo.ProductVersion
-          Write-Host "Installed Edge version: $version"
+          $edgeVersion = $edge.VersionInfo.ProductVersion
+          $version = if ($webviewVersion) { $webviewVersion } else { $edgeVersion }
+          Write-Host "Edge version: $edgeVersion"
+          Write-Host "WebView2 runtime version: $webviewVersion"
+          Write-Host "Downloading msedgedriver for version: $version"
           $zip = "$env:RUNNER_TEMP\edgedriver.zip"
           # NOTE: Microsoft moved EdgeDriver downloads off the old
           # msedgedriver.azureedge.net host (it no longer resolves) to
@@ -93,6 +106,7 @@ jobs:
           if (-not $downloaded) { throw "Failed to download msedgedriver for Edge $version" }
           $dir = "$env:RUNNER_TEMP\edgedriver"
           Expand-Archive -Path $zip -DestinationPath $dir -Force
+          & "$dir\msedgedriver.exe" --version
           Add-Content -Path $env:GITHUB_PATH -Value $dir
       - if: runner.os != 'macOS'
         run: bun run test:e2e:desktop
@@ -166,7 +180,7 @@ jobs:
           docker run --rm
           -v "${{ github.workspace }}:/repo:ro"
           aquasec/trivy:0.65.0
-          fs --severity HIGH,CRITICAL --exit-code 1 /repo
+          fs --severity HIGH,CRITICAL --skip-dirs backend/.venv --exit-code 1 /repo
       - run: docker build --tag trace-backend:phase5 ./backend
       - name: Scan the backend image with Trivy
         run: >-
