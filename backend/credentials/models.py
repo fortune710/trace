@@ -65,6 +65,7 @@ class Credential(Base):
     credential_kind: Mapped[CredentialKind] = mapped_column(
         native_enum(CredentialKind, "credential_kind", "private"), nullable=False
     )
+    name: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     ciphertext: Mapped[bytes] = mapped_column(sa.LargeBinary(), nullable=False)
     nonce: Mapped[bytes] = mapped_column(sa.LargeBinary(), nullable=False)
     key_version: Mapped[str] = mapped_column(sa.Text(), nullable=False)
@@ -193,12 +194,25 @@ class CredentialReencryptionItem(Base):
 
 
 sa.Index(
-    "credentials_active_owner_provider_kind_key",
+    "credentials_active_unnamed_owner_provider_kind_key",
     Credential.owner_id,
     Credential.provider,
     Credential.credential_kind,
     unique=True,
-    postgresql_where=Credential.revoked_at.is_(None),
+    postgresql_where=sa.and_(
+        Credential.revoked_at.is_(None), Credential.name.is_(None)
+    ),
+)
+
+
+sa.Index(
+    "credentials_active_owner_name_key",
+    Credential.owner_id,
+    Credential.name,
+    unique=True,
+    postgresql_where=sa.and_(
+        Credential.revoked_at.is_(None), Credential.name.is_not(None)
+    ),
 )
 
 
