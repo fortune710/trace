@@ -582,6 +582,35 @@ class AuthService:
         except (ValueError, sa.exc.SQLAlchemyError):
             return None
 
+    def active_session_id_for_refresh(self, refresh_token: str | None) -> UUID | None:
+        """Resolve a live refresh token without rotating or consuming it."""
+        if not refresh_token:
+            return None
+        try:
+            token_hash = self._digest(refresh_token, TokenPurpose.REFRESH)
+        except ValueError:
+            return None
+        try:
+            with self._engine.connect() as connection:
+                return connection.execute(
+                    sa.select(RefreshToken.session_id)
+                    .join(AuthSession, AuthSession.id == RefreshToken.session_id)
+                    .join(AuthUser, AuthUser.id == AuthSession.user_id)
+                    .where(
+                        RefreshToken.token_hash == token_hash,
+                        RefreshToken.consumed_at.is_(None),
+                        RefreshToken.revoked_at.is_(None),
+                        RefreshToken.expires_at > _now(),
+                        AuthSession.revoked_at.is_(None),
+                        AuthSession.expires_at > _now(),
+                        AuthUser.status == UserStatus.ACTIVE,
+                    )
+                ).scalar_one_or_none()
+        except sa.exc.SQLAlchemyError as error:
+            raise AuthenticationUnavailable(
+                "Authentication database is unavailable"
+            ) from error
+
     def is_session_active(self, *, user_id: UUID, session_id: UUID) -> bool:
         try:
             with self._engine.connect() as connection:

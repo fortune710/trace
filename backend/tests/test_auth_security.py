@@ -23,6 +23,7 @@ from auth.csrf import issue_csrf_token, validate_csrf_token
 from auth.errors import AuthError, AuthorizationDenied, install_auth_error_handlers
 from auth.principal import CurrentPrincipal, install_principal_context
 from auth.routes import install_auth_routes
+from auth.service import AuthService
 from auth.tokens import AccessTokenClaims, InvalidAccessToken
 from main import create_app
 
@@ -48,8 +49,51 @@ def test_auth_routes_bind_the_configured_cookie_names() -> None:
     }
 
     assert cookie_parameters["/auth/session"] == set()
+    assert cookie_parameters["/auth/csrf"] == {"test_refresh", "test_csrf"}
     assert cookie_parameters["/auth/refresh"] == {"test_refresh", "test_csrf"}
     assert cookie_parameters["/auth/logout"] == {"test_refresh", "test_csrf"}
+
+
+def test_csrf_endpoint_issues_and_reuses_a_token_for_an_active_refresh_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = UUID("00000000-0000-0000-0000-000000000001")
+    settings = AuthSettings(
+        refresh_cookie_name="test_refresh",
+        csrf_cookie_name="test_csrf",
+        csrf_hmac_key=SecretStr(_encoded_key(b"d")),
+    )
+
+    class StubAuthService:
+        def active_session_id_for_refresh(self, token: str | None) -> UUID | None:
+            return session_id if token == "active-refresh" else None
+
+    monkeypatch.setattr("auth.routes.get_engine", lambda: object())
+    monkeypatch.setattr(
+        AuthService,
+        "from_settings",
+        classmethod(lambda cls, *, engine, settings: StubAuthService()),
+    )
+    app = FastAPI()
+    install_auth_error_handlers(app)
+    install_auth_routes(app, settings, audit_hasher=None)
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.cookies.set("test_refresh", "active-refresh")
+        issued = client.get("/auth/csrf")
+        assert issued.status_code == 200
+        assert issued.headers["Cache-Control"] == "no-store"
+        token = issued.json()["csrf_token"]
+        assert client.cookies.get("test_csrf") == token
+
+        repeated = client.get("/auth/csrf")
+        assert repeated.status_code == 200
+        assert repeated.json()["csrf_token"] == token
+
+        client.cookies.set("test_refresh", "revoked-refresh")
+        rejected = client.get("/auth/csrf")
+        assert rejected.status_code == 401
+        assert rejected.json()["error"]["code"] == "session_expired"
 
 
 def test_approved_authentication_configuration_is_accepted() -> None:

@@ -2,7 +2,8 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { agentsApi, credentialsApi, projectsApi, repositoriesApi } from "@/lib/api"
+import { agentsApi, authApi, credentialsApi, projectsApi, repositoriesApi } from "@/lib/api"
+import { runtimeConfig } from "@/lib/runtime-config"
 import { assertPathFree } from "@/test/path-redaction"
 
 describe("repositoriesApi", () => {
@@ -59,6 +60,7 @@ describe("projectsApi", () => {
   })
 
   it("keeps project API requests free of local source paths", async () => {
+    document.cookie = "trace_csrf=project-test-token"
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({
         id: "remote-project",
@@ -79,6 +81,7 @@ describe("projectsApi", () => {
     const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit
     assertPathFree(requestInit.body)
     expect(requestInit.body).not.toContain("canonicalPath")
+    document.cookie = "trace_csrf=; Max-Age=0"
   })
 })
 
@@ -114,5 +117,80 @@ describe("agent and credential APIs", () => {
     expect(new Headers(agentInit.headers).get("X-CSRF-Token")).toBe("test-token")
     expect(JSON.parse(String(agentInit.body))).toEqual({ name: "Security", review_category: "security", model_provider: "openai", model_name: "gpt-5.1", skills: [] })
     expect(JSON.parse(String(credentialInit.body))).toEqual({ provider: "openai", kind: "api_key", payload: { api_key: "secret-value" } })
+  })
+
+  it("obtains a CSRF token from the API when its host-only cookie is not visible", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ csrf_token: "api-host-token" }), { status: 200 })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "agent-1" }), { status: 201 })
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await agentsApi.create({
+      name: "Security",
+      review_category: "security",
+      model_provider: "openai",
+      model_name: "gpt-5.1",
+      skills: [],
+    })
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://localhost:8000/auth/csrf",
+      expect.objectContaining({ credentials: "include" }),
+    )
+    const mutation = fetchMock.mock.calls[1]?.[1] as RequestInit
+    expect(new Headers(mutation.headers).get("X-CSRF-Token")).toBe("api-host-token")
+  })
+
+  it("ignores a stale frontend-host cookie after moving the API to a subdomain", async () => {
+    const previousApiBaseUrl = runtimeConfig.apiBaseUrl
+    Object.assign(runtimeConfig, {
+      apiBaseUrl: "https://traceapi.fortunealebiosu.dev",
+    })
+    document.cookie = "trace_csrf=stale-frontend-token"
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ csrf_token: "api-host-token" }), { status: 200 })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "agent-1" }), { status: 201 })
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    try {
+      await agentsApi.create({
+        name: "Security",
+        review_category: "security",
+        model_provider: "openai",
+        model_name: "gpt-5.1",
+        skills: [],
+      })
+
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(
+        "https://traceapi.fortunealebiosu.dev/auth/csrf"
+      )
+      const mutation = fetchMock.mock.calls[1]?.[1] as RequestInit
+      expect(new Headers(mutation.headers).get("X-CSRF-Token")).toBe("api-host-token")
+    } finally {
+      Object.assign(runtimeConfig, { apiBaseUrl: previousApiBaseUrl })
+    }
+  })
+
+  it("does not require a session CSRF token for login", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ message: "Authenticated.", csrf_token: "new-token" }), {
+        status: 200,
+      })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await authApi.login("user@example.com", "password")
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://localhost:8000/auth/login")
   })
 })

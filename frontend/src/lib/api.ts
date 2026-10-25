@@ -276,15 +276,45 @@ export class ApiError extends Error {
   }
 }
 
-function csrfToken() {
+const csrfFreePaths = new Set([
+  "/auth/login",
+  "/auth/register",
+  "/auth/verify-email",
+  "/auth/password-recovery",
+  "/auth/password-recovery/confirm",
+  "/auth/oauth/desktop/exchange",
+])
+
+async function csrfToken(path: string): Promise<string | undefined> {
   if (isTauri()) {
-    return getDesktopCsrfToken()
+    return getDesktopCsrfToken() ?? undefined
   }
 
-  return document.cookie
-    .split("; ")
-    .find((entry) => entry.startsWith("trace_csrf="))
-    ?.split("=", 2)[1]
+  const apiHost = new URL(runtimeConfig.apiBaseUrl).hostname
+  let cookieToken: string | undefined
+  if (apiHost === window.location.hostname) {
+    cookieToken = document.cookie
+      .split("; ")
+      .find((entry) => entry.startsWith("trace_csrf="))
+      ?.split("=", 2)[1]
+  }
+
+  if (cookieToken) {
+    return decodeURIComponent(cookieToken)
+  }
+  if (csrfFreePaths.has(path)) {
+    return undefined
+  }
+
+  try {
+    const response = await request<{ csrf_token: string }>("/auth/csrf")
+    return response.csrf_token
+  } catch (error) {
+    if (path === "/auth/logout" && isUnauthenticated(error)) {
+      return undefined
+    }
+    throw error
+  }
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -295,10 +325,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   if (init.method && !["GET", "HEAD"].includes(init.method)) {
-    const csrf = csrfToken()
+    const csrf = await csrfToken(path)
 
     if (csrf) {
-      headers.set("X-CSRF-Token", decodeURIComponent(csrf))
+      headers.set("X-CSRF-Token", csrf)
     }
   }
 
