@@ -26,7 +26,7 @@ class ReviewDispatchSettings(BaseSettings):
 
 
 class AgentExecutionSettings(BaseSettings):
-    """Configuration for mandatory-traced model execution."""
+    """Configuration for review execution with optional LangSmith tracing."""
 
     rabbitmq_url: str | None = Field(
         default=None, validation_alias="REVIEW_RABBITMQ_URL"
@@ -53,16 +53,28 @@ class AgentExecutionSettings(BaseSettings):
     xai_api_key: SecretStr | None = Field(
         default=None, validation_alias="AGENT_XAI_API_KEY"
     )
+    github_max_concurrent_requests: int = Field(
+        default=2, validation_alias="REVIEW_GITHUB_MAX_CONCURRENT_REQUESTS", ge=1, le=20
+    )
+    github_get_max_attempts: int = Field(
+        default=3, validation_alias="REVIEW_GITHUB_GET_MAX_ATTEMPTS", ge=1, le=5
+    )
+    github_retry_base_seconds: float = Field(
+        default=0.25, validation_alias="REVIEW_GITHUB_RETRY_BASE_SECONDS", ge=0, le=10
+    )
+    github_retry_max_seconds: float = Field(
+        default=2.0, validation_alias="REVIEW_GITHUB_RETRY_MAX_SECONDS", ge=0, le=30
+    )
 
     model_config = SettingsConfigDict(extra="ignore")
 
     def validate_for_execution(self) -> None:
         if not self.rabbitmq_url or len(self.rabbitmq_url) > 2_048:
             raise RuntimeError("Review execution RabbitMQ configuration is incomplete")
-        if not self.langsmith_tracing:
-            raise RuntimeError("LangSmith tracing is required for agent execution")
-        if (
+        if self.langsmith_tracing and (
             self.langsmith_api_key is None
             or not self.langsmith_api_key.get_secret_value()
         ):
-            raise RuntimeError("LangSmith API key is required for agent execution")
+            raise RuntimeError("LangSmith API key is required when tracing is enabled")
+        if self.github_retry_max_seconds < self.github_retry_base_seconds:
+            raise RuntimeError("GitHub retry configuration is invalid")

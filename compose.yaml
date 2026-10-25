@@ -275,6 +275,9 @@ services:
       DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD in .env}@postgres:5432/trace
       SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST in .env}
       SMTP_PORT: ${SMTP_PORT:?Set SMTP_PORT in .env}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      AUTH_SMTP_USE_STARTTLS: ${AUTH_SMTP_USE_STARTTLS:-false}
       AUTH_ENVIRONMENT: ${AUTH_ENVIRONMENT:-development}
       AUTH_CREDENTIAL_ENCRYPTION_PROVIDER: ${AUTH_CREDENTIAL_ENCRYPTION_PROVIDER:-vault}
       AUTH_CREDENTIAL_ENCRYPTION_KEY: ${AUTH_CREDENTIAL_ENCRYPTION_KEY:-}
@@ -445,6 +448,7 @@ services:
       vault-bootstrap:
         condition: service_completed_successfully
     networks:
+      - edge
       - data
       - queue
       - secrets

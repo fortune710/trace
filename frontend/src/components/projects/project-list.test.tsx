@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { MemoryRouter, useLocation } from "react-router-dom"
+import { afterEach, describe, expect, it } from "vitest"
 
 import type { Project } from "@/lib/api"
 import { ProjectList } from "@/components/projects/project-list"
@@ -26,15 +27,43 @@ const project: Project = {
 }
 
 describe("ProjectList", () => {
+  afterEach(cleanup)
+
+  function LocationProbe() {
+    const location = useLocation()
+    return (
+      <output data-testid="location">
+        {location.pathname}
+      </output>
+    )
+  }
+
+  function renderProjects(projects: Project[]) {
+    return render(
+      <MemoryRouter>
+        <ProjectList projects={projects} />
+        <LocationProbe />
+      </MemoryRouter>,
+    )
+  }
+
   it("does not render a visibility badge when visibility is null", () => {
-    render(<ProjectList projects={[project]} />)
+    renderProjects([project])
 
     expect(screen.queryByText("private")).toBeNull()
   })
 
   it("renders the visibility badge when visibility is available", () => {
-    render(<ProjectList projects={[{ ...project, repository_visibility: "private" }]} />)
+    renderProjects([{ ...project, repository_visibility: "private" }])
 
     expect(screen.getByText("private")).toBeTruthy()
+  })
+
+  it("opens the selected project's detail route", () => {
+    renderProjects([project])
+
+    fireEvent.click(screen.getByRole("link", { name: "View project Trace project" }))
+
+    expect(screen.getByTestId("location").textContent).toBe("/projects/project-1")
   })
 })

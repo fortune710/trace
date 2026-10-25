@@ -1,18 +1,31 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from email.message import Message
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from redis.exceptions import RedisError
 
 from auth.config import AuthSettings
-from auth.errors import RepositoryInvalidRequest, UnsupportedSource
+from auth.errors import (
+    BranchConflict,
+    GithubAuthorizationRequired,
+    ProviderRateLimited,
+    ProviderUnavailable,
+    RepositoryInvalidRequest,
+    RepositoryNotFound,
+    UnsupportedSource,
+)
 from credentials.models import CredentialProvider
 from db.types import RepositoryProvider
 from external_repositories.routes import build_router
@@ -20,10 +33,13 @@ from external_repositories.service import (
     BranchRecord,
     CreatedBranch,
     GitHubClient,
+    GitHubRequestLogContext,
     RepositoryPageResult,
     RepositoryProviderError,
     RepositoryRecord,
     RepositoryService,
+    ReviewGitHubSourceAccess,
+    ReviewSourceFileError,
     invalidate_repository_catalog,
 )
 
@@ -39,6 +55,250 @@ def _repository_payload() -> dict[str, object]:
         "default_branch": "main",
         "html_url": "https://github.com/octocat/hello-world",
     }
+
+
+class _ReviewCredentialService:
+    def __init__(self) -> None:
+        self._settings = type(
+            "Settings", (), {"github_api_url": "https://github.example.test"}
+        )()
+        self.access_token_calls = 0
+
+    def _access_token(self, *, owner_id, provider) -> str:
+        del owner_id, provider
+        self.access_token_calls += 1
+        return "review-token"
+
+
+def _review_log_context() -> GitHubRequestLogContext:
+    return GitHubRequestLogContext(
+        review_id=uuid4(), review_agent_id=uuid4(), attempt_id=uuid4()
+    )
+
+
+def _tree_payload(*paths: str) -> dict[str, object]:
+    return {
+        "truncated": False,
+        "tree": [{"type": "blob", "path": path} for path in paths],
+    }
+
+
+def _file_payload(content: str) -> dict[str, str]:
+    return {
+        "type": "file",
+        "encoding": "base64",
+        "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+    }
+
+
+def _bytes_file_payload(content: bytes) -> dict[str, str]:
+    return {
+        "type": "file",
+        "encoding": "base64",
+        "content": base64.b64encode(content).decode("ascii"),
+    }
+
+
+def _review_access(handler, **kwargs) -> ReviewGitHubSourceAccess:
+    client = httpx.Client(
+        base_url="https://github.example.test",
+        transport=httpx.MockTransport(handler),
+    )
+    return ReviewGitHubSourceAccess(
+        repository_service=_ReviewCredentialService(),  # type: ignore[arg-type]
+        owner_id=uuid4(),
+        repository_identifier="12345",
+        revision="a" * 40,
+        client=client,
+        sleep=kwargs.pop("sleep", lambda _seconds: None),
+        jitter=kwargs.pop("jitter", lambda _low, high: high),
+        **kwargs,
+    )
+
+
+def test_review_source_access_caches_repository_metadata_and_reuses_client() -> None:
+    paths = ["backend/one.py", "backend/two.py"]
+    requested_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
+        if request.url.path == "/repositories/12345":
+            return httpx.Response(200, json=_repository_payload())
+        if request.url.path.endswith("/git/trees/" + "a" * 40):
+            return httpx.Response(200, json=_tree_payload(*paths))
+        return httpx.Response(200, json=_file_payload("contents"))
+
+    access = _review_access(handler)
+    context = _review_log_context()
+    assert access.list_paths(path_prefix=".", max_results=50, log_context=context) == (
+        paths,
+        False,
+    )
+    assert access.list_paths(path_prefix="./", max_results=50, log_context=context) == (
+        paths,
+        False,
+    )
+    assert access.read_file(path=paths[0], log_context=context) == "contents"
+    assert access.read_file(path=paths[1], log_context=context) == "contents"
+
+    assert requested_paths.count("/repositories/12345") == 1
+    assert len(requested_paths) == 5
+
+
+def test_review_source_access_limits_concurrent_requests_to_two() -> None:
+    active_requests = 0
+    highest_active_requests = 0
+    lock = threading.Lock()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal active_requests, highest_active_requests
+        with lock:
+            active_requests += 1
+            highest_active_requests = max(highest_active_requests, active_requests)
+        try:
+            time.sleep(0.03)
+            if request.url.path == "/repositories/12345":
+                return httpx.Response(200, json=_repository_payload())
+            return httpx.Response(200, json=_file_payload("contents"))
+        finally:
+            with lock:
+                active_requests -= 1
+
+    access = _review_access(handler, max_concurrent_requests=2)
+    context = _review_log_context()
+    access.read_file(path="bootstrap.py", log_context=context)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        contents = list(
+            pool.map(
+                lambda index: access.read_file(
+                    path=f"src/{index}.py", log_context=context
+                ),
+                range(6),
+            )
+        )
+
+    assert contents == ["contents"] * 6
+    assert highest_active_requests == 2
+
+
+def test_review_source_access_retries_transient_get_failures_with_safe_logs(
+    caplog,
+) -> None:
+    calls = 0
+    retry_delays: list[float] = []
+    secret_file_content = "do-not-log-this-file-body"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.ConnectError("connection interrupted", request=request)
+        if request.url.path == "/repositories/12345":
+            return httpx.Response(200, json=_repository_payload())
+        return httpx.Response(200, json=_file_payload(secret_file_content))
+
+    access = _review_access(
+        handler,
+        sleep=retry_delays.append,
+        jitter=lambda _low, high: high,
+    )
+    context = _review_log_context()
+    with caplog.at_level("INFO", logger="trace.repositories"):
+        assert (
+            access.read_file(path="src/main.py", log_context=context)
+            == secret_file_content
+        )
+
+    assert calls == 3
+    assert retry_delays == [0.25]
+    assert '"request_attempt": 2' in caplog.text
+    assert str(context.review_id) in caplog.text
+    assert "review-token" not in caplog.text
+    assert secret_file_content not in caplog.text
+
+
+def test_review_source_access_honors_retry_after_and_maps_exhausted_rate_limit() -> (
+    None
+):
+    retry_delays: list[float] = []
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(429, headers={"Retry-After": "45"})
+
+    access = _review_access(handler, sleep=retry_delays.append)
+    with pytest.raises(ProviderRateLimited):
+        access.read_file(path="src/main.py", log_context=_review_log_context())
+
+    assert attempts == 3
+    assert retry_delays == [30.0, 30.0]
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_code"),
+    [
+        (b"\x80", "file_not_utf8"),
+        (b"x" * (512 * 1024 + 1), "file_too_large"),
+    ],
+)
+def test_review_source_access_reports_unsearchable_files_without_provider_failure(
+    content: bytes,
+    expected_code: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repositories/12345":
+            return httpx.Response(200, json=_repository_payload())
+        return httpx.Response(200, json=_bytes_file_payload(content))
+
+    access = _review_access(handler)
+
+    with pytest.raises(ReviewSourceFileError) as raised:
+        access.read_file(path="src/file", log_context=_review_log_context())
+
+    assert raised.value.code == expected_code
+
+
+def test_review_source_access_reports_missing_file_as_tool_level_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repositories/12345":
+            return httpx.Response(200, json=_repository_payload())
+        return httpx.Response(404)
+
+    access = _review_access(handler)
+
+    with pytest.raises(ReviewSourceFileError) as raised:
+        access.read_file(path="deleted.py", log_context=_review_log_context())
+
+    assert raised.value.code == "path_not_found"
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_error"),
+    [
+        (401, GithubAuthorizationRequired),
+        (404, RepositoryNotFound),
+        (409, BranchConflict),
+        (422, ProviderUnavailable),
+    ],
+)
+def test_review_source_access_does_not_retry_non_retryable_failures(
+    status_code: int,
+    expected_error: type[Exception],
+) -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(status_code)
+
+    access = _review_access(handler)
+    with pytest.raises(expected_error):
+        access.read_file(path="src/main.py", log_context=_review_log_context())
+
+    assert attempts == 1
 
 
 def _response(payload: object, *, link: str | None = None):
@@ -84,6 +344,30 @@ def test_github_client_lists_repositories_without_exposing_token(monkeypatch) ->
     assert "affiliation=owner%2Ccollaborator%2Corganization_member" in captured["url"]
 
 
+def test_github_api_logs_request_metadata_without_authorization(
+    caplog, monkeypatch
+) -> None:
+    def fake_urlopen(_request, timeout):
+        assert timeout == 10.0
+        return _response([_repository_payload()])
+
+    monkeypatch.setattr("external_repositories.service.urlopen", fake_urlopen)
+
+    with caplog.at_level("INFO", logger="trace.repositories"):
+        GitHubClient(base_url="https://github.example.test").list_repositories(
+            access_token="synthetic-token",
+            page=1,
+            page_size=50,
+        )
+
+    assert '"event": "github_api_request"' in caplog.text
+    assert '"method": "GET"' in caplog.text
+    assert '"request_path": "/user/repos?' in caplog.text
+    assert '"event": "github_api_response"' in caplog.text
+    assert "synthetic-token" not in caplog.text
+    assert "Authorization" not in caplog.text
+
+
 def test_github_client_creates_branch_from_exact_commit(monkeypatch) -> None:
     requests: list[tuple[str, bytes | None]] = []
     commit_sha = "a" * 40
@@ -119,6 +403,58 @@ def test_github_client_creates_branch_from_exact_commit(monkeypatch) -> None:
             ).encode("utf-8"),
         )
     ]
+
+
+def test_github_client_reads_paths_and_files_at_an_immutable_revision(
+    monkeypatch,
+) -> None:
+    requests: list[str] = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(request.full_url)
+        if "/git/trees/" in request.full_url:
+            return _response(
+                {
+                    "truncated": False,
+                    "tree": [
+                        {"path": "README.md", "type": "blob"},
+                        {"path": "backend/main.py", "type": "blob"},
+                        {"path": "backend", "type": "tree"},
+                    ],
+                }
+            )
+        return _response(
+            {
+                "type": "file",
+                "encoding": "base64",
+                "content": base64.b64encode(b"print('ready')\n").decode("ascii"),
+            }
+        )
+
+    monkeypatch.setattr("external_repositories.service.urlopen", fake_urlopen)
+    client = GitHubClient(base_url="https://github.example.test")
+    repository = client._repository_record(_repository_payload())
+    revision = "a" * 40
+
+    paths, truncated = client.list_paths_at_revision(
+        access_token="synthetic-token",
+        repository=repository,
+        revision=revision,
+        path_prefix="backend",
+        max_results=10,
+    )
+    contents = client.read_file_at_revision(
+        access_token="synthetic-token",
+        repository=repository,
+        revision=revision,
+        path="backend/main.py",
+    )
+
+    assert paths == ["backend/main.py"]
+    assert truncated is False
+    assert contents == "print('ready')\n"
+    assert f"/git/trees/{revision}?recursive=1" in requests[0]
+    assert f"/contents/backend/main.py?ref={revision}" in requests[1]
 
 
 def test_repository_service_rejects_invalid_branch_base_revision() -> None:
@@ -265,8 +601,35 @@ def test_repository_logs_contain_safe_provider_metadata_only(
     assert record.operation == "list_repositories"
     assert record.provider == "github"
     assert record.outcome == "accepted"
+    assert '"operation": "list_repositories"' in caplog.text
+    assert '"outcome": "accepted"' in caplog.text
     assert "synthetic-token" not in caplog.text
     assert "Authorization" not in caplog.text
+
+
+def test_repository_failure_log_includes_only_safe_transport_metadata(caplog) -> None:
+    from urllib.error import HTTPError
+
+    from external_repositories.service import (
+        RepositoryProviderError,
+        _log_provider_call,
+    )
+
+    error = RepositoryProviderError(kind="unavailable")
+    error.__cause__ = HTTPError(
+        "https://github.example.test/private/path",
+        502,
+        "synthetic-provider-secret",
+        {},
+        None,
+    )
+
+    with caplog.at_level("INFO", logger="trace.repositories"):
+        _log_provider_call("read_file", "unavailable", error=error)
+
+    assert '"http_status": 502' in caplog.text
+    assert "synthetic-provider-secret" not in caplog.text
+    assert "private/path" not in caplog.text
 
 
 def test_repository_service_refreshes_an_expired_github_access_token(

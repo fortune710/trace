@@ -11,6 +11,7 @@ import pika
 import pytest
 import sqlalchemy as sa
 
+from agents.execution.executor import ReviewExecutionService
 from agents.models import Agent
 from auth.errors import AuthorizationDenied, ResourceConflict
 from auth.models import AuthUser, UserStatus
@@ -20,6 +21,7 @@ from db.types import ProjectSourceType, RepositorySource
 from projects.models import Project
 from resources import services as resource_services
 from resources.services import ReviewService as BaseReviewService
+from reviews.config import AgentExecutionSettings
 from reviews.dispatch import (
     REVIEW_DISPATCH_QUEUE,
     RabbitMQReviewPublisher,
@@ -31,6 +33,7 @@ from reviews.models import (
     Review,
     ReviewAgent,
     ReviewAgentAttempt,
+    ReviewAgentStatus,
     ReviewDispatchJob,
     ReviewDispatchStatus,
     ReviewStatus,
@@ -518,6 +521,59 @@ def test_review_snapshots_are_immutable_and_do_not_follow_agent_edits() -> None:
                 )
                 .values(agent_display_name="changed assignment")
             )
+        with principal_transaction(engine, owner_id) as connection:
+            connection.execute(
+                sa.update(Review)
+                .where(Review.id == review["id"], Review.owner_id == owner_id)
+                .values(status=ReviewStatus.RUNNING)
+            )
+            connection.execute(
+                sa.update(ReviewAgent)
+                .where(
+                    ReviewAgent.review_id == review["id"],
+                    ReviewAgent.owner_id == owner_id,
+                )
+                .values(status=ReviewAgentStatus.RUNNING)
+            )
+    finally:
+        with engine.begin() as connection:
+            connection.execute(sa.delete(AuthUser).where(AuthUser.id == owner_id))
+        engine.dispose()
+
+
+@pytest.mark.integration
+def test_executor_loads_joined_review_agent_execution_configs() -> None:
+    engine = sa.create_engine(_database_url())
+    owner_id, project_id, agent_id = uuid4(), uuid4(), uuid4()
+    try:
+        _create_owner_graph(engine, owner_id, project_id, agent_id)
+        review = ReviewService(engine).create(
+            owner_id=owner_id,
+            values={"project_id": project_id, "agent_ids": [agent_id]},
+            idempotency_key="executor-joined-config",
+        )
+        executor = ReviewExecutionService(
+            engine=engine,
+            credential_service=None,  # type: ignore[arg-type]
+            repository_service=None,  # type: ignore[arg-type]
+            settings=AgentExecutionSettings(
+                REVIEW_RABBITMQ_URL="amqp://guest:guest@localhost/",
+                LANGSMITH_TRACING=False,
+            ),
+        )
+
+        stored_review, selected_agents = executor._load_review_and_selected_agents(
+            owner_id=owner_id,
+            review_id=review["id"],
+        )
+
+        assert stored_review.id == review["id"]
+        assert len(selected_agents) == 1
+        assert selected_agents[0].review_agent.agent_id == agent_id
+        assert (
+            selected_agents[0].credential_snapshot.review_agent_id
+            == selected_agents[0].review_agent.id
+        )
     finally:
         with engine.begin() as connection:
             connection.execute(sa.delete(AuthUser).where(AuthUser.id == owner_id))

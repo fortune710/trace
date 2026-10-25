@@ -107,4 +107,26 @@ describe("ReviewDetailsPage", () => {
       "/projects/project-a?startReview=1",
     )
   })
+
+  it("shows the current execution status", () => {
+    mockedUseReview.mockReturnValue({
+      data: { ...review, status: "running" },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useReview>)
+
+    render(
+      <MemoryRouter initialEntries={["/reviews/review-a"]}>
+        <Routes>
+          <Route
+            path="/reviews/:reviewId"
+            element={<ReviewDetailsPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByRole("heading", { name: "Review running" })).toBeTruthy()
+  })
 })

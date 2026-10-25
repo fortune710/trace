@@ -20,7 +20,11 @@ if [[ "${AUTH_CREDENTIAL_ENCRYPTION_PROVIDER:-local}" == "vault" && -n "${AUTH_V
     echo "Vault runtime token is unavailable" >&2
     exit 1
   }
-  IFS= read -r AUTH_VAULT_TOKEN <"$AUTH_VAULT_TOKEN_FILE"
+  AUTH_VAULT_TOKEN=""
+  if ! IFS= read -r AUTH_VAULT_TOKEN <"$AUTH_VAULT_TOKEN_FILE" && [[ -z "$AUTH_VAULT_TOKEN" ]]; then
+    echo "Vault runtime token is unavailable" >&2
+    exit 1
+  fi
   [[ -n "$AUTH_VAULT_TOKEN" ]] || {
     echo "Vault runtime token is unavailable" >&2
     exit 1
@@ -30,4 +34,8 @@ fi
 
 # Dependencies must be installed explicitly with `uv sync --locked`; startup never
 # downloads packages or changes the lockfile.
+if [[ "${AUTH_ENVIRONMENT:-development}" == "production" ]]; then
+  exec uv run --offline --no-sync --locked uvicorn main:app --host 0.0.0.0 --port 8000
+fi
+
 exec uv run --offline --no-sync --locked uvicorn main:app --reload --host 0.0.0.0 --port 8000

@@ -1,12 +1,46 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from uuid import UUID, uuid4
+
+import pytest
+from langchain_core.tools import ToolException
+
+import agents.execution.agent as execution_agent_module
+import agents.execution.executor as execution_executor_module
+from agents.execution.agent import Agent, FindingBatch, FindingOutput, ReviewTarget
+from agents.execution.executor import ReviewExecutionService, _source_failure_code
 from agents.execution.orchestrator import OrchestratorAgent
 from agents.execution.redaction import redact_text
-from agents.execution.runtime import Agent, FindingBatch, FindingOutput, ReviewTarget
+from agents.execution.tools import (
+    REPOSITORY_REVIEW_TOOLS,
+    ToolExecutionContext,
+    list_paths,
+    search_code,
+)
+from auth.errors import (
+    GithubAuthorizationRequired,
+    ProviderRateLimited,
+    ProviderUnavailable,
+    RepositoryNotFound,
+)
+from external_repositories.service import ReviewSourceFileError
 from reviews.config import AgentExecutionSettings
+from reviews.dispatch import _open_connection
 
 
-def test_agent_has_no_tools_by_default() -> None:
+def _tool_context() -> ToolExecutionContext:
+    return ToolExecutionContext(
+        owner_id=None,  # type: ignore[arg-type]
+        source_kind="github",
+        source_identifier="42",
+        source_revision="a" * 40,
+        repository_access=None,  # type: ignore[arg-type]
+        review_id=UUID("00000000-0000-0000-0000-000000000001"),
+    )
+
+
+def test_agent_has_repository_tools_by_default() -> None:
     agent = Agent(
         provider="openai",
         model="gpt-6.1-sol",
@@ -14,33 +48,160 @@ def test_agent_has_no_tools_by_default() -> None:
         metadata={"category": "security", "personality": "Careful."},
     )
 
-    assert agent.tools == ()
+    assert agent.tools == REPOSITORY_REVIEW_TOOLS
+    assert [tool.name for tool in agent.tools] == [
+        "list_paths",
+        "read_file",
+        "search_code",
+    ]
+
+
+def test_repository_tools_require_source_without_exposing_runtime_context() -> None:
+    schemas = {
+        tool.name: tool.tool_call_schema.model_json_schema()["properties"]
+        for tool in REPOSITORY_REVIEW_TOOLS
+    }
+
+    assert set(schemas["list_paths"]) == {"source", "path_prefix", "max_results"}
+    assert set(schemas["read_file"]) == {"source", "path"}
+    assert set(schemas["search_code"]) == {"source", "query", "path_prefix"}
+    assert (
+        "must match the target source" in schemas["list_paths"]["source"]["description"]
+    )
+    assert (
+        "Use null for the repository root"
+        in schemas["list_paths"]["path_prefix"]["description"]
+    )
+    assert (
+        "Do not use '.', './', '..'"
+        in schemas["search_code"]["path_prefix"]["description"]
+    )
+    assert "returned by list_paths" in schemas["read_file"]["path"]["description"]
+    assert "Literal text" in schemas["search_code"]["query"]["description"]
+
+
+def test_list_paths_logs_arguments_and_a_result_summary(caplog) -> None:
+    class RepositoryAccess:
+        def list_paths(self, **kwargs):
+            assert kwargs["path_prefix"] == "backend"
+            assert kwargs["log_context"].review_id
+            return ["backend/main.py", "backend/worker.py"], False
+
+    runtime = SimpleNamespace(
+        context=ToolExecutionContext(
+            owner_id=uuid4(),
+            source_kind="github",
+            source_identifier="123",
+            source_revision="a" * 40,
+            repository_access=RepositoryAccess(),  # type: ignore[arg-type]
+            review_id=uuid4(),
+        )
+    )
+
+    with caplog.at_level("INFO", logger="trace.agent_execution.tools"):
+        result = list_paths.func(  # type: ignore[union-attr]
+            source="github",
+            path_prefix="backend",
+            max_results=25,
+            runtime=runtime,
+        )
+
+    assert result == {
+        "paths": ["backend/main.py", "backend/worker.py"],
+        "truncated": False,
+    }
+    assert '"event": "repository_tool_started"' in caplog.text
+    assert '"path_prefix": "backend"' in caplog.text
+    assert '"path_count": 2' in caplog.text
+
+
+def test_search_code_skips_unsearchable_files() -> None:
+    class RepositoryAccess:
+        def list_paths(self, **_kwargs):
+            return ["assets/logo.png", "src/app.py"], False
+
+        def read_file(self, *, path, **_kwargs):
+            if path == "assets/logo.png":
+                raise ReviewSourceFileError("file_not_utf8")
+            return "launch_enabled = true\n"
+
+    runtime = SimpleNamespace(
+        context=ToolExecutionContext(
+            owner_id=uuid4(),
+            source_kind="github",
+            source_identifier="123",
+            source_revision="a" * 40,
+            repository_access=RepositoryAccess(),  # type: ignore[arg-type]
+            review_id=uuid4(),
+        )
+    )
+
+    result = search_code.func(  # type: ignore[union-attr]
+        source="github",
+        query="launch_enabled",
+        runtime=runtime,
+    )
+
+    assert result == {
+        "matches": [
+            {
+                "path": "src/app.py",
+                "line_number": 1,
+                "line": "launch_enabled = true",
+            }
+        ],
+        "truncated": False,
+        "files_truncated": False,
+        "skipped_files": 1,
+    }
+
+
+def test_repository_tools_return_expected_tool_errors_to_the_model() -> None:
+    runtime = SimpleNamespace(context=_tool_context())
+
+    assert all(tool.handle_tool_error is True for tool in REPOSITORY_REVIEW_TOOLS)
+    with pytest.raises(ToolException, match="source_mismatch"):
+        list_paths.func(  # type: ignore[union-attr]
+            source="local",
+            path_prefix=None,
+            max_results=1,
+            runtime=runtime,
+        )
 
 
 def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -> None:
     messages = []
+    create_agent_arguments = {}
 
-    class StructuredOutputModel:
-        def invoke(self, received_messages):
-            messages.extend(received_messages)
-            return FindingBatch()
+    class LangChainAgent:
+        def invoke(self, inputs, *, context):
+            messages.extend(inputs["messages"])
+            assert context == _tool_context()
+            return {"structured_response": FindingBatch()}
 
-    class Model:
-        def with_structured_output(self, _schema):
-            return StructuredOutputModel()
+    def fake_create_agent(**kwargs):
+        create_agent_arguments.update(kwargs)
+        return LangChainAgent()
 
-    monkeypatch.setattr(Agent, "_model", lambda _agent: Model())
+    model = object()
+    monkeypatch.setattr(Agent, "_model", lambda _agent: model)
+    monkeypatch.setattr(execution_agent_module, "create_agent", fake_create_agent)
 
     Agent(provider="openai", model="test-model").run(
         review_target=ReviewTarget(
             source_kind="gitlab",
             source_identifier="group/project",
             source_revision="b" * 40,
-        )
+        ),
+        tool_context=_tool_context(),
     )
 
-    assert "repository tools" in messages[0].content
-    assert messages[1].content == (
+    assert create_agent_arguments["model"] is model
+    assert create_agent_arguments["tools"] == list(REPOSITORY_REVIEW_TOOLS)
+    assert create_agent_arguments["response_format"] is FindingBatch
+    assert "repository tools" in create_agent_arguments["system_prompt"]
+    assert create_agent_arguments["context_schema"] is ToolExecutionContext
+    assert messages[0].content == (
         "Review target:\n"
         "- source kind: gitlab\n"
         "- source identifier: group/project\n"
@@ -52,9 +213,12 @@ def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -
 def test_orchestrator_runs_only_supplied_agents(monkeypatch) -> None:
     invoked: list[str] = []
 
-    def fake_run(self, *, review_target: ReviewTarget) -> FindingBatch:
+    def fake_run(
+        self, *, review_target: ReviewTarget, tool_context: ToolExecutionContext
+    ) -> FindingBatch:
         invoked.append(self.model)
         assert review_target.source_identifier == "workspace-123"
+        assert tool_context == _tool_context()
         return FindingBatch(
             findings=[
                 FindingOutput(
@@ -72,6 +236,7 @@ def test_orchestrator_runs_only_supplied_agents(monkeypatch) -> None:
             source_identifier="workspace-123",
             source_revision="a" * 40,
         ),
+        tool_context=_tool_context(),
         agents=(
             Agent(provider="openai", model="first"),
             Agent(provider="openai", model="second"),
@@ -89,11 +254,132 @@ def test_redaction_removes_common_provider_keys() -> None:
     assert "[REDACTED_SECRET]" in value
 
 
-def test_execution_settings_require_langsmith(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("error", "failure_code"),
+    [
+        (GithubAuthorizationRequired(), "source_authorization_failed"),
+        (ProviderRateLimited(), "source_rate_limited"),
+        (ProviderUnavailable(), "source_unavailable"),
+        (RepositoryNotFound(), "source_not_found"),
+    ],
+)
+def test_repository_tool_failures_have_source_specific_codes(
+    error, failure_code
+) -> None:
+    assert _source_failure_code(error) == failure_code
+
+
+def test_local_review_does_not_open_github_source_access() -> None:
+    service = object.__new__(ReviewExecutionService)
+    service._repository_service = SimpleNamespace(
+        open_review_github_source_access=lambda **_kwargs: pytest.fail(
+            "GitHub source access must not open for a local review"
+        )
+    )
+    service._settings = SimpleNamespace(
+        github_max_concurrent_requests=2,
+        github_get_max_attempts=3,
+        github_retry_base_seconds=0.25,
+        github_retry_max_seconds=2.0,
+    )
+    review = SimpleNamespace(
+        source_kind=SimpleNamespace(value="local"),
+        source_identifier="workspace-123",
+        source_revision="revision-123",
+    )
+
+    with service._open_review_source_access(  # type: ignore[arg-type]
+        owner_id=uuid4(),
+        review=review,
+    ) as repository_access:
+        assert repository_access is None
+
+
+def test_github_tool_requires_github_source_access() -> None:
+    context = ToolExecutionContext(
+        owner_id=uuid4(),
+        source_kind="github",
+        source_identifier="123",
+        source_revision="a" * 40,
+        repository_access=None,
+        review_id=uuid4(),
+    )
+
+    with pytest.raises(ToolException, match="source_execution_unsupported"):
+        context.github_repository_access()
+
+
+def test_execution_settings_allow_disabled_langsmith(monkeypatch) -> None:
     monkeypatch.setenv("REVIEW_RABBITMQ_URL", "amqp://guest:guest@localhost/")
-    monkeypatch.setenv("LANGSMITH_TRACING", "true")
-    monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
 
     settings = AgentExecutionSettings()
 
     settings.validate_for_execution()
+
+    def unexpected_client(**_kwargs):
+        raise AssertionError("LangSmith client must not be created")
+
+    monkeypatch.setattr(execution_executor_module, "Client", unexpected_client)
+    service = ReviewExecutionService(
+        engine=None,  # type: ignore[arg-type]
+        credential_service=None,  # type: ignore[arg-type]
+        repository_service=None,  # type: ignore[arg-type]
+        settings=settings,
+    )
+
+    assert service._langsmith is None
+
+
+def test_execution_settings_require_key_when_langsmith_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("REVIEW_RABBITMQ_URL", "amqp://guest:guest@localhost/")
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="LangSmith API key is required"):
+        AgentExecutionSettings().validate_for_execution()
+
+    monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
+    AgentExecutionSettings().validate_for_execution()
+
+
+def test_review_broker_connection_can_disable_heartbeat_for_long_agent_runs(
+    monkeypatch,
+) -> None:
+    captured_heartbeats: list[int] = []
+
+    def fake_connection(parameters):
+        captured_heartbeats.append(parameters.heartbeat)
+        return object()
+
+    monkeypatch.setattr("reviews.dispatch.pika.BlockingConnection", fake_connection)
+
+    _open_connection("amqp://guest:guest@localhost/")
+    _open_connection("amqp://guest:guest@localhost/", heartbeat=0)
+
+    assert captured_heartbeats == [30, 0]
+
+
+def test_execution_service_hides_langsmith_inputs_and_outputs(monkeypatch) -> None:
+    monkeypatch.setenv("REVIEW_RABBITMQ_URL", "amqp://guest:guest@localhost/")
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
+    client_arguments = {}
+
+    def fake_client(**kwargs):
+        client_arguments.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(execution_executor_module, "Client", fake_client)
+
+    ReviewExecutionService(
+        engine=None,  # type: ignore[arg-type]
+        credential_service=None,  # type: ignore[arg-type]
+        repository_service=None,  # type: ignore[arg-type]
+        settings=AgentExecutionSettings(),
+    )
+
+    assert client_arguments["api_key"] == "ls-test"
+    assert client_arguments["hide_inputs"] is True
+    assert client_arguments["hide_outputs"] is True

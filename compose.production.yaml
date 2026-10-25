@@ -1,0 +1,498 @@
+# Standalone production stack. Do not combine this with compose.yaml: that file
+# starts development-only Mailpit and an ephemeral Vault dev server. Test-only
+# services and Mailpit are deliberately omitted. This stack runs a persistent
+# Vault server on a private Compose network; initialize and unseal it manually.
+name: trace
+
+x-backend-image: &backend-image
+  image: trace-backend:production
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+    target: runtime
+
+x-app-hardening: &app-hardening
+  init: true
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+x-vault-settings: &vault-settings
+  AUTH_CREDENTIAL_ENCRYPTION_PROVIDER: vault
+  AUTH_VAULT_ADDR: http://vault:8200
+  AUTH_VAULT_TOKEN_FILE: /run/vault/trace-backend-token
+  AUTH_VAULT_TRANSIT_MOUNT: transit
+  AUTH_VAULT_TRANSIT_KEY: trace-provider-credentials
+  AUTH_VAULT_EMAIL_TRANSIT_KEY: trace-email-delivery
+  AUTH_VAULT_REQUEST_TIMEOUT_SECONDS: ${AUTH_VAULT_REQUEST_TIMEOUT_SECONDS:-3}
+
+services:
+  nginx:
+    image: nginx:1.30.6-alpine
+    entrypoint: ["/bin/sh", "/etc/nginx/trace/start.sh"]
+    ports:
+      - "80:8080"
+      - "443:8443"
+    volumes:
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx:/etc/nginx/trace:ro
+      - ./production-acme:/var/www/certbot:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - edge
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /etc/nginx/conf.d:rw,noexec,nosuid,size=1m
+      - /var/cache/nginx:rw,noexec,nosuid,size=16m
+      - /var/run:rw,noexec,nosuid,size=1m
+    pids_limit: 64
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /etc/letsencrypt/live/traceapi.fortunealebiosu.dev/fullchain.pem && cmp -s /etc/nginx/conf.d/default.conf /etc/nginx/trace/https.conf && nginx -t"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    <<: [*backend-image, *app-hardening]
+    environment:
+      <<: *vault-settings
+      AUTH_ENVIRONMENT: production
+      FORWARDED_ALLOW_IPS: "*"
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:?Set REDIS_URL}
+      SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:?Set SMTP_PORT}
+      AUTH_COOKIE_SECURE: "true"
+      AUTH_ACCESS_COOKIE_NAME: ${AUTH_ACCESS_COOKIE_NAME:?Set AUTH_ACCESS_COOKIE_NAME}
+      AUTH_REFRESH_COOKIE_NAME: ${AUTH_REFRESH_COOKIE_NAME:?Set AUTH_REFRESH_COOKIE_NAME}
+      AUTH_CSRF_COOKIE_NAME: ${AUTH_CSRF_COOKIE_NAME:?Set AUTH_CSRF_COOKIE_NAME}
+      AUTH_COOKIE_SAME_SITE: none
+      AUTH_JWT_ISSUER: ${AUTH_JWT_ISSUER:?Set AUTH_JWT_ISSUER}
+      AUTH_JWT_AUDIENCE: ${AUTH_JWT_AUDIENCE:?Set AUTH_JWT_AUDIENCE}
+      AUTH_JWT_KID: ${AUTH_JWT_KID:?Set AUTH_JWT_KID}
+      AUTH_JWT_PRIVATE_KEY: ${AUTH_JWT_PRIVATE_KEY:?Set AUTH_JWT_PRIVATE_KEY}
+      AUTH_JWT_VERIFICATION_KEYS: ${AUTH_JWT_VERIFICATION_KEYS:-{}}
+      AUTH_TOKEN_HASH_KEY: ${AUTH_TOKEN_HASH_KEY:?Set AUTH_TOKEN_HASH_KEY}
+      AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION: ${AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION:-vault-v1}
+      AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS: ${AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS:-{}}
+      AUTH_VAULT_TOKEN_RENEWAL_SECONDS: ${AUTH_VAULT_TOKEN_RENEWAL_SECONDS:-300}
+      AUTH_CSRF_HMAC_KEY: ${AUTH_CSRF_HMAC_KEY:?Set AUTH_CSRF_HMAC_KEY}
+      AUTH_AUDIT_HASH_KEY: ${AUTH_AUDIT_HASH_KEY:?Set AUTH_AUDIT_HASH_KEY}
+      AUTH_ALLOWED_ORIGINS: ${AUTH_ALLOWED_ORIGINS:?Set AUTH_ALLOWED_ORIGINS}
+      AUTH_DESKTOP_ALLOWED_ORIGINS: ${AUTH_DESKTOP_ALLOWED_ORIGINS:-[]}
+      AUTH_GITHUB_CLIENT_ID: ${AUTH_GITHUB_CLIENT_ID:-}
+      AUTH_GITHUB_CLIENT_SECRET: ${AUTH_GITHUB_CLIENT_SECRET:-}
+      AUTH_GITHUB_REDIRECT_URI: ${AUTH_GITHUB_REDIRECT_URI:-}
+      AUTH_GOOGLE_CLIENT_ID: ${AUTH_GOOGLE_CLIENT_ID:-}
+      AUTH_GOOGLE_CLIENT_SECRET: ${AUTH_GOOGLE_CLIENT_SECRET:-}
+      AUTH_GOOGLE_REDIRECT_URI: ${AUTH_GOOGLE_REDIRECT_URI:-}
+      AUTH_FRONTEND_URL: ${AUTH_FRONTEND_URL:?Set AUTH_FRONTEND_URL}
+      AUTH_EMAIL_FROM: ${AUTH_EMAIL_FROM:?Set AUTH_EMAIL_FROM}
+      AUTH_EMAIL_MAX_RETRIES: ${AUTH_EMAIL_MAX_RETRIES:-3}
+      AUTH_EMAIL_RETRY_DELAYS_SECONDS: ${AUTH_EMAIL_RETRY_DELAYS_SECONDS:-[30,300,1800]}
+      AUTH_RABBITMQ_URL: ${AUTH_RABBITMQ_URL:?Set AUTH_RABBITMQ_URL}
+      AUDIT_ENABLED: "true"
+      AUDIT_HOST: ${AUDIT_HOST:-immudb}
+      AUDIT_PORT: ${AUDIT_PORT:-3322}
+      AUDIT_DATABASE: ${AUDIT_DATABASE:?Set AUDIT_DATABASE}
+      AUDIT_USERNAME: ${AUDIT_USERNAME:?Set AUDIT_USERNAME}
+      AUDIT_PASSWORD: ${AUDIT_PASSWORD:?Set AUDIT_PASSWORD}
+      AUDIT_ROOT_STATE_DIR: /var/lib/trace-audit
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - 127.0.0.1:${BACKEND_HTTP_PORT:-8000}:8000
+    secrets:
+      - source: vault_runtime_token
+        target: /run/vault/trace-backend-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      immudb-bootstrap:
+        condition: service_completed_successfully
+      vault:
+        condition: service_healthy
+    networks:
+      - edge
+      - data
+      - queue
+      - audit
+      - secrets
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    pids_limit: 128
+    stop_grace_period: 30s
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from urllib.request import urlopen; response = urlopen('http://127.0.0.1:8000/health', timeout=3); assert response.status == 200"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  credential-maintenance:
+    <<: [*backend-image, *app-hardening]
+    profiles: [maintenance]
+    command: ["./start-credential-maintenance.sh"]
+    environment:
+      <<: *vault-settings
+      AUTH_ENVIRONMENT: production
+      MAINTENANCE_DATABASE_URL: ${MAINTENANCE_DATABASE_URL:?Set MAINTENANCE_DATABASE_URL}
+      AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION: ${AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION:-vault-v1}
+      AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS: ${AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS:-{}}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: vault_runtime_token
+        target: /run/vault/trace-backend-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    networks:
+      - edge
+      - data
+      - audit
+      - secrets
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    pids_limit: 128
+    restart: "no"
+
+  migrate:
+    <<: [*backend-image, *app-hardening]
+    profiles: [migration]
+    command: ["./migrate.sh"]
+    environment:
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?Set MIGRATION_DATABASE_URL}
+      TRACE_APP_PASSWORD: ${TRACE_APP_PASSWORD:?Set TRACE_APP_PASSWORD}
+      TRACE_INTERNAL_PASSWORD: ${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD}
+      TRACE_CREDENTIAL_MAINTENANCE_PASSWORD: ${TRACE_CREDENTIAL_MAINTENANCE_PASSWORD:?Set TRACE_CREDENTIAL_MAINTENANCE_PASSWORD}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    pids_limit: 128
+    restart: "no"
+
+  email-worker:
+    <<: [*backend-image, *app-hardening]
+    command: ["./start-email-worker.sh"]
+    environment:
+      <<: *vault-settings
+      AUTH_ENVIRONMENT: production
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD}@postgres:5432/trace
+      SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:?Set SMTP_PORT}
+      SMTP_USERNAME: ${SMTP_USERNAME:?Set SMTP_USERNAME}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:?Set SMTP_PASSWORD}
+      AUTH_SMTP_USE_STARTTLS: "true"
+      AUTH_EMAIL_FROM: ${AUTH_EMAIL_FROM:?Set AUTH_EMAIL_FROM}
+      AUTH_FRONTEND_URL: ${AUTH_FRONTEND_URL:?Set AUTH_FRONTEND_URL}
+      AUTH_EMAIL_MAX_RETRIES: ${AUTH_EMAIL_MAX_RETRIES:-3}
+      AUTH_EMAIL_RETRY_DELAYS_SECONDS: ${AUTH_EMAIL_RETRY_DELAYS_SECONDS:-[30,300,1800]}
+      AUTH_RABBITMQ_URL: ${AUTH_RABBITMQ_URL:?Set AUTH_RABBITMQ_URL}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: vault_runtime_token
+        target: /run/vault/trace-backend-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    networks:
+      - edge
+      - data
+      - queue
+      - secrets
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    pids_limit: 128
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  audit-worker:
+    <<: [*backend-image, *app-hardening]
+    command: ["./start-audit-worker.sh"]
+    environment:
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD}@postgres:5432/trace
+      AUDIT_ENABLED: "true"
+      AUDIT_HOST: ${AUDIT_HOST:-immudb}
+      AUDIT_PORT: ${AUDIT_PORT:-3322}
+      AUDIT_DATABASE: ${AUDIT_DATABASE:?Set AUDIT_DATABASE}
+      AUDIT_USERNAME: ${AUDIT_USERNAME:?Set AUDIT_USERNAME}
+      AUDIT_PASSWORD: ${AUDIT_PASSWORD:?Set AUDIT_PASSWORD}
+      AUDIT_ROOT_STATE_DIR: /var/lib/trace-audit
+      AUDIT_MAX_ATTEMPTS: ${AUDIT_MAX_ATTEMPTS:-8}
+      AUDIT_RETRY_BASE_SECONDS: ${AUDIT_RETRY_BASE_SECONDS:-5}
+      AUDIT_RETRY_MAX_SECONDS: ${AUDIT_RETRY_MAX_SECONDS:-900}
+      AUDIT_OUTBOX_RETENTION_DAYS: ${AUDIT_OUTBOX_RETENTION_DAYS:-30}
+      AUDIT_DEAD_LETTER_RETENTION_DAYS: ${AUDIT_DEAD_LETTER_RETENTION_DAYS:-90}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - audit_state:/var/lib/trace-audit
+    depends_on:
+      postgres:
+        condition: service_healthy
+      immudb-bootstrap:
+        condition: service_completed_successfully
+    networks:
+      - data
+      - audit
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    pids_limit: 64
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  review-dispatch-worker:
+    <<: [*backend-image, *app-hardening]
+    command: ["./start-review-dispatch-worker.sh"]
+    environment:
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD}@postgres:5432/trace
+      REVIEW_RABBITMQ_URL: ${REVIEW_RABBITMQ_URL:?Set REVIEW_RABBITMQ_URL}
+      REVIEW_MAX_ATTEMPTS: ${REVIEW_MAX_ATTEMPTS:-8}
+      REVIEW_RETRY_BASE_SECONDS: ${REVIEW_RETRY_BASE_SECONDS:-5}
+      REVIEW_RETRY_MAX_SECONDS: ${REVIEW_RETRY_MAX_SECONDS:-900}
+      REVIEW_POLL_SECONDS: ${REVIEW_POLL_SECONDS:-1}
+      REVIEW_PROCESSING_TIMEOUT_SECONDS: ${REVIEW_PROCESSING_TIMEOUT_SECONDS:-300}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - data
+      - queue
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    pids_limit: 64
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  review-execution-worker:
+    <<: [*backend-image, *app-hardening]
+    command: ["./start-review-execution-worker.sh"]
+    environment:
+      <<: *vault-settings
+      AUTH_ENVIRONMENT: production
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD}@postgres:5432/trace
+      REVIEW_RABBITMQ_URL: ${REVIEW_RABBITMQ_URL:?Set REVIEW_RABBITMQ_URL}
+      LANGSMITH_TRACING: "true"
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:?Set LANGSMITH_API_KEY}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:?Set LANGSMITH_PROJECT}
+      AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY:-}
+      AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY:-}
+      AGENT_GOOGLE_API_KEY: ${AGENT_GOOGLE_API_KEY:-}
+      AGENT_XAI_API_KEY: ${AGENT_XAI_API_KEY:-}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: vault_runtime_token
+        target: /run/vault/trace-backend-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    networks:
+      - edge
+      - data
+      - queue
+      - secrets
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    pids_limit: 128
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  vault:
+    image: hashicorp/vault:1.21.3@sha256:5f244d447c6f90107149c9565da5ffedf847cec673ba0062a82fc3dd83c89e65
+    command: ["server", "-config=/vault/config/vault.hcl"]
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+      VAULT_DISABLE_MLOCK: "true"
+      SKIP_SETCAP: "true"
+    volumes:
+      - vault_data:/vault/data
+      - ./config/vault.production.hcl:/vault/config/vault.hcl:ro
+    networks:
+      - secrets
+    user: "100:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+      - /home/vault:rw,noexec,nosuid,size=16m,uid=100,gid=1000,mode=0700
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    stop_grace_period: 30s
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, "vault status >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+  postgres:
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    environment:
+      POSTGRES_DB: trace
+      POSTGRES_USER: trace
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - data
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, pg_isready, -U, trace, -d, trace]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  immudb:
+    platform: linux/amd64
+    image: codenotary/immudb:1.10.0@sha256:54f1fb4722034fe6531beed9616284d8e6766b831f18a7b288fc169fa27c6898
+    environment:
+      IMMUDB_ADMIN_PASSWORD: ${AUDIT_IMMUDB_ADMIN_PASSWORD:?Set AUDIT_IMMUDB_ADMIN_PASSWORD}
+    volumes:
+      - immudb_data:/var/lib/immudb
+    networks:
+      - audit
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, immuadmin, status, -a, 127.0.0.1, -p, "3322"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  immudb-bootstrap:
+    <<: [*backend-image, *app-hardening]
+    command: ["uv", "run", "--offline", "--no-sync", "--locked", "python", "-m", "audit.bootstrap"]
+    environment:
+      AUDIT_IMMUDB_HOST: immudb
+      AUDIT_IMMUDB_PORT: "3322"
+      AUDIT_IMMUDB_DATABASE: ${AUDIT_DATABASE:?Set AUDIT_DATABASE}
+      AUDIT_IMMUDB_ADMIN_USER: immudb
+      AUDIT_IMMUDB_ADMIN_PASSWORD: ${AUDIT_IMMUDB_ADMIN_PASSWORD:?Set AUDIT_IMMUDB_ADMIN_PASSWORD}
+      AUDIT_IMMUDB_USERNAME: ${AUDIT_USERNAME:?Set AUDIT_USERNAME}
+      AUDIT_IMMUDB_PASSWORD: ${AUDIT_PASSWORD:?Set AUDIT_PASSWORD}
+    depends_on:
+      immudb:
+        condition: service_healthy
+    networks:
+      - audit
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    pids_limit: 64
+    restart: "no"
+
+  redis:
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    entrypoint: [redis-server]
+    command: [--save, "", --appendonly, "no"]
+    networks:
+      - data
+    user: "999:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+      - /data:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    stop_grace_period: 10s
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:4.2.4-alpine@sha256:83522278ca69414e4895b3ea3c0f943c63ad316c063f9cda9c32fd42fe800f47
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?Set RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - queue
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+secrets:
+  vault_runtime_token:
+    file: ${VAULT_RUNTIME_TOKEN_FILE:-./production-secrets/trace-backend-token}
+
+volumes:
+  vault_data:
+  postgres_data:
+  rabbitmq_data:
+  immudb_data:
+  audit_state:
+
+networks:
+  edge:
+  secrets:
+    internal: true
+  data:
+    internal: true
+  queue:
+    internal: true
+  audit:
+    internal: true

@@ -1,0 +1,207 @@
+name: Production Deployment
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+  workflow_run:
+    workflows: [Production Database Migrations]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  select-deployment:
+    if: >-
+      (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true) ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'pull_request_target' &&
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.route.outputs.deploy }}
+    steps:
+      - name: Skip direct deployment when this merge includes migrations
+        id: route
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MIGRATION_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == workflow_run ]]; then
+            [[ "$MIGRATION_RUN_ID" =~ ^[0-9]+$ ]] || exit 1
+            successful_migration_job="$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$MIGRATION_RUN_ID/jobs?per_page=100" \
+              --jq '.jobs[] | select(.name == "migrate" and .conclusion == "success") | .id')"
+            if [[ -n "$successful_migration_job" ]]; then
+              echo 'deploy=true' >> "$GITHUB_OUTPUT"
+            else
+              echo 'deploy=false' >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || exit 1
+          changed_files="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" \
+            --jq '.[].filename')"
+          if grep -q '^backend/alembic/versions/' <<< "$changed_files"; then
+            echo 'deploy=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'deploy=true' >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    needs: select-deployment
+    if: needs.select-deployment.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: production-vps
+    steps:
+      - name: Configure verified SSH access
+        env:
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$VPS_SSH_PRIVATE_KEY" || -z "$VPS_SSH_KNOWN_HOSTS" ]]; then
+            echo 'VPS SSH key and pinned host key must be configured.' >&2
+            exit 1
+          fi
+          install -m 700 -d "$RUNNER_TEMP/trace-ssh"
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/trace-ssh/id_ed25519"
+          printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/trace-ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/trace-ssh/id_ed25519" "$RUNNER_TEMP/trace-ssh/known_hosts"
+
+      - name: Check out trusted production workflow code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Prepare production environment
+        env:
+          AUDIT_DATABASE: ${{ secrets.AUDIT_DATABASE }}
+          AUDIT_IMMUDB_ADMIN_PASSWORD: ${{ secrets.AUDIT_IMMUDB_ADMIN_PASSWORD }}
+          AUDIT_PASSWORD: ${{ secrets.AUDIT_PASSWORD }}
+          AUDIT_USERNAME: ${{ secrets.AUDIT_USERNAME }}
+          AUTH_ACCESS_COOKIE_NAME: ${{ secrets.AUTH_ACCESS_COOKIE_NAME }}
+          AUTH_ALLOWED_ORIGINS: ${{ secrets.AUTH_ALLOWED_ORIGINS }}
+          AUTH_AUDIT_HASH_KEY: ${{ secrets.AUTH_AUDIT_HASH_KEY }}
+          AUTH_CSRF_COOKIE_NAME: ${{ secrets.AUTH_CSRF_COOKIE_NAME }}
+          AUTH_CSRF_HMAC_KEY: ${{ secrets.AUTH_CSRF_HMAC_KEY }}
+          AUTH_EMAIL_FROM: ${{ secrets.AUTH_EMAIL_FROM }}
+          AUTH_FRONTEND_URL: ${{ secrets.AUTH_FRONTEND_URL }}
+          AUTH_JWT_AUDIENCE: ${{ secrets.AUTH_JWT_AUDIENCE }}
+          AUTH_JWT_ISSUER: ${{ secrets.AUTH_JWT_ISSUER }}
+          AUTH_JWT_KID: ${{ secrets.AUTH_JWT_KID }}
+          AUTH_JWT_PRIVATE_KEY: ${{ secrets.AUTH_JWT_PRIVATE_KEY }}
+          AUTH_RABBITMQ_URL: ${{ secrets.AUTH_RABBITMQ_URL }}
+          AUTH_REFRESH_COOKIE_NAME: ${{ secrets.AUTH_REFRESH_COOKIE_NAME }}
+          AUTH_TOKEN_HASH_KEY: ${{ secrets.AUTH_TOKEN_HASH_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+          LANGSMITH_PROJECT: ${{ secrets.LANGSMITH_PROJECT }}
+          MAINTENANCE_DATABASE_URL: ${{ secrets.MAINTENANCE_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
+          RABBITMQ_USER: ${{ secrets.RABBITMQ_USER }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          REVIEW_RABBITMQ_URL: ${{ secrets.REVIEW_RABBITMQ_URL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          TRACE_APP_PASSWORD: ${{ secrets.TRACE_APP_PASSWORD }}
+          TRACE_CREDENTIAL_MAINTENANCE_PASSWORD: ${{ secrets.TRACE_CREDENTIAL_MAINTENANCE_PASSWORD }}
+          TRACE_INTERNAL_PASSWORD: ${{ secrets.TRACE_INTERNAL_PASSWORD }}
+          AGENT_ANTHROPIC_API_KEY: ${{ secrets.AGENT_ANTHROPIC_API_KEY }}
+          AGENT_GOOGLE_API_KEY: ${{ secrets.AGENT_GOOGLE_API_KEY }}
+          AGENT_OPENAI_API_KEY: ${{ secrets.AGENT_OPENAI_API_KEY }}
+          AGENT_XAI_API_KEY: ${{ secrets.AGENT_XAI_API_KEY }}
+          AUDIT_DEAD_LETTER_RETENTION_DAYS: ${{ secrets.AUDIT_DEAD_LETTER_RETENTION_DAYS }}
+          AUDIT_HOST: ${{ secrets.AUDIT_HOST }}
+          AUDIT_MAX_ATTEMPTS: ${{ secrets.AUDIT_MAX_ATTEMPTS }}
+          AUDIT_OUTBOX_RETENTION_DAYS: ${{ secrets.AUDIT_OUTBOX_RETENTION_DAYS }}
+          AUDIT_PORT: ${{ secrets.AUDIT_PORT }}
+          AUDIT_RETRY_BASE_SECONDS: ${{ secrets.AUDIT_RETRY_BASE_SECONDS }}
+          AUDIT_RETRY_MAX_SECONDS: ${{ secrets.AUDIT_RETRY_MAX_SECONDS }}
+          AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION: ${{ secrets.AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION }}
+          AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS: ${{ secrets.AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS }}
+          AUTH_DESKTOP_ALLOWED_ORIGINS: ${{ secrets.AUTH_DESKTOP_ALLOWED_ORIGINS }}
+          AUTH_EMAIL_MAX_RETRIES: ${{ secrets.AUTH_EMAIL_MAX_RETRIES }}
+          AUTH_EMAIL_RETRY_DELAYS_SECONDS: ${{ secrets.AUTH_EMAIL_RETRY_DELAYS_SECONDS }}
+          AUTH_GITHUB_CLIENT_ID: ${{ secrets.AUTH_GITHUB_CLIENT_ID }}
+          AUTH_GITHUB_CLIENT_SECRET: ${{ secrets.AUTH_GITHUB_CLIENT_SECRET }}
+          AUTH_GITHUB_REDIRECT_URI: ${{ secrets.AUTH_GITHUB_REDIRECT_URI }}
+          AUTH_GOOGLE_CLIENT_ID: ${{ secrets.AUTH_GOOGLE_CLIENT_ID }}
+          AUTH_GOOGLE_CLIENT_SECRET: ${{ secrets.AUTH_GOOGLE_CLIENT_SECRET }}
+          AUTH_GOOGLE_REDIRECT_URI: ${{ secrets.AUTH_GOOGLE_REDIRECT_URI }}
+          AUTH_JWT_VERIFICATION_KEYS: ${{ secrets.AUTH_JWT_VERIFICATION_KEYS }}
+          AUTH_VAULT_REQUEST_TIMEOUT_SECONDS: ${{ secrets.AUTH_VAULT_REQUEST_TIMEOUT_SECONDS }}
+          AUTH_VAULT_TOKEN_RENEWAL_SECONDS: ${{ secrets.AUTH_VAULT_TOKEN_RENEWAL_SECONDS }}
+          BACKEND_HTTP_PORT: ${{ secrets.BACKEND_HTTP_PORT }}
+          LANGSMITH_ENDPOINT: ${{ secrets.LANGSMITH_ENDPOINT }}
+          REVIEW_MAX_ATTEMPTS: ${{ secrets.REVIEW_MAX_ATTEMPTS }}
+          REVIEW_POLL_SECONDS: ${{ secrets.REVIEW_POLL_SECONDS }}
+          REVIEW_PROCESSING_TIMEOUT_SECONDS: ${{ secrets.REVIEW_PROCESSING_TIMEOUT_SECONDS }}
+          REVIEW_RETRY_BASE_SECONDS: ${{ secrets.REVIEW_RETRY_BASE_SECONDS }}
+          REVIEW_RETRY_MAX_SECONDS: ${{ secrets.REVIEW_RETRY_MAX_SECONDS }}
+        run: python3 .github/scripts/render-production-env.py "$RUNNER_TEMP/trace-production.env"
+
+      - name: Transfer production environment to the VPS
+        run: |
+          set -euo pipefail
+          ssh -T \
+            -i "$RUNNER_TEMP/trace-ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/trace-ssh/known_hosts" \
+            root@13.140.233.20 \
+            'umask 077; cd /root/trace && cat > .env.production.next && chmod 600 .env.production.next' \
+            < "$RUNNER_TEMP/trace-production.env"
+
+      - name: Deploy on the VPS
+        run: |
+          set -euo pipefail
+          ssh \
+            -i "$RUNNER_TEMP/trace-ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/trace-ssh/known_hosts" \
+            root@13.140.233.20 bash -se <<'REMOTE'
+          set -euo pipefail
+          cd /root/trace
+          trap 'rm -f .env.production.next' EXIT
+          test "$(git branch --show-current)" = main
+          git diff --quiet
+          git diff --cached --quiet
+          test -f .env.production.next
+          test -f compose.production.yaml
+          export GIT_TERMINAL_PROMPT=0
+          git fetch origin main
+          git merge --ff-only origin/main
+          docker compose --env-file .env.production.next -f compose.production.yaml config --quiet
+          mv -f .env.production.next .env.production
+          docker compose --env-file .env.production -f compose.production.yaml up -d vault
+          if ! docker compose --env-file .env.production -f compose.production.yaml \
+            exec -T vault vault status >/dev/null 2>&1; then
+            echo 'Vault must be running, initialized, and unsealed; inspect Vault logs and complete the operator setup before retrying.' >&2
+            exit 1
+          fi
+          if [[ ! -s production-secrets/trace-backend-token ]]; then
+            echo 'Restricted Vault token file is missing; complete the operator setup before retrying.' >&2
+            exit 1
+          fi
+          docker compose --env-file .env.production -f compose.production.yaml run --rm --build migrate \
+            uv run --offline --no-sync --locked alembic -c alembic.ini current --check-heads
+          docker compose --env-file .env.production -f compose.production.yaml up --build -d --wait
+          docker compose --env-file .env.production -f compose.production.yaml exec -T nginx nginx -t
+          docker compose --env-file .env.production -f compose.production.yaml exec -T nginx nginx -s reload
+          REMOTE

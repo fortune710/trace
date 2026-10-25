@@ -127,6 +127,25 @@ describe("ReviewSubmissionDialog", () => {
     expect(screen.getByRole("button", { name: "Start review" })).toHaveProperty("disabled", true)
   })
 
+  it("dismisses the dialog while the review request is pending", async () => {
+    mockedListAgents.mockResolvedValue({ items: [activeAgent], next_offset: null })
+    const mutate = vi.fn()
+    mockedUseCreateReview.mockReturnValue({
+      isPending: false,
+      mutate,
+    } as unknown as ReturnType<typeof useCreateReview>)
+    const { props } = renderDialog()
+
+    await screen.findByRole("checkbox", { name: /security scout/i })
+    fireEvent.click(screen.getByRole("checkbox", { name: /security scout/i }))
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }))
+
+    expect(mutate).toHaveBeenCalledOnce()
+    expect(props.onOpenChange).toHaveBeenCalledWith(false)
+    expect(props.onCreated).not.toHaveBeenCalled()
+    expect(toast.add).not.toHaveBeenCalled()
+  })
+
   it("shows a path-free failure message when submission fails", async () => {
     mockedListAgents.mockResolvedValue({ items: [activeAgent], next_offset: null })
     const mutate = vi.fn((_, callbacks) => callbacks.onError?.(new Error("/private/path")))
@@ -145,6 +164,30 @@ describe("ReviewSubmissionDialog", () => {
       type: "error",
       title: "Review could not be started",
       description: "The source could not be captured or the review request was rejected. Try again.",
+    })
+  })
+
+  it("explains when GitHub authorization prevents review submission", async () => {
+    mockedListAgents.mockResolvedValue({ items: [activeAgent], next_offset: null })
+    const error = Object.assign(new Error("GitHub authorization is required"), {
+      code: "github_authorization_required",
+    })
+    const mutate = vi.fn((_, callbacks) => callbacks.onError?.(error))
+    mockedUseCreateReview.mockReturnValue({
+      isPending: false,
+      mutate,
+    } as unknown as ReturnType<typeof useCreateReview>)
+    const { props } = renderDialog()
+
+    await screen.findByRole("checkbox", { name: /security scout/i })
+    fireEvent.click(screen.getByRole("checkbox", { name: /security scout/i }))
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }))
+
+    expect(props.onOpenChange).toHaveBeenCalledWith(false)
+    expect(toast.add).toHaveBeenCalledWith({
+      type: "error",
+      title: "Review could not be started",
+      description: "GitHub access is unavailable. Reconnect GitHub in Integrations and confirm access to this repository before trying again.",
     })
   })
 })

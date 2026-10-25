@@ -1,4 +1,4 @@
-"""Durable review execution with safe logs and mandatory LangSmith tracing."""
+"""Durable review execution with safe logs and optional LangSmith tracing."""
 
 from __future__ import annotations
 
@@ -6,7 +6,9 @@ import hashlib
 import json
 import logging
 import time
-from dataclasses import dataclass
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -15,14 +17,23 @@ from langsmith import Client
 from langsmith.run_helpers import tracing_context
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
 
+from agents.execution.agent import Agent, FindingOutput, ReviewTarget
 from agents.execution.orchestrator import OrchestratorAgent
 from agents.execution.redaction import redact_text
-from agents.execution.runtime import Agent, FindingOutput, ReviewTarget
+from agents.execution.tools import ToolExecutionContext
 from auth.credential_service import CredentialService, CredentialServiceError
+from auth.errors import (
+    GithubAuthorizationRequired,
+    ProviderRateLimited,
+    ProviderUnavailable,
+    RepositoryNotFound,
+)
 from auth.uuids import uuid7
 from credentials.models import CredentialProvider
 from db.rls import principal_transaction
+from external_repositories.service import RepositoryService, ReviewGitHubSourceAccess
 from findings.models import Finding
 from reviews.config import AgentExecutionSettings
 from reviews.models import (
@@ -57,27 +68,48 @@ def _log(event: str, **fields: object) -> None:
     logger.info(json.dumps({"event": event, **fields}, default=str, sort_keys=True))
 
 
+def _source_failure_code(
+    error: GithubAuthorizationRequired
+    | ProviderRateLimited
+    | ProviderUnavailable
+    | RepositoryNotFound,
+) -> str:
+    if isinstance(error, GithubAuthorizationRequired):
+        return "source_authorization_failed"
+    if isinstance(error, ProviderRateLimited):
+        return "source_rate_limited"
+    if isinstance(error, RepositoryNotFound):
+        return "source_not_found"
+    return "source_unavailable"
+
+
 class ReviewExecutionService:
     def __init__(
         self,
         *,
         engine: Engine,
         credential_service: CredentialService,
+        repository_service: RepositoryService,
         settings: AgentExecutionSettings,
     ) -> None:
         self._engine = engine
         self._credential_service = credential_service
+        self._repository_service = repository_service
         self._settings = settings
         self._settings.validate_for_execution()
-        langsmith_api_key = self._settings.langsmith_api_key
-        if langsmith_api_key is None:
-            raise RuntimeError("LangSmith API key is required for agent execution")
-        self._langsmith = Client(
-            api_key=langsmith_api_key.get_secret_value(),
-            api_url=self._settings.langsmith_endpoint,
-            hide_inputs=True,
-            hide_outputs=True,
-        )
+        self._langsmith: Client | None = None
+        if self._settings.langsmith_tracing:
+            langsmith_api_key = self._settings.langsmith_api_key
+            if langsmith_api_key is None:
+                raise RuntimeError(
+                    "LangSmith API key is required when tracing is enabled"
+                )
+            self._langsmith = Client(
+                api_key=langsmith_api_key.get_secret_value(),
+                api_url=self._settings.langsmith_endpoint,
+                hide_inputs=True,
+                hide_outputs=True,
+            )
         self._orchestrator = OrchestratorAgent()
 
     def execute(self, *, owner_id: UUID, review_id: UUID, dispatch_id: UUID) -> None:
@@ -111,21 +143,34 @@ class ReviewExecutionService:
                 project_name=self._settings.langsmith_project,
                 metadata=trace_metadata,
                 client=self._langsmith,
-                enabled=True,
+                enabled=self._settings.langsmith_tracing,
             ):
                 review_target = ReviewTarget(
                     source_kind=review.source_kind.value,
                     source_identifier=review.source_identifier,
                     source_revision=review.source_revision,
                 )
-                for selected_agent in selected_agent_executions:
-                    self._execute_selected_agent(
+                with self._open_review_source_access(
+                    owner_id=owner_id,
+                    review=review,
+                ) as repository_access:
+                    tool_context = ToolExecutionContext(
                         owner_id=owner_id,
-                        review=review,
-                        selected_agent=selected_agent,
-                        review_target=review_target,
-                        dispatch_id=dispatch_id,
+                        source_kind=review.source_kind.value,
+                        source_identifier=review.source_identifier,
+                        source_revision=review.source_revision,
+                        repository_access=repository_access,
+                        review_id=review_id,
                     )
+                    for selected_agent in selected_agent_executions:
+                        self._execute_selected_agent(
+                            owner_id=owner_id,
+                            review=review,
+                            selected_agent=selected_agent,
+                            review_target=review_target,
+                            tool_context=tool_context,
+                            dispatch_id=dispatch_id,
+                        )
             self._finalize_review_status(owner_id=owner_id, review_id=review_id)
             _log(
                 "review_execution_completed",
@@ -142,6 +187,35 @@ class ReviewExecutionService:
                 review_agents=selected_review_agents,
                 failure_code=error.code,
             )
+
+    @contextmanager
+    def _open_review_source_access(
+        self,
+        *,
+        owner_id: UUID,
+        review: Review,
+    ) -> Iterator[ReviewGitHubSourceAccess | None]:
+        """Open a provider reader only for source kinds implemented by execution.
+
+        Tools retain responsibility for returning ``source_execution_unsupported``
+        when an agent attempts an operation for a source kind without an adapter.
+        This prevents a local or GitLab review identifier from being validated as a
+        GitHub numeric repository ID before the agent starts.
+        """
+        if review.source_kind.value != "github":
+            yield None
+            return
+
+        with self._repository_service.open_review_github_source_access(
+            owner_id=owner_id,
+            repository_identifier=review.source_identifier,
+            revision=review.source_revision,
+            max_concurrent_requests=self._settings.github_max_concurrent_requests,
+            max_attempts=self._settings.github_get_max_attempts,
+            retry_base_seconds=self._settings.github_retry_base_seconds,
+            retry_max_seconds=self._settings.github_retry_max_seconds,
+        ) as repository_access:
+            yield repository_access
 
     def _claim_queued_review(self, *, owner_id: UUID, review_id: UUID) -> bool:
         with principal_transaction(self._engine, owner_id) as connection:
@@ -166,8 +240,11 @@ class ReviewExecutionService:
     def _load_review_and_selected_agents(
         self, *, owner_id: UUID, review_id: UUID
     ) -> tuple[Review, list[SelectedAgentExecution]]:
-        with principal_transaction(self._engine, owner_id) as connection:
-            review = connection.execute(
+        with (
+            principal_transaction(self._engine, owner_id) as connection,
+            Session(bind=connection) as session,
+        ):
+            review = session.execute(
                 sa.select(Review).where(
                     Review.id == review_id, Review.owner_id == owner_id
                 )
@@ -177,7 +254,7 @@ class ReviewExecutionService:
                     review_agent=review_agent,
                     credential_snapshot=credential_snapshot,
                 )
-                for review_agent, credential_snapshot in connection.execute(
+                for review_agent, credential_snapshot in session.execute(
                     sa.select(ReviewAgent, ReviewAgentExecutionConfig)
                     .join(
                         ReviewAgentExecutionConfig,
@@ -205,6 +282,7 @@ class ReviewExecutionService:
         review: Review,
         selected_agent: SelectedAgentExecution,
         review_target: ReviewTarget,
+        tool_context: ToolExecutionContext,
         dispatch_id: UUID,
     ) -> None:
         review_agent = selected_agent.review_agent
@@ -222,6 +300,11 @@ class ReviewExecutionService:
             )
             finding_batch = self._orchestrator.run(
                 review_target=review_target,
+                tool_context=replace(
+                    tool_context,
+                    review_agent_id=review_agent.id,
+                    attempt_id=attempt_id,
+                ),
                 agents=(runtime_agent,),
             )[0]
             self._persist_findings(
@@ -244,6 +327,29 @@ class ReviewExecutionService:
                 attempt_id=attempt_id,
                 dispatch_id=dispatch_id,
                 failure_code="model_access_unavailable",
+                error_class=type(error).__name__,
+            )
+            return
+        except (
+            GithubAuthorizationRequired,
+            ProviderRateLimited,
+            ProviderUnavailable,
+            RepositoryNotFound,
+        ) as error:
+            failure_code = _source_failure_code(error)
+            self._finish_review_agent_attempt(
+                owner_id=owner_id,
+                review_agent=review_agent,
+                attempt_id=attempt_id,
+                failure_code=failure_code,
+            )
+            _log(
+                "agent_execution_failed",
+                review_id=review.id,
+                review_agent_id=review_agent.id,
+                attempt_id=attempt_id,
+                dispatch_id=dispatch_id,
+                failure_code=failure_code,
                 error_class=type(error).__name__,
             )
             return

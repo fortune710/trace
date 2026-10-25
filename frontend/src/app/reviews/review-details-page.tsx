@@ -14,6 +14,14 @@ function displaySkills(skills: Array<string | Record<string, object>>) {
     .join(", ")
 }
 
+const reviewStatusDescriptions = {
+  queued: "This review is waiting for the selected reviewers to start.",
+  running: "The selected reviewers are checking the source now.",
+  completed: "The selected reviewers have finished this review.",
+  failed: "This review could not be completed.",
+  cancelled: "This review was cancelled before it finished.",
+}
+
 export function ReviewDetailsPage() {
   const { reviewId } = useParams()
   const navigate = useNavigate()
@@ -51,10 +59,11 @@ export function ReviewDetailsPage() {
           <div className="mt-6">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h1 className="text-xl font-medium tracking-tight">Review queued</h1>
+                <h1 className="text-xl font-medium tracking-tight">
+                  Review {review.data.status}
+                </h1>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  This review is queued for the selected reviewers. Provider execution is
-                  not started from this page.
+                  {reviewStatusDescriptions[review.data.status]}
                 </p>
               </div>
               <Button

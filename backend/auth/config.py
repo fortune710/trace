@@ -299,9 +299,13 @@ class AuthSettings(BaseSettings):
             raise AuthenticationConfigurationError(
                 "Vault credential encryption configuration is invalid"
             )
-        if self.environment == "production" and parsed.scheme != "https":
+        if (
+            self.environment == "production"
+            and parsed.scheme != "https"
+            and self.vault_addr != "http://vault:8200"
+        ):
             raise AuthenticationConfigurationError(
-                "Production Vault connections require HTTPS"
+                "Production Vault connections require HTTPS or the internal Compose Vault address"
             )
         for value in (
             self.vault_transit_mount,

@@ -15,6 +15,8 @@ from alembic import command
 
 _PRE_SNAPSHOT_REVISION = "20261018_0022"
 _SNAPSHOT_REVISION = "20261021_0023"
+_PRE_SHARED_TRIGGER_REVISION = "20261024_0025"
+_SHARED_TRIGGER_REVISION = "20261024_0026"
 
 
 def _migration_url() -> URL:
@@ -39,10 +41,6 @@ def _contract_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[sa.Engine]:
         with admin_engine.connect() as connection:
             connection.execute(sa.text(f'CREATE DATABASE "{database_name}"'))
         contract_url = migration_url.set(database=database_name)
-        # NB: str(URL) masks the password with "***" (SQLAlchemy renders
-        # passwords hidden by default), so pass the URL through with the
-        # password intact or Alembic connects with a literal "***" password
-        # and Postgres rejects it with "password authentication failed".
         monkeypatch.setenv(
             "MIGRATION_DATABASE_URL",
             contract_url.render_as_string(hide_password=False),
@@ -132,6 +130,86 @@ def test_review_snapshot_migration_upgrades_empty_tables_and_downgrades_cleanly(
                 ).scalar_one()
                 is False
             )
+
+
+@pytest.mark.integration
+def test_shared_snapshot_trigger_migration_rebinds_and_restores_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _contract_database(monkeypatch) as engine:
+        command.upgrade(_alembic_config(), _PRE_SHARED_TRIGGER_REVISION)
+        command.upgrade(_alembic_config(), _SHARED_TRIGGER_REVISION)
+
+        with engine.connect() as connection:
+            trigger_functions = dict(
+                connection.execute(
+                    sa.text(
+                        "SELECT trigger.tgname, function.proname "
+                        "FROM pg_trigger AS trigger "
+                        "JOIN pg_proc AS function ON function.oid = trigger.tgfoid "
+                        "WHERE trigger.tgname IN ("
+                        "'reviews_snapshot_immutable', "
+                        "'review_agents_snapshot_immutable') "
+                        "AND NOT trigger.tgisinternal"
+                    )
+                ).all()
+            )
+            legacy_functions = connection.execute(
+                sa.text(
+                    "SELECT proname FROM pg_proc "
+                    "WHERE proname IN ("
+                    "'trace_prevent_review_source_mutation', "
+                    "'trace_prevent_review_agent_snapshot_mutation')"
+                )
+            ).scalars()
+            can_delete_attempts = connection.execute(
+                sa.text(
+                    "SELECT has_table_privilege("
+                    "'trace_internal', 'private.review_agent_attempts', 'DELETE')"
+                )
+            ).scalar_one()
+
+        assert trigger_functions == {
+            "reviews_snapshot_immutable": "trace_prevent_review_snapshot_mutation",
+            "review_agents_snapshot_immutable": "trace_prevent_review_snapshot_mutation",
+        }
+        assert list(legacy_functions) == []
+        assert can_delete_attempts is False
+
+        command.downgrade(_alembic_config(), _PRE_SHARED_TRIGGER_REVISION)
+        with engine.connect() as connection:
+            trigger_functions = dict(
+                connection.execute(
+                    sa.text(
+                        "SELECT trigger.tgname, function.proname "
+                        "FROM pg_trigger AS trigger "
+                        "JOIN pg_proc AS function ON function.oid = trigger.tgfoid "
+                        "WHERE trigger.tgname IN ("
+                        "'reviews_snapshot_immutable', "
+                        "'review_agents_snapshot_immutable') "
+                        "AND NOT trigger.tgisinternal"
+                    )
+                ).all()
+            )
+            shared_function = connection.execute(
+                sa.text(
+                    "SELECT to_regprocedure("
+                    "'public.trace_prevent_review_snapshot_mutation()')"
+                )
+            ).scalar_one()
+            can_delete_attempts = connection.execute(
+                sa.text(
+                    "SELECT has_table_privilege("
+                    "'trace_internal', 'private.review_agent_attempts', 'DELETE')"
+                )
+            ).scalar_one()
+
+        assert trigger_functions == {
+            "reviews_snapshot_immutable": "trace_prevent_review_source_mutation",
+            "review_agents_snapshot_immutable": "trace_prevent_review_agent_snapshot_mutation",
+        }
+        assert shared_function is None
+        assert can_delete_attempts is True
 
 
 @pytest.mark.integration
