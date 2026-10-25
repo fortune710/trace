@@ -46,7 +46,10 @@ function ProjectReviews({ project }: { project: Project }) {
     project.api_project_id ?? (project.source === "github" ? project.id : null)
   const reviews = useProjectReviews(projectId, page)
   const hasNoReviews =
-    !reviews.isLoading && reviews.data?.items.length === 0 && page === 1
+    !reviews.isLoading &&
+    !reviews.isError &&
+    reviews.data?.items.length === 0 &&
+    page === 1
   const hasNextPage = reviews.data?.next_offset != null
 
   if (projectId === null || hasNoReviews) {

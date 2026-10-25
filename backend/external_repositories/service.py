@@ -54,6 +54,7 @@ __all__ = [
     "RepositoryRecord",
     "RepositoryService",
     "ReviewGitHubSourceAccess",
+    "ReviewSourceFileError",
     "invalidate_repository_catalog",
     "provision_external_repository",
 ]
@@ -231,6 +232,14 @@ class RepositoryProviderError(RuntimeError):
         self.kind = kind
         self.retry_after_seconds = retry_after_seconds
         super().__init__(kind)
+
+
+class ReviewSourceFileError(ValueError):
+    """A safe, expected failure while reading one immutable source file."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 class GitHubClient:
@@ -731,15 +740,20 @@ class ReviewGitHubSourceAccess:
                 path
             ):
                 raise RepositoryProviderError(kind="malformed_response")
-            payload, _headers = self._request_json(
-                method="GET",
-                path=(
-                    f"/repos/{quote(repository.owner_login, safe='')}/"
-                    f"{quote(repository.name, safe='')}/contents/"
-                    f"{quote(path, safe='/')}?ref={self._revision}"
-                ),
-                log_context=log_context,
-            )
+            try:
+                payload, _headers = self._request_json(
+                    method="GET",
+                    path=(
+                        f"/repos/{quote(repository.owner_login, safe='')}/"
+                        f"{quote(repository.name, safe='')}/contents/"
+                        f"{quote(path, safe='/')}?ref={self._revision}"
+                    ),
+                    log_context=log_context,
+                )
+            except RepositoryProviderError as error:
+                if error.kind == "not_found":
+                    raise ReviewSourceFileError("path_not_found") from error
+                raise
             if not isinstance(payload, dict) or payload.get("type") != "file":
                 raise RepositoryProviderError(kind="malformed_response")
             encoded_content = payload.get("content")
@@ -753,11 +767,13 @@ class ReviewGitHubSourceAccess:
             except (ValueError, UnicodeEncodeError) as error:
                 raise RepositoryProviderError(kind="malformed_response") from error
             if len(content) > _MAX_REVIEW_FILE_BYTES:
-                raise RepositoryProviderError(kind="malformed_response")
+                raise ReviewSourceFileError("file_too_large")
             try:
                 return content.decode("utf-8")
             except UnicodeDecodeError as error:
-                raise RepositoryProviderError(kind="malformed_response") from error
+                raise ReviewSourceFileError("file_not_utf8") from error
+        except ReviewSourceFileError:
+            raise
         except RepositoryProviderError as error:
             _log_provider_call("read_file", error.kind, error=error)
             raise _provider_error(error, operation="review_source") from error

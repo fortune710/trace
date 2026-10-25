@@ -6,6 +6,8 @@ import hashlib
 import json
 import logging
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from uuid import UUID
@@ -31,7 +33,7 @@ from auth.errors import (
 from auth.uuids import uuid7
 from credentials.models import CredentialProvider
 from db.rls import principal_transaction
-from external_repositories.service import RepositoryService
+from external_repositories.service import RepositoryService, ReviewGitHubSourceAccess
 from findings.models import Finding
 from reviews.config import AgentExecutionSettings
 from reviews.models import (
@@ -148,16 +150,9 @@ class ReviewExecutionService:
                     source_identifier=review.source_identifier,
                     source_revision=review.source_revision,
                 )
-                with self._repository_service.open_review_github_source_access(
+                with self._open_review_source_access(
                     owner_id=owner_id,
-                    repository_identifier=review.source_identifier,
-                    revision=review.source_revision,
-                    max_concurrent_requests=(
-                        self._settings.github_max_concurrent_requests
-                    ),
-                    max_attempts=self._settings.github_get_max_attempts,
-                    retry_base_seconds=self._settings.github_retry_base_seconds,
-                    retry_max_seconds=self._settings.github_retry_max_seconds,
+                    review=review,
                 ) as repository_access:
                     tool_context = ToolExecutionContext(
                         owner_id=owner_id,
@@ -192,6 +187,35 @@ class ReviewExecutionService:
                 review_agents=selected_review_agents,
                 failure_code=error.code,
             )
+
+    @contextmanager
+    def _open_review_source_access(
+        self,
+        *,
+        owner_id: UUID,
+        review: Review,
+    ) -> Iterator[ReviewGitHubSourceAccess | None]:
+        """Open a provider reader only for source kinds implemented by execution.
+
+        Tools retain responsibility for returning ``source_execution_unsupported``
+        when an agent attempts an operation for a source kind without an adapter.
+        This prevents a local or GitLab review identifier from being validated as a
+        GitHub numeric repository ID before the agent starts.
+        """
+        if review.source_kind.value != "github":
+            yield None
+            return
+
+        with self._repository_service.open_review_github_source_access(
+            owner_id=owner_id,
+            repository_identifier=review.source_identifier,
+            revision=review.source_revision,
+            max_concurrent_requests=self._settings.github_max_concurrent_requests,
+            max_attempts=self._settings.github_get_max_attempts,
+            retry_base_seconds=self._settings.github_retry_base_seconds,
+            retry_max_seconds=self._settings.github_retry_max_seconds,
+        ) as repository_access:
+            yield repository_access
 
     def _claim_queued_review(self, *, owner_id: UUID, review_id: UUID) -> bool:
         with principal_transaction(self._engine, owner_id) as connection:

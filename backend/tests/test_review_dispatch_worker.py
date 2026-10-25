@@ -557,8 +557,8 @@ def test_executor_loads_joined_review_agent_execution_configs() -> None:
             credential_service=None,  # type: ignore[arg-type]
             repository_service=None,  # type: ignore[arg-type]
             settings=AgentExecutionSettings(
-                rabbitmq_url="amqp://guest:guest@localhost/",
-                langsmith_tracing=False,
+                REVIEW_RABBITMQ_URL="amqp://guest:guest@localhost/",
+                LANGSMITH_TRACING=False,
             ),
         )
 

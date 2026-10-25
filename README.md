@@ -55,7 +55,7 @@ docker compose down
 
 This preserves PostgreSQL and RabbitMQ data. Use `docker compose down -v` only when you want to delete local data.
 
-The backend container runs [start.sh](backend/start.sh) with locked dependencies and without runtime downloads. It is non-root, has a read-only filesystem, cannot gain new privileges, and exposes only the API port on localhost. Service images are pinned to immutable digests; update them deliberately as part of maintenance.
+The backend container runs [start.sh](backend/start.sh) with locked dependencies and without runtime downloads. It is non-root, has a read-only filesystem, cannot gain new privileges, and exposes only the API port on localhost. The backend and data service images are pinned to immutable digests; update them deliberately as part of maintenance.
 
 For VPS HTTPS, NGINX routing, certificate issuance, and renewal, see
 [Production HTTPS and API routing](docs/production-https.md).
@@ -68,7 +68,7 @@ Before starting the backend, generate distinct local values for `AUTH_JWT_PRIVAT
 
 JWT key rotation uses `AUTH_JWT_KID` for the active signing key and `AUTH_JWT_VERIFICATION_KEYS` for the short-lived map of retired key IDs to public keys. Sign only with the active key, retain a retired public key only until every token it signed has expired, then remove it.
 
-Production uses `Secure; SameSite=None` host-only cookies and accepts credentialed CORS requests only from `https://trace.fortunealebiosu.dev` and `https://traceai.vercel.app`. These exact origins are enforced at startup. The browser must send the signed CSRF value in `X-CSRF-Token` for unsafe authenticated requests.
+Production serves the API at `https://traceapi.fortunealebiosu.dev` with `Secure; SameSite=None` host-only cookies and accepts credentialed CORS requests only from `https://trace.fortunealebiosu.dev` and `https://traceai.vercel.app`. These exact frontend origins are enforced at startup. The browser obtains the signed CSRF value from the API's `/auth/csrf` endpoint and sends it in `X-CSRF-Token` for unsafe authenticated requests.
 
 The complete authentication contract—including session rotation, OAuth PKCE, recovery, rate limits, failure responses, and audit retention—is in [docs/authentication.md](docs/authentication.md).
 

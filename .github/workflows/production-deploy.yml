@@ -61,7 +61,6 @@ jobs:
     environment: production
     concurrency:
       group: production-vps
-      queue: max
     steps:
       - name: Configure verified SSH access
         env:
@@ -103,7 +102,6 @@ jobs:
           AUTH_RABBITMQ_URL: ${{ secrets.AUTH_RABBITMQ_URL }}
           AUTH_REFRESH_COOKIE_NAME: ${{ secrets.AUTH_REFRESH_COOKIE_NAME }}
           AUTH_TOKEN_HASH_KEY: ${{ secrets.AUTH_TOKEN_HASH_KEY }}
-          AUTH_VAULT_ADDR: ${{ secrets.AUTH_VAULT_ADDR }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
           LANGSMITH_PROJECT: ${{ secrets.LANGSMITH_PROJECT }}
@@ -144,11 +142,8 @@ jobs:
           AUTH_GOOGLE_CLIENT_SECRET: ${{ secrets.AUTH_GOOGLE_CLIENT_SECRET }}
           AUTH_GOOGLE_REDIRECT_URI: ${{ secrets.AUTH_GOOGLE_REDIRECT_URI }}
           AUTH_JWT_VERIFICATION_KEYS: ${{ secrets.AUTH_JWT_VERIFICATION_KEYS }}
-          AUTH_VAULT_EMAIL_TRANSIT_KEY: ${{ secrets.AUTH_VAULT_EMAIL_TRANSIT_KEY }}
           AUTH_VAULT_REQUEST_TIMEOUT_SECONDS: ${{ secrets.AUTH_VAULT_REQUEST_TIMEOUT_SECONDS }}
           AUTH_VAULT_TOKEN_RENEWAL_SECONDS: ${{ secrets.AUTH_VAULT_TOKEN_RENEWAL_SECONDS }}
-          AUTH_VAULT_TRANSIT_KEY: ${{ secrets.AUTH_VAULT_TRANSIT_KEY }}
-          AUTH_VAULT_TRANSIT_MOUNT: ${{ secrets.AUTH_VAULT_TRANSIT_MOUNT }}
           BACKEND_HTTP_PORT: ${{ secrets.BACKEND_HTTP_PORT }}
           LANGSMITH_ENDPOINT: ${{ secrets.LANGSMITH_ENDPOINT }}
           REVIEW_MAX_ATTEMPTS: ${{ secrets.REVIEW_MAX_ATTEMPTS }}
@@ -194,7 +189,19 @@ jobs:
           git merge --ff-only origin/main
           docker compose --env-file .env.production.next -f compose.production.yaml config --quiet
           mv -f .env.production.next .env.production
+          docker compose --env-file .env.production -f compose.production.yaml up -d vault
+          if ! docker compose --env-file .env.production -f compose.production.yaml \
+            exec -T vault vault status >/dev/null 2>&1; then
+            echo 'Vault must be running, initialized, and unsealed; inspect Vault logs and complete the operator setup before retrying.' >&2
+            exit 1
+          fi
+          if [[ ! -s production-secrets/trace-backend-token ]]; then
+            echo 'Restricted Vault token file is missing; complete the operator setup before retrying.' >&2
+            exit 1
+          fi
           docker compose --env-file .env.production -f compose.production.yaml run --rm --build migrate \
             uv run --offline --no-sync --locked alembic -c alembic.ini current --check-heads
           docker compose --env-file .env.production -f compose.production.yaml up --build -d --wait
+          docker compose --env-file .env.production -f compose.production.yaml exec -T nginx nginx -t
+          docker compose --env-file .env.production -f compose.production.yaml exec -T nginx nginx -s reload
           REMOTE

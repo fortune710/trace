@@ -9,11 +9,7 @@ export const sessionQueryKey = ['auth', 'session'] as const
 let refreshInFlight: Promise<void> | undefined
 
 function refreshOnce() {
-  const hasCsrfToken = isTauri()
-    ? Boolean(getDesktopCsrfToken())
-    : document.cookie.includes('trace_csrf=')
-
-  if (!hasCsrfToken) {
+  if (isTauri() && !getDesktopCsrfToken()) {
     return Promise.reject(new Error('No active session'))
   }
 

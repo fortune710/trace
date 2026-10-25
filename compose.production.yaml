@@ -1,7 +1,7 @@
 # Standalone production stack. Do not combine this with compose.yaml: that file
 # starts development-only Mailpit and an ephemeral Vault dev server. Test-only
-# services and Mailpit are deliberately omitted. Vault Transit must be supplied
-# separately over HTTPS with a restricted token in production-secrets/.
+# services and Mailpit are deliberately omitted. This stack runs a persistent
+# Vault server on a private Compose network; initialize and unseal it manually.
 name: trace
 
 x-backend-image: &backend-image
@@ -21,19 +21,54 @@ x-app-hardening: &app-hardening
 
 x-vault-settings: &vault-settings
   AUTH_CREDENTIAL_ENCRYPTION_PROVIDER: vault
-  AUTH_VAULT_ADDR: ${AUTH_VAULT_ADDR:?Set the HTTPS Vault Transit address}
+  AUTH_VAULT_ADDR: http://vault:8200
   AUTH_VAULT_TOKEN_FILE: /run/vault/trace-backend-token
-  AUTH_VAULT_TRANSIT_MOUNT: ${AUTH_VAULT_TRANSIT_MOUNT:-transit}
-  AUTH_VAULT_TRANSIT_KEY: ${AUTH_VAULT_TRANSIT_KEY:-trace-provider-credentials}
-  AUTH_VAULT_EMAIL_TRANSIT_KEY: ${AUTH_VAULT_EMAIL_TRANSIT_KEY:-trace-email-delivery}
+  AUTH_VAULT_TRANSIT_MOUNT: transit
+  AUTH_VAULT_TRANSIT_KEY: trace-provider-credentials
+  AUTH_VAULT_EMAIL_TRANSIT_KEY: trace-email-delivery
   AUTH_VAULT_REQUEST_TIMEOUT_SECONDS: ${AUTH_VAULT_REQUEST_TIMEOUT_SECONDS:-3}
 
 services:
+  nginx:
+    image: nginx:1.30.6-alpine
+    entrypoint: ["/bin/sh", "/etc/nginx/trace/start.sh"]
+    ports:
+      - "80:8080"
+      - "443:8443"
+    volumes:
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx:/etc/nginx/trace:ro
+      - ./production-acme:/var/www/certbot:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - edge
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /etc/nginx/conf.d:rw,noexec,nosuid,size=1m
+      - /var/cache/nginx:rw,noexec,nosuid,size=16m
+      - /var/run:rw,noexec,nosuid,size=1m
+    pids_limit: 64
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /etc/letsencrypt/live/traceapi.fortunealebiosu.dev/fullchain.pem && cmp -s /etc/nginx/conf.d/default.conf /etc/nginx/trace/https.conf && nginx -t"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   backend:
     <<: [*backend-image, *app-hardening]
     environment:
       <<: *vault-settings
       AUTH_ENVIRONMENT: production
+      FORWARDED_ALLOW_IPS: "*"
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       REDIS_URL: ${REDIS_URL:?Set REDIS_URL}
       SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST}
@@ -90,11 +125,14 @@ services:
         condition: service_healthy
       immudb-bootstrap:
         condition: service_completed_successfully
+      vault:
+        condition: service_healthy
     networks:
       - edge
       - data
       - queue
       - audit
+      - secrets
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
     pids_limit: 128
@@ -117,6 +155,7 @@ services:
     command: ["./start-credential-maintenance.sh"]
     environment:
       <<: *vault-settings
+      AUTH_ENVIRONMENT: production
       MAINTENANCE_DATABASE_URL: ${MAINTENANCE_DATABASE_URL:?Set MAINTENANCE_DATABASE_URL}
       AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION: ${AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION:-vault-v1}
       AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS: ${AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS:-{}}
@@ -128,10 +167,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      vault:
+        condition: service_healthy
     networks:
       - edge
       - data
       - audit
+      - secrets
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
     pids_limit: 128
@@ -185,10 +227,13 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      vault:
+        condition: service_healthy
     networks:
       - edge
       - data
       - queue
+      - secrets
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
     pids_limit: 128
@@ -283,15 +328,49 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      vault:
+        condition: service_healthy
     networks:
       - edge
       - data
       - queue
+      - secrets
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=32m
     pids_limit: 128
     stop_grace_period: 30s
     restart: unless-stopped
+
+  vault:
+    image: hashicorp/vault:1.21.3@sha256:5f244d447c6f90107149c9565da5ffedf847cec673ba0062a82fc3dd83c89e65
+    command: ["server", "-config=/vault/config/vault.hcl"]
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+      VAULT_DISABLE_MLOCK: "true"
+      SKIP_SETCAP: "true"
+    volumes:
+      - vault_data:/vault/data
+      - ./config/vault.production.hcl:/vault/config/vault.hcl:ro
+    networks:
+      - secrets
+    user: "100:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+      - /home/vault:rw,noexec,nosuid,size=16m,uid=100,gid=1000,mode=0700
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    stop_grace_period: 30s
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, "vault status >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
 
   postgres:
     image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
@@ -401,6 +480,7 @@ secrets:
     file: ${VAULT_RUNTIME_TOKEN_FILE:-./production-secrets/trace-backend-token}
 
 volumes:
+  vault_data:
   postgres_data:
   rabbitmq_data:
   immudb_data:
@@ -408,6 +488,8 @@ volumes:
 
 networks:
   edge:
+  secrets:
+    internal: true
   data:
     internal: true
   queue:

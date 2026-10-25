@@ -17,7 +17,6 @@ jobs:
     environment: production
     concurrency:
       group: production-vps
-      queue: max
     steps:
       - name: Configure verified SSH access
         env:
@@ -59,7 +58,6 @@ jobs:
           AUTH_RABBITMQ_URL: ${{ secrets.AUTH_RABBITMQ_URL }}
           AUTH_REFRESH_COOKIE_NAME: ${{ secrets.AUTH_REFRESH_COOKIE_NAME }}
           AUTH_TOKEN_HASH_KEY: ${{ secrets.AUTH_TOKEN_HASH_KEY }}
-          AUTH_VAULT_ADDR: ${{ secrets.AUTH_VAULT_ADDR }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
           LANGSMITH_PROJECT: ${{ secrets.LANGSMITH_PROJECT }}
@@ -100,11 +98,8 @@ jobs:
           AUTH_GOOGLE_CLIENT_SECRET: ${{ secrets.AUTH_GOOGLE_CLIENT_SECRET }}
           AUTH_GOOGLE_REDIRECT_URI: ${{ secrets.AUTH_GOOGLE_REDIRECT_URI }}
           AUTH_JWT_VERIFICATION_KEYS: ${{ secrets.AUTH_JWT_VERIFICATION_KEYS }}
-          AUTH_VAULT_EMAIL_TRANSIT_KEY: ${{ secrets.AUTH_VAULT_EMAIL_TRANSIT_KEY }}
           AUTH_VAULT_REQUEST_TIMEOUT_SECONDS: ${{ secrets.AUTH_VAULT_REQUEST_TIMEOUT_SECONDS }}
           AUTH_VAULT_TOKEN_RENEWAL_SECONDS: ${{ secrets.AUTH_VAULT_TOKEN_RENEWAL_SECONDS }}
-          AUTH_VAULT_TRANSIT_KEY: ${{ secrets.AUTH_VAULT_TRANSIT_KEY }}
-          AUTH_VAULT_TRANSIT_MOUNT: ${{ secrets.AUTH_VAULT_TRANSIT_MOUNT }}
           BACKEND_HTTP_PORT: ${{ secrets.BACKEND_HTTP_PORT }}
           LANGSMITH_ENDPOINT: ${{ secrets.LANGSMITH_ENDPOINT }}
           REVIEW_MAX_ATTEMPTS: ${{ secrets.REVIEW_MAX_ATTEMPTS }}

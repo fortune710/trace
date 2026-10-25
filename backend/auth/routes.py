@@ -199,6 +199,41 @@ def install_auth_routes(
         )
         return {"message": "Authenticated.", "csrf_token": csrf_token}
 
+    @app.get("/auth/csrf")
+    async def csrf_for_browser(
+        response: Response,
+        refresh_token: str | None = Cookie(
+            default=None, alias=settings.refresh_cookie_name
+        ),
+        csrf_cookie: str | None = Cookie(default=None, alias=settings.csrf_cookie_name),
+    ) -> dict[str, str]:
+        """Expose the signed double-submit token to an approved frontend origin."""
+        try:
+            session_id = await asyncio.to_thread(
+                service().active_session_id_for_refresh, refresh_token
+            )
+        except AuthenticationUnavailable as error:
+            raise _unavailable() from error
+        if session_id is None:
+            raise _session_expired()
+
+        assert settings.csrf_hmac_key is not None
+        csrf_key = decode_base64url_key(
+            settings.csrf_hmac_key.get_secret_value(), name="AUTH_CSRF_HMAC_KEY"
+        )
+        if csrf_cookie and validate_csrf_token(
+            cookie_token=csrf_cookie,
+            header_token=csrf_cookie,
+            session_id=session_id,
+            key=csrf_key,
+        ):
+            csrf_token = csrf_cookie
+        else:
+            csrf_token = issue_csrf_token(session_id=session_id, key=csrf_key)
+            set_csrf_cookie(response, csrf_token=csrf_token, settings=settings)
+        response.headers["Cache-Control"] = "no-store"
+        return {"csrf_token": csrf_token}
+
     @app.post("/auth/refresh")
     async def refresh(
         request: Request,
