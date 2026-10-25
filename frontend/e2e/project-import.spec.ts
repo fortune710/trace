@@ -2,6 +2,7 @@ import { expect, test, type Page, type Route } from "@playwright/test"
 
 const apiBaseUrl = process.env.E2E_API_BASE_URL ?? "http://127.0.0.1:18000"
 const commitSha = "a".repeat(40)
+const csrfToken = "project-import-csrf-token"
 const project = {
   id: "project-1",
   name: "Trace dashboard",
@@ -42,6 +43,10 @@ async function mockProjectApi(page: Page, options: { failFirstCreate?: boolean; 
       await fulfillJson(route, { user_id: "user-1", session_id: "session-1" })
       return
     }
+    if (request.method() === "GET" && url.pathname === "/auth/csrf") {
+      await fulfillJson(route, { csrf_token: csrfToken })
+      return
+    }
     if (request.method() === "GET" && url.pathname === "/auth/oauth/github/connection") {
       await fulfillJson(route, { provider: "github", status: options.githubStatus ?? "connected" })
       return
@@ -79,6 +84,7 @@ async function mockProjectApi(page: Page, options: { failFirstCreate?: boolean; 
       return
     }
     if (request.method() === "POST" && url.pathname === "/api/v1/projects") {
+      expect(request.headers()["x-csrf-token"]).toBe(csrfToken)
       createAttempts += 1
       if (options.failFirstCreate && createAttempts === 1) {
         await fulfillJson(route, { error: { code: "provider_unavailable" } }, 503)
