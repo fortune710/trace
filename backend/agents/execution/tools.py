@@ -14,13 +14,15 @@ from typing import Literal
 from uuid import UUID
 
 from langchain.tools import ToolRuntime
-from langchain_core.tools import tool
+from langchain_core.tools import ToolException, tool
 from pydantic import BaseModel, Field
 
 from agents.execution.redaction import redact_text
+from auth.errors import RepositoryNotFound
 from external_repositories.service import (
     GitHubRequestLogContext,
     ReviewGitHubSourceAccess,
+    ReviewSourceFileError,
 )
 
 ReviewSource = Literal["github", "gitlab", "local"]
@@ -112,13 +114,13 @@ class ToolExecutionContext:
     def github_repository_access(self) -> ReviewGitHubSourceAccess:
         """Return the configured GitHub reader for a GitHub tool invocation."""
         if self.repository_access is None:
-            raise ValueError("source_execution_unsupported")
+            raise ToolException("source_execution_unsupported")
         return self.repository_access
 
 
 def _validate_source(*, source: str, runtime: ToolRuntime) -> None:
     if source != _review_context(runtime).source_kind:
-        raise ValueError("source_mismatch")
+        raise ToolException("source_mismatch")
 
 
 def _review_context(runtime: ToolRuntime) -> ToolExecutionContext:
@@ -221,7 +223,7 @@ def list_paths(
         return {"paths": paths, "truncated": truncated}
     if source == "local":
         pass
-    raise ValueError("source_execution_unsupported")
+    raise ToolException("source_execution_unsupported")
 
 
 @tool(args_schema=ReadFileInput)
@@ -248,6 +250,15 @@ def read_file(
                 path=path,
                 log_context=context.github_log_context(),
             )
+        except ReviewSourceFileError as error:
+            _log_tool_call(
+                "repository_tool_failed",
+                context=context,
+                tool_name="read_file",
+                arguments={"source": source, "path": path},
+                error=error,
+            )
+            raise ToolException(error.code) from error
         except Exception as error:
             _log_tool_call(
                 "repository_tool_failed",
@@ -267,7 +278,7 @@ def read_file(
         return {"path": path, "content": content}
     if source == "local":
         pass
-    raise ValueError("source_execution_unsupported")
+    raise ToolException("source_execution_unsupported")
 
 
 @tool(args_schema=SearchCodeInput)
@@ -306,12 +317,17 @@ def search_code(
                 log_context=context.github_log_context(),
             )
             matches: list[dict[str, object]] = []
+            skipped_files = 0
             folded_query = normalized_query.casefold()
             for path in paths:
-                contents = context.github_repository_access().read_file(
-                    path=path,
-                    log_context=context.github_log_context(),
-                )
+                try:
+                    contents = context.github_repository_access().read_file(
+                        path=path,
+                        log_context=context.github_log_context(),
+                    )
+                except (RepositoryNotFound, ReviewSourceFileError):
+                    skipped_files += 1
+                    continue
                 for line_number, line in enumerate(contents.splitlines(), start=1):
                     if folded_query not in line.casefold():
                         continue
@@ -323,6 +339,7 @@ def search_code(
                             "matches": matches,
                             "truncated": True,
                             "files_truncated": truncated,
+                            "skipped_files": skipped_files,
                         }
                         _log_tool_call(
                             "repository_tool_completed",
@@ -337,6 +354,7 @@ def search_code(
                                 "match_count": len(matches),
                                 "truncated": True,
                                 "files_truncated": truncated,
+                                "skipped_files": skipped_files,
                             },
                         )
                         return result
@@ -357,6 +375,7 @@ def search_code(
             "matches": matches,
             "truncated": False,
             "files_truncated": truncated,
+            "skipped_files": skipped_files,
         }
         _log_tool_call(
             "repository_tool_completed",
@@ -371,12 +390,16 @@ def search_code(
                 "match_count": len(matches),
                 "truncated": False,
                 "files_truncated": truncated,
+                "skipped_files": skipped_files,
             },
         )
         return result
     if source == "local":
         pass
-    raise ValueError("source_execution_unsupported")
+    raise ToolException("source_execution_unsupported")
 
 
 REPOSITORY_REVIEW_TOOLS = (list_paths, read_file, search_code)
+
+for _repository_tool in REPOSITORY_REVIEW_TOOLS:
+    _repository_tool.handle_tool_error = True

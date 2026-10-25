@@ -39,6 +39,7 @@ from external_repositories.service import (
     RepositoryRecord,
     RepositoryService,
     ReviewGitHubSourceAccess,
+    ReviewSourceFileError,
     invalidate_repository_catalog,
 )
 
@@ -87,6 +88,14 @@ def _file_payload(content: str) -> dict[str, str]:
         "type": "file",
         "encoding": "base64",
         "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+    }
+
+
+def _bytes_file_payload(content: bytes) -> dict[str, str]:
+    return {
+        "type": "file",
+        "encoding": "base64",
+        "content": base64.b64encode(content).decode("ascii"),
     }
 
 
@@ -225,6 +234,44 @@ def test_review_source_access_honors_retry_after_and_maps_exhausted_rate_limit()
 
     assert attempts == 3
     assert retry_delays == [30.0, 30.0]
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_code"),
+    [
+        (b"\x80", "file_not_utf8"),
+        (b"x" * (512 * 1024 + 1), "file_too_large"),
+    ],
+)
+def test_review_source_access_reports_unsearchable_files_without_provider_failure(
+    content: bytes,
+    expected_code: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repositories/12345":
+            return httpx.Response(200, json=_repository_payload())
+        return httpx.Response(200, json=_bytes_file_payload(content))
+
+    access = _review_access(handler)
+
+    with pytest.raises(ReviewSourceFileError) as raised:
+        access.read_file(path="src/file", log_context=_review_log_context())
+
+    assert raised.value.code == expected_code
+
+
+def test_review_source_access_reports_missing_file_as_tool_level_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repositories/12345":
+            return httpx.Response(200, json=_repository_payload())
+        return httpx.Response(404)
+
+    access = _review_access(handler)
+
+    with pytest.raises(ReviewSourceFileError) as raised:
+        access.read_file(path="deleted.py", log_context=_review_log_context())
+
+    assert raised.value.code == "path_not_found"
 
 
 @pytest.mark.parametrize(

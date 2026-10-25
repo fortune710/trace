@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from langchain_core.tools import ToolException
 
 import agents.execution.agent as execution_agent_module
 import agents.execution.executor as execution_executor_module
@@ -15,6 +16,7 @@ from agents.execution.tools import (
     REPOSITORY_REVIEW_TOOLS,
     ToolExecutionContext,
     list_paths,
+    search_code,
 )
 from auth.errors import (
     GithubAuthorizationRequired,
@@ -22,6 +24,7 @@ from auth.errors import (
     ProviderUnavailable,
     RepositoryNotFound,
 )
+from external_repositories.service import ReviewSourceFileError
 from reviews.config import AgentExecutionSettings
 from reviews.dispatch import _open_connection
 
@@ -110,6 +113,60 @@ def test_list_paths_logs_arguments_and_a_result_summary(caplog) -> None:
     assert '"event": "repository_tool_started"' in caplog.text
     assert '"path_prefix": "backend"' in caplog.text
     assert '"path_count": 2' in caplog.text
+
+
+def test_search_code_skips_unsearchable_files() -> None:
+    class RepositoryAccess:
+        def list_paths(self, **_kwargs):
+            return ["assets/logo.png", "src/app.py"], False
+
+        def read_file(self, *, path, **_kwargs):
+            if path == "assets/logo.png":
+                raise ReviewSourceFileError("file_not_utf8")
+            return "launch_enabled = true\n"
+
+    runtime = SimpleNamespace(
+        context=ToolExecutionContext(
+            owner_id=uuid4(),
+            source_kind="github",
+            source_identifier="123",
+            source_revision="a" * 40,
+            repository_access=RepositoryAccess(),  # type: ignore[arg-type]
+            review_id=uuid4(),
+        )
+    )
+
+    result = search_code.func(  # type: ignore[union-attr]
+        source="github",
+        query="launch_enabled",
+        runtime=runtime,
+    )
+
+    assert result == {
+        "matches": [
+            {
+                "path": "src/app.py",
+                "line_number": 1,
+                "line": "launch_enabled = true",
+            }
+        ],
+        "truncated": False,
+        "files_truncated": False,
+        "skipped_files": 1,
+    }
+
+
+def test_repository_tools_return_expected_tool_errors_to_the_model() -> None:
+    runtime = SimpleNamespace(context=_tool_context())
+
+    assert all(tool.handle_tool_error is True for tool in REPOSITORY_REVIEW_TOOLS)
+    with pytest.raises(ToolException, match="source_mismatch"):
+        list_paths.func(  # type: ignore[union-attr]
+            source="local",
+            path_prefix=None,
+            max_results=1,
+            runtime=runtime,
+        )
 
 
 def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -> None:
@@ -248,7 +305,7 @@ def test_github_tool_requires_github_source_access() -> None:
         review_id=uuid4(),
     )
 
-    with pytest.raises(ValueError, match="source_execution_unsupported"):
+    with pytest.raises(ToolException, match="source_execution_unsupported"):
         context.github_repository_access()
 
 
