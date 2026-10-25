@@ -149,6 +149,7 @@ def test_credential_metadata_response_is_secret_safe() -> None:
         owner_id=uuid4(),
         provider=CredentialProvider.GITHUB,
         kind=CredentialKind.OAUTH,
+        name=None,
         encryption_provider=CredentialEncryptionProvider.VAULT,
         key_version="v1",
         aad_version="v1",
