@@ -75,10 +75,18 @@ export function useDisableAgent() {
   })
 }
 
-export function useSaveProviderCredential() {
+export function useCreateProviderCredential() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: credentialsApi.createOrReplace,
+    mutationFn: credentialsApi.create,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: credentialsQueryKey }),
+  })
+}
+
+export function useRevokeProviderCredential() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: credentialsApi.revoke,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: credentialsQueryKey }),
   })
 }
