@@ -150,4 +150,19 @@ describe("ProjectDetailsPage", () => {
 
     expect(mockedUseProjectReviews).toHaveBeenCalledWith("project-a", 2)
   })
+
+  it("shows a review-load error instead of an empty state after a failed refetch", () => {
+    mockedUseProjectReviews.mockReturnValue({
+      data: { items: [], next_offset: null },
+      isLoading: false,
+      isError: true,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useProjectReviews>)
+
+    renderPage()
+
+    expect(screen.getByText("We could not load this project’s reviews.")).toBeTruthy()
+    expect(screen.queryByText("No reviews yet")).toBeNull()
+  })
 })
