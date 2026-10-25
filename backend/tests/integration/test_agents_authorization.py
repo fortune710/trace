@@ -145,3 +145,60 @@ def test_agent_rejects_revoked_credential_and_unknown_fields(
     )
     assert unknown.status_code == 400
     assert unknown.json()["error"]["code"] == "invalid_request"
+
+
+def test_agent_rejects_oauth_credential_and_accepts_named_api_key(
+    account_pair,
+) -> None:
+    owner, _ = account_pair
+
+    oauth = owner.request(
+        "POST",
+        "/api/v1/credentials",
+        json={
+            "provider": "openai",
+            "kind": "oauth",
+            "payload": {"access_token": "oauth-token"},
+        },
+    )
+    assert oauth.status_code == 201, oauth.text
+
+    rejected = owner.request(
+        "POST",
+        "/api/v1/agents",
+        json={
+            "name": "oauth-credential-agent",
+            "review_category": "security",
+            "model_provider": "openai",
+            "model_name": "gpt-6.1-sol",
+            "credential_id": oauth.json()["id"],
+        },
+    )
+    assert rejected.status_code == 409
+    assert rejected.json()["error"]["code"] == "resource_conflict"
+
+    named = owner.request(
+        "POST",
+        "/api/v1/credentials",
+        json={
+            "provider": "openai",
+            "kind": "api_key",
+            "name": "Agent key",
+            "payload": {"api_key": "sk-agent"},
+        },
+    )
+    assert named.status_code == 201, named.text
+
+    created = owner.request(
+        "POST",
+        "/api/v1/agents",
+        json={
+            "name": "named-key-agent",
+            "review_category": "security",
+            "model_provider": "openai",
+            "model_name": "gpt-6.1-sol",
+            "credential_id": named.json()["id"],
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["credential_id"] == named.json()["id"]
