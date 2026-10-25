@@ -1,8 +1,10 @@
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom"
 import {
+  ArrowLeft01Icon,
   BookOpen02Icon,
   BotIcon,
   Folder01Icon,
+  Key01Icon,
   Logout01Icon,
   PlugIcon,
   Search01Icon,
@@ -33,6 +35,13 @@ const navigationItems = [
   { label: "Projects", to: "/projects", icon: Folder01Icon },
   { label: "Agents", to: "/agents", icon: BotIcon },
   { label: "Integrations", to: "/integrations", icon: PlugIcon },
+  { label: "Settings", to: "/settings", icon: Settings01Icon },
+] as const
+
+// Shown instead of the main navigation while the user is in Settings: the
+// same sidebar changes view rather than gaining a second sidebar.
+const settingsItems = [
+  { label: "API keys", to: "/settings/api-keys", icon: Key01Icon },
 ] as const
 
 function getInitials(name: string, email: string) {
@@ -114,34 +123,48 @@ function AccountMenu() {
 
 export function AppSidebar() {
   const location = useLocation()
+  const isSettings =
+    location.pathname === "/settings" ||
+    location.pathname.startsWith("/settings/")
+  const items = isSettings ? settingsItems : navigationItems
 
   return (
     <Sidebar collapsible="offcanvas" className="border-sidebar-border">
       <SidebarHeader className="px-3 py-4">
-        <div className="flex items-center justify-between">
+        {isSettings ? (
           <Link
             to="/projects"
-            className="font-mono text-sm tracking-tight text-sidebar-foreground"
+            className="flex items-center gap-2 rounded-sm px-2 py-2 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
           >
-            trace
+            <HugeiconsIcon icon={ArrowLeft01Icon} size={17} strokeWidth={2} />
+            <span>Back to app</span>
           </Link>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Search"
-            className="text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
-          >
-            <HugeiconsIcon icon={Search01Icon} size={17} strokeWidth={2} />
-          </Button>
-        </div>
+        ) : (
+          <div className="flex items-center justify-between">
+            <Link
+              to="/projects"
+              className="font-mono text-sm tracking-tight text-sidebar-foreground"
+            >
+              trace
+            </Link>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Search"
+              className="text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
+            >
+              <HugeiconsIcon icon={Search01Icon} size={17} strokeWidth={2} />
+            </Button>
+          </div>
+        )}
       </SidebarHeader>
 
       <SidebarContent>
         <SidebarGroup className="px-3 pt-2">
           <SidebarGroupContent>
             <SidebarMenu>
-              {navigationItems.map((item) => {
+              {items.map((item) => {
                 const isActive =
                   location.pathname === item.to ||
                   location.pathname.startsWith(`${item.to}/`)
