@@ -97,7 +97,7 @@ class ToolExecutionContext:
     source_kind: str
     source_identifier: str
     source_revision: str
-    repository_access: ReviewGitHubSourceAccess
+    repository_access: ReviewGitHubSourceAccess | None
     review_id: UUID
     review_agent_id: UUID | None = None
     attempt_id: UUID | None = None
@@ -108,6 +108,12 @@ class ToolExecutionContext:
             review_agent_id=self.review_agent_id,
             attempt_id=self.attempt_id,
         )
+
+    def github_repository_access(self) -> ReviewGitHubSourceAccess:
+        """Return the configured GitHub reader for a GitHub tool invocation."""
+        if self.repository_access is None:
+            raise ValueError("source_execution_unsupported")
+        return self.repository_access
 
 
 def _validate_source(*, source: str, runtime: ToolRuntime) -> None:
@@ -183,7 +189,7 @@ def list_paths(
     bounded_max_results = min(max(max_results, 1), _MAX_PATH_RESULTS)
     if source == "github":
         try:
-            paths, truncated = context.repository_access.list_paths(
+            paths, truncated = context.github_repository_access().list_paths(
                 path_prefix=path_prefix,
                 max_results=bounded_max_results,
                 log_context=context.github_log_context(),
@@ -238,7 +244,7 @@ def read_file(
     _validate_source(source=source, runtime=runtime)
     if source == "github":
         try:
-            content = context.repository_access.read_file(
+            content = context.github_repository_access().read_file(
                 path=path,
                 log_context=context.github_log_context(),
             )
@@ -294,7 +300,7 @@ def search_code(
         raise ValueError("search_query_required")
     if source == "github":
         try:
-            paths, truncated = context.repository_access.list_paths(
+            paths, truncated = context.github_repository_access().list_paths(
                 path_prefix=path_prefix,
                 max_results=_MAX_SEARCH_FILES,
                 log_context=context.github_log_context(),
@@ -302,7 +308,7 @@ def search_code(
             matches: list[dict[str, object]] = []
             folded_query = normalized_query.casefold()
             for path in paths:
-                contents = context.repository_access.read_file(
+                contents = context.github_repository_access().read_file(
                     path=path,
                     log_context=context.github_log_context(),
                 )

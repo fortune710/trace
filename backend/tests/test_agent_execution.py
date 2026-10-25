@@ -212,6 +212,46 @@ def test_repository_tool_failures_have_source_specific_codes(
     assert _source_failure_code(error) == failure_code
 
 
+def test_local_review_does_not_open_github_source_access() -> None:
+    service = object.__new__(ReviewExecutionService)
+    service._repository_service = SimpleNamespace(
+        open_review_github_source_access=lambda **_kwargs: pytest.fail(
+            "GitHub source access must not open for a local review"
+        )
+    )
+    service._settings = SimpleNamespace(
+        github_max_concurrent_requests=2,
+        github_get_max_attempts=3,
+        github_retry_base_seconds=0.25,
+        github_retry_max_seconds=2.0,
+    )
+    review = SimpleNamespace(
+        source_kind=SimpleNamespace(value="local"),
+        source_identifier="workspace-123",
+        source_revision="revision-123",
+    )
+
+    with service._open_review_source_access(  # type: ignore[arg-type]
+        owner_id=uuid4(),
+        review=review,
+    ) as repository_access:
+        assert repository_access is None
+
+
+def test_github_tool_requires_github_source_access() -> None:
+    context = ToolExecutionContext(
+        owner_id=uuid4(),
+        source_kind="github",
+        source_identifier="123",
+        source_revision="a" * 40,
+        repository_access=None,
+        review_id=uuid4(),
+    )
+
+    with pytest.raises(ValueError, match="source_execution_unsupported"):
+        context.github_repository_access()
+
+
 def test_execution_settings_allow_disabled_langsmith(monkeypatch) -> None:
     monkeypatch.setenv("REVIEW_RABBITMQ_URL", "amqp://guest:guest@localhost/")
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
