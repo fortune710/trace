@@ -20,6 +20,8 @@ def upgrade() -> None:
 
     op.execute(
         """
+        DROP TRIGGER IF EXISTS review_agents_snapshot_immutable ON public.review_agents;
+        DROP TRIGGER IF EXISTS reviews_snapshot_immutable ON public.reviews;
         CREATE OR REPLACE FUNCTION public.trace_prevent_review_snapshot_mutation()
         RETURNS trigger
         LANGUAGE plpgsql
@@ -48,21 +50,36 @@ def upgrade() -> None:
           RETURN NEW;
         END
         $function$;
+        CREATE TRIGGER reviews_snapshot_immutable
+          BEFORE UPDATE ON public.reviews
+          FOR EACH ROW EXECUTE FUNCTION public.trace_prevent_review_snapshot_mutation();
+        CREATE TRIGGER review_agents_snapshot_immutable
+          BEFORE UPDATE ON public.review_agents
+          FOR EACH ROW EXECUTE FUNCTION public.trace_prevent_review_snapshot_mutation();
+        DROP FUNCTION IF EXISTS public.trace_prevent_review_source_mutation();
+        DROP FUNCTION IF EXISTS public.trace_prevent_review_agent_snapshot_mutation();
         """
     )
+    op.execute(
+        "GRANT SELECT, INSERT, UPDATE ON private.review_agent_attempts "
+        "TO trace_internal"
+    )
+    op.execute("REVOKE DELETE ON private.review_agent_attempts FROM trace_internal")
 
 
 def downgrade() -> None:
-    """Restore the prior trigger implementation."""
+    """Restore the prior table-specific trigger functions and bindings."""
 
     op.execute(
         """
-        CREATE OR REPLACE FUNCTION public.trace_prevent_review_snapshot_mutation()
+        DROP TRIGGER IF EXISTS review_agents_snapshot_immutable ON public.review_agents;
+        DROP TRIGGER IF EXISTS reviews_snapshot_immutable ON public.reviews;
+        CREATE OR REPLACE FUNCTION public.trace_prevent_review_source_mutation()
         RETURNS trigger
         LANGUAGE plpgsql
         AS $function$
         BEGIN
-          IF TG_TABLE_NAME = 'reviews' AND (
+          IF (
             NEW.source_revision IS DISTINCT FROM OLD.source_revision OR
             NEW.source_kind IS DISTINCT FROM OLD.source_kind OR
             NEW.source_identifier IS DISTINCT FROM OLD.source_identifier OR
@@ -71,7 +88,18 @@ def downgrade() -> None:
           ) THEN
             RAISE EXCEPTION 'review source snapshot is immutable';
           END IF;
-          IF TG_TABLE_NAME = 'review_agents' AND (
+          RETURN NEW;
+        END
+        $function$;
+        CREATE TRIGGER reviews_snapshot_immutable
+          BEFORE UPDATE ON public.reviews
+          FOR EACH ROW EXECUTE FUNCTION public.trace_prevent_review_source_mutation();
+        CREATE OR REPLACE FUNCTION public.trace_prevent_review_agent_snapshot_mutation()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        BEGIN
+          IF (
             NEW.agent_id IS DISTINCT FROM OLD.agent_id OR
             NEW.agent_display_name IS DISTINCT FROM OLD.agent_display_name OR
             NEW.agent_specialization IS DISTINCT FROM OLD.agent_specialization OR
@@ -86,5 +114,10 @@ def downgrade() -> None:
           RETURN NEW;
         END
         $function$;
+        CREATE TRIGGER review_agents_snapshot_immutable
+          BEFORE UPDATE ON public.review_agents
+          FOR EACH ROW EXECUTE FUNCTION public.trace_prevent_review_agent_snapshot_mutation();
+        DROP FUNCTION IF EXISTS public.trace_prevent_review_snapshot_mutation();
         """
     )
+    op.execute("GRANT DELETE ON private.review_agent_attempts TO trace_internal")
