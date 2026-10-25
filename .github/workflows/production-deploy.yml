@@ -61,7 +61,6 @@ jobs:
     environment: production
     concurrency:
       group: production-vps
-      queue: max
     steps:
       - name: Configure verified SSH access
         env:
