@@ -135,6 +135,7 @@ export type Credential = {
   id: string
   provider: CredentialProvider
   kind: "oauth" | "api_key"
+  name: string | null
   active: boolean
   created_at: string
   updated_at: string
@@ -149,6 +150,7 @@ export type CredentialPage = {
 export type CredentialCreate = {
   provider: ModelProvider
   kind: "api_key"
+  name: string
   payload: {
     api_key: string
   }
@@ -500,8 +502,10 @@ export const credentialsApi = {
     request<CredentialPage>(
       `/api/v1/credentials?${pageQuery({ page, page_size: pageSize })}`
     ),
-  createOrReplace: (credential: CredentialCreate) =>
+  create: (credential: CredentialCreate) =>
     post<Credential>("/api/v1/credentials", credential),
+  revoke: (credentialId: string) =>
+    remove(`/api/v1/credentials/${encodeURIComponent(credentialId)}`),
 }
 
 export const repositoriesApi = {
