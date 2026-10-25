@@ -60,7 +60,7 @@ export function ReviewSubmissionDialog({
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (selectedAgentIds.length === 0) {
+    if (selectedAgentIds.length === 0 || createReview.isPending) {
       return
     }
 
@@ -77,18 +77,25 @@ export function ReviewSubmissionDialog({
             description: "Your immutable source and reviewer snapshots were saved.",
           })
           setSelectedAgentIds([])
-          onOpenChange(false)
           onCreated(review.id)
         },
-        onError: () => {
+        onError: (error) => {
+          const githubAccessUnavailable =
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "github_authorization_required"
+
           toast.add({
             type: "error",
             title: "Review could not be started",
-            description: "The source could not be captured or the review request was rejected. Try again.",
+            description: githubAccessUnavailable
+              ? "GitHub access is unavailable. Reconnect GitHub in Integrations and confirm access to this repository before trying again."
+              : "The source could not be captured or the review request was rejected. Try again.",
           })
         },
       },
     )
+    onOpenChange(false)
   }
 
   const enabledAgents = (agents.data?.items ?? []).filter(
@@ -113,7 +120,10 @@ export function ReviewSubmissionDialog({
           className="grid gap-4"
           onSubmit={handleSubmit}
         >
-          <fieldset className="grid gap-2">
+          <fieldset
+            className="grid gap-2"
+            disabled={createReview.isPending}
+          >
             <legend className="text-sm font-medium">Reviewers</legend>
             {agents.isLoading ? (
               <p className="text-sm text-muted-foreground">Loading reviewers…</p>

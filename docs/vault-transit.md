@@ -26,19 +26,43 @@ docker compose up --build --wait
 
 Vault development mode is intentionally not persistent and must never be used on an internet-facing server. Restarting the Vault container invalidates ciphertext produced by that local instance. That is acceptable for local development because provider credentials must not be treated as durable there.
 
-## Server deployment before HCP Vault
+## Single-VPS production Compose
 
-If Vault runs on a school-project server, deploy the same official image in standard server mode—not the Compose development-mode service. Require all of the following before using it with real provider credentials:
+`compose.production.yaml` runs the same official Vault image in standard server mode with persistent Raft storage. It has no published host port and is reachable only by the backend and Vault-using workers on the internal `secrets` network. The application accepts production HTTP only at the exact address `http://vault:8200`; any other HTTP Vault address remains invalid. This is a conscious single-host tradeoff, not an end-to-end encrypted connection: a compromised Docker host or container on that network could observe Vault traffic, including plaintext credentials and the workload token. HashiCorp recommends TLS for production. Do not expose port 8200 or connect untrusted containers to `secrets`.
 
-- TLS from FastAPI to Vault, with certificate verification.
-- Persistent integrated Raft storage and encrypted backups.
-- Vault initialization/unseal keys kept outside the server; preferably configure auto-unseal using an external KMS/HSM.
-- A firewall or private network that allows only the FastAPI workload to reach port 8200.
-- A non-root Vault policy restricted to `transit/encrypt/trace-provider-credentials` and `transit/decrypt/trace-provider-credentials`.
-- Renewable workload authentication and audit logging; do not give FastAPI a root token.
-- A tested backup, restore, and rotation procedure.
+The Vault data volume must survive upgrades and restarts. Never use `docker compose down -v` against this stack. Keep encrypted, tested backups of Vault's Raft data off the VPS; losing the Transit keys makes stored provider credentials unreadable. A single Vault node has no high availability and must be manually unsealed after a restart.
 
-Set `AUTH_ENVIRONMENT=production`, `AUTH_CREDENTIAL_ENCRYPTION_PROVIDER=vault`, an HTTPS `AUTH_VAULT_ADDR`, and a restricted `AUTH_VAULT_TOKEN` (or the equivalent workload-issued token). Startup rejects a non-HTTPS Vault address in production.
+The first deployment workflow will create `.env.production` and start Vault, then stop with an operator-setup message while Vault is uninitialized or sealed. On the VPS, from `/root/trace`, initialize it exactly once:
+
+```bash
+docker compose --env-file .env.production -f compose.production.yaml exec vault vault operator init
+docker compose --env-file .env.production -f compose.production.yaml exec vault vault operator unseal
+```
+
+Store the initialization output (unseal shares and initial root token) securely **outside** the VPS, GitHub Actions, and this repository; never paste it into CI logs or a chat. Supply the required unseal shares interactively until Vault is unsealed. On every later Vault restart, repeat only `vault operator unseal` with the existing shares. Never run `vault operator init` against an initialized volume.
+
+For the one-time Transit setup, log in interactively with the initial root token, then run:
+
+```bash
+docker compose --env-file .env.production -f compose.production.yaml exec vault vault login -no-print
+docker compose --env-file .env.production -f compose.production.yaml exec vault vault secrets enable -path=transit transit
+docker compose --env-file .env.production -f compose.production.yaml exec vault vault write transit/keys/trace-provider-credentials type=aes256-gcm96 exportable=false allow_plaintext_backup=false
+docker compose --env-file .env.production -f compose.production.yaml exec vault vault write transit/keys/trace-email-delivery type=aes256-gcm96 exportable=false allow_plaintext_backup=false
+docker compose --env-file .env.production -f compose.production.yaml exec -T vault vault policy write trace-backend - < config/vault-backend-policy.hcl
+```
+
+Create a renewable, restricted application token in the operator-controlled file. The backend image runs as UID 10001, so the file must be readable by that UID without becoming world-readable:
+
+```bash
+umask 077
+install -d -m 0700 production-secrets
+docker compose --env-file .env.production -f compose.production.yaml exec -T vault vault token create -orphan -policy=trace-backend -period=24h -field=token > production-secrets/trace-backend-token
+chown 10001:10001 production-secrets/trace-backend-token
+chmod 0400 production-secrets/trace-backend-token
+docker compose --env-file .env.production -f compose.production.yaml exec vault sh -c 'rm -f /home/vault/.vault-token'
+```
+
+The root token must never be mounted into the application. Rerun the failed deployment workflow after setup, and verify the backend can renew the restricted token. Before production use, configure Vault audit logging and test a Raft snapshot backup and restore. The token file and Vault data volume are not created by GitHub Actions.
 
 ## Moving to HCP Vault
 

@@ -98,11 +98,55 @@ def test_vault_is_a_valid_credential_encryption_provider() -> None:
     )
 
 
-def test_production_rejects_unencrypted_vault_connections() -> None:
+def test_execution_worker_can_initialize_vault_without_authentication_keys() -> None:
+    settings = AuthSettings(
+        credential_encryption_provider="vault",
+        vault_addr="http://vault:8200",
+        vault_token=SecretStr("worker-vault-token"),
+    )
+
+    assert isinstance(
+        credential_cipher_from_settings(settings, validate_authentication=False),
+        VaultTransitCredentialCipher,
+    )
+
+
+def test_production_accepts_only_the_internal_compose_vault_http_address() -> None:
     settings = AuthSettings(
         environment="production",
         credential_encryption_provider="vault",
-        vault_addr="http://vault.example.test",
+        vault_addr="http://vault:8200",
+        vault_token=SecretStr("production-vault-token"),
+        cookie_same_site="none",
+        allowed_origins=sorted(PRODUCTION_FRONTEND_ORIGINS),
+        frontend_url="https://traceai.vercel.app",
+        smtp_host="smtp.example.test",
+        rabbitmq_url="amqp://trace:test@rabbitmq:5672/",
+        jwt_private_key=SecretStr(_encoded_key(b"a")),
+        token_hash_key=SecretStr(_encoded_key(b"b")),
+        csrf_hmac_key=SecretStr(_encoded_key(b"d")),
+        audit_hash_key=SecretStr(_encoded_key(b"e")),
+    )
+
+    settings.validate_for_authentication()
+
+
+@pytest.mark.parametrize(
+    "vault_addr",
+    [
+        "http://vault.example.test",
+        "http://vault:8201",
+        "http://vault:8200/",
+        "http://127.0.0.1:8200",
+    ],
+)
+def test_production_rejects_other_unencrypted_vault_connections(
+    vault_addr: str,
+) -> None:
+    settings = AuthSettings(
+        environment="production",
+        credential_encryption_provider="vault",
+        vault_addr=vault_addr,
         vault_token=SecretStr("production-vault-token"),
         cookie_same_site="none",
         allowed_origins=sorted(PRODUCTION_FRONTEND_ORIGINS),
@@ -339,11 +383,26 @@ def test_production_cors_allows_only_the_approved_frontends(monkeypatch) -> None
             "/health", headers={"Origin": "https://traceai.vercel.app"}
         )
         denied = client.get("/health", headers={"Origin": "https://untrusted.example"})
+        review_preflight = client.options(
+            "/api/v1/reviews",
+            headers={
+                "Origin": "https://traceai.vercel.app",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": (
+                    "content-type,idempotency-key,x-csrf-token"
+                ),
+            },
+        )
 
     assert (
         allowed.headers["access-control-allow-origin"] == "https://traceai.vercel.app"
     )
     assert "access-control-allow-origin" not in denied.headers
+    assert review_preflight.status_code == 200
+    assert (
+        "idempotency-key"
+        in review_preflight.headers["access-control-allow-headers"].lower()
+    )
 
 
 def test_authentication_response_sets_both_http_only_credentials() -> None:

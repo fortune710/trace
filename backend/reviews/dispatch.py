@@ -122,11 +122,11 @@ class RabbitMQReviewPublisher:
                     pass
 
 
-def _open_connection(url: str) -> Any:
+def _open_connection(url: str, *, heartbeat: int = 30) -> Any:
     if pika is None:
         raise ReviewQueueUnavailable("RabbitMQ client is not installed")
     parameters = pika.URLParameters(url)
-    parameters.heartbeat = 30
+    parameters.heartbeat = heartbeat
     parameters.blocked_connection_timeout = 5
     parameters.connection_attempts = 1
     parameters.retry_delay = 0

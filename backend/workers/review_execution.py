@@ -30,7 +30,10 @@ def run() -> None:
     auth_settings = AuthSettings()
     engine = get_engine()
     credentials = CredentialService(
-        engine=engine, cipher=credential_cipher_from_settings(auth_settings)
+        engine=engine,
+        cipher=credential_cipher_from_settings(
+            auth_settings, validate_authentication=False
+        ),
     )
     repository_service = RepositoryService(
         engine=engine,
@@ -43,7 +46,9 @@ def run() -> None:
         repository_service=repository_service,
         settings=execution_settings,
     )
-    connection = _open_connection(execution_settings.rabbitmq_url or "")
+    # Agent inference can exceed the broker heartbeat while this synchronous
+    # callback is running. The worker cannot service heartbeats until it returns.
+    connection = _open_connection(execution_settings.rabbitmq_url or "", heartbeat=0)
     channel = connection.channel()
     declare_review_dispatch_topology(channel)
     channel.basic_qos(prefetch_count=1)

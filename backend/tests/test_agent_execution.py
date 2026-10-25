@@ -1,11 +1,29 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from uuid import UUID, uuid4
+
+import pytest
+
 import agents.execution.agent as execution_agent_module
+import agents.execution.executor as execution_executor_module
 from agents.execution.agent import Agent, FindingBatch, FindingOutput, ReviewTarget
+from agents.execution.executor import ReviewExecutionService, _source_failure_code
 from agents.execution.orchestrator import OrchestratorAgent
 from agents.execution.redaction import redact_text
-from agents.execution.tools import REPOSITORY_REVIEW_TOOLS, ToolExecutionContext
+from agents.execution.tools import (
+    REPOSITORY_REVIEW_TOOLS,
+    ToolExecutionContext,
+    list_paths,
+)
+from auth.errors import (
+    GithubAuthorizationRequired,
+    ProviderRateLimited,
+    ProviderUnavailable,
+    RepositoryNotFound,
+)
 from reviews.config import AgentExecutionSettings
+from reviews.dispatch import _open_connection
 
 
 def _tool_context() -> ToolExecutionContext:
@@ -14,7 +32,8 @@ def _tool_context() -> ToolExecutionContext:
         source_kind="github",
         source_identifier="42",
         source_revision="a" * 40,
-        repository_service=None,  # type: ignore[arg-type]
+        repository_access=None,  # type: ignore[arg-type]
+        review_id=UUID("00000000-0000-0000-0000-000000000001"),
     )
 
 
@@ -43,6 +62,54 @@ def test_repository_tools_require_source_without_exposing_runtime_context() -> N
     assert set(schemas["list_paths"]) == {"source", "path_prefix", "max_results"}
     assert set(schemas["read_file"]) == {"source", "path"}
     assert set(schemas["search_code"]) == {"source", "query", "path_prefix"}
+    assert (
+        "must match the target source" in schemas["list_paths"]["source"]["description"]
+    )
+    assert (
+        "Use null for the repository root"
+        in schemas["list_paths"]["path_prefix"]["description"]
+    )
+    assert (
+        "Do not use '.', './', '..'"
+        in schemas["search_code"]["path_prefix"]["description"]
+    )
+    assert "returned by list_paths" in schemas["read_file"]["path"]["description"]
+    assert "Literal text" in schemas["search_code"]["query"]["description"]
+
+
+def test_list_paths_logs_arguments_and_a_result_summary(caplog) -> None:
+    class RepositoryAccess:
+        def list_paths(self, **kwargs):
+            assert kwargs["path_prefix"] == "backend"
+            assert kwargs["log_context"].review_id
+            return ["backend/main.py", "backend/worker.py"], False
+
+    runtime = SimpleNamespace(
+        context=ToolExecutionContext(
+            owner_id=uuid4(),
+            source_kind="github",
+            source_identifier="123",
+            source_revision="a" * 40,
+            repository_access=RepositoryAccess(),  # type: ignore[arg-type]
+            review_id=uuid4(),
+        )
+    )
+
+    with caplog.at_level("INFO", logger="trace.agent_execution.tools"):
+        result = list_paths.func(  # type: ignore[union-attr]
+            source="github",
+            path_prefix="backend",
+            max_results=25,
+            runtime=runtime,
+        )
+
+    assert result == {
+        "paths": ["backend/main.py", "backend/worker.py"],
+        "truncated": False,
+    }
+    assert '"event": "repository_tool_started"' in caplog.text
+    assert '"path_prefix": "backend"' in caplog.text
+    assert '"path_count": 2' in caplog.text
 
 
 def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -> None:
@@ -130,11 +197,92 @@ def test_redaction_removes_common_provider_keys() -> None:
     assert "[REDACTED_SECRET]" in value
 
 
-def test_execution_settings_require_langsmith(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("error", "failure_code"),
+    [
+        (GithubAuthorizationRequired(), "source_authorization_failed"),
+        (ProviderRateLimited(), "source_rate_limited"),
+        (ProviderUnavailable(), "source_unavailable"),
+        (RepositoryNotFound(), "source_not_found"),
+    ],
+)
+def test_repository_tool_failures_have_source_specific_codes(
+    error, failure_code
+) -> None:
+    assert _source_failure_code(error) == failure_code
+
+
+def test_execution_settings_allow_disabled_langsmith(monkeypatch) -> None:
     monkeypatch.setenv("REVIEW_RABBITMQ_URL", "amqp://guest:guest@localhost/")
-    monkeypatch.setenv("LANGSMITH_TRACING", "true")
-    monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
 
     settings = AgentExecutionSettings()
 
     settings.validate_for_execution()
+
+    def unexpected_client(**_kwargs):
+        raise AssertionError("LangSmith client must not be created")
+
+    monkeypatch.setattr(execution_executor_module, "Client", unexpected_client)
+    service = ReviewExecutionService(
+        engine=None,  # type: ignore[arg-type]
+        credential_service=None,  # type: ignore[arg-type]
+        repository_service=None,  # type: ignore[arg-type]
+        settings=settings,
+    )
+
+    assert service._langsmith is None
+
+
+def test_execution_settings_require_key_when_langsmith_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("REVIEW_RABBITMQ_URL", "amqp://guest:guest@localhost/")
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="LangSmith API key is required"):
+        AgentExecutionSettings().validate_for_execution()
+
+    monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
+    AgentExecutionSettings().validate_for_execution()
+
+
+def test_review_broker_connection_can_disable_heartbeat_for_long_agent_runs(
+    monkeypatch,
+) -> None:
+    captured_heartbeats: list[int] = []
+
+    def fake_connection(parameters):
+        captured_heartbeats.append(parameters.heartbeat)
+        return object()
+
+    monkeypatch.setattr("reviews.dispatch.pika.BlockingConnection", fake_connection)
+
+    _open_connection("amqp://guest:guest@localhost/")
+    _open_connection("amqp://guest:guest@localhost/", heartbeat=0)
+
+    assert captured_heartbeats == [30, 0]
+
+
+def test_execution_service_hides_langsmith_inputs_and_outputs(monkeypatch) -> None:
+    monkeypatch.setenv("REVIEW_RABBITMQ_URL", "amqp://guest:guest@localhost/")
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
+    client_arguments = {}
+
+    def fake_client(**kwargs):
+        client_arguments.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(execution_executor_module, "Client", fake_client)
+
+    ReviewExecutionService(
+        engine=None,  # type: ignore[arg-type]
+        credential_service=None,  # type: ignore[arg-type]
+        repository_service=None,  # type: ignore[arg-type]
+        settings=AgentExecutionSettings(),
+    )
+
+    assert client_arguments["api_key"] == "ls-test"
+    assert client_arguments["hide_inputs"] is True
+    assert client_arguments["hide_outputs"] is True

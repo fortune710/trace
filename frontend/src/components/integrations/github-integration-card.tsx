@@ -77,19 +77,30 @@ export function GitHubIntegrationCard() {
         <p className="text-sm text-muted-foreground">
           {connection.isPending ? "Checking GitHub connection…" : copy?.description}
         </p>
-        {connection.isError ? (
-          <Button size="sm" type="button" variant="outline" onClick={() => void connection.refetch()}>
-            Try again
-          </Button>
-        ) : (
-          <Button size="sm" type="button" disabled={connection.isPending || isConnectionStarting} onClick={() => connect.mutate()}>
+        <div className="flex flex-wrap items-center gap-2">
+          {connection.isError ? (
+            <Button
+              size="sm"
+              type="button"
+              variant="outline"
+              onClick={() => void connection.refetch()}
+            >
+              Try again
+            </Button>
+          ) : null}
+          <Button
+            size="sm"
+            type="button"
+            disabled={connection.isPending || isConnectionStarting}
+            onClick={() => connect.mutate()}
+          >
             {isConnectionStarting ? "Connecting…" : actionLabel}
           </Button>
-        )}
+        </div>
       </div>
       {connection.isError ? (
         <p className="mt-3 text-sm text-destructive" role="status">
-          We could not check your GitHub connection. Try again shortly.
+          We could not check your GitHub connection. Reconnect to restore access, or try the status check again.
         </p>
       ) : null}
     </article>

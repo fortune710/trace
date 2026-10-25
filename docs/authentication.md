@@ -145,6 +145,6 @@ Before serving requests, the application validates base64url-encoded 32-byte val
 - `AUTH_CSRF_HMAC_KEY`
 - `AUTH_AUDIT_HASH_KEY`
 
-When `AUTH_CREDENTIAL_ENCRYPTION_PROVIDER=local`, it additionally requires `AUTH_CREDENTIAL_ENCRYPTION_KEY` and may temporarily accept retired keys through `AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS`. When the provider is `vault`, it instead requires `AUTH_VAULT_ADDR` and `AUTH_VAULT_TOKEN`; production requires Vault Transit and an HTTPS Vault address.
+When `AUTH_CREDENTIAL_ENCRYPTION_PROVIDER=local`, it additionally requires `AUTH_CREDENTIAL_ENCRYPTION_KEY` and may temporarily accept retired keys through `AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS`. When the provider is `vault`, it instead requires `AUTH_VAULT_ADDR` and `AUTH_VAULT_TOKEN`; production requires Vault Transit and either HTTPS or the exact internal Compose address `http://vault:8200`.
 
 Production additionally requires secure cookies, the approved cookie prefixes, `SameSite=None`, and exactly the two production frontend origins above. The service deliberately refuses to start on an incomplete or insecure configuration.

@@ -6,16 +6,20 @@ import asyncio
 import base64
 import json
 import logging
+import random
 import re
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Self
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 from uuid import UUID
 
+import httpx
 import sqlalchemy as sa
 from redis.exceptions import RedisError
 
@@ -45,9 +49,11 @@ __all__ = [
     "BranchRecord",
     "CreatedBranch",
     "GitHubClient",
+    "GitHubRequestLogContext",
     "RepositoryPageResult",
     "RepositoryRecord",
     "RepositoryService",
+    "ReviewGitHubSourceAccess",
     "invalidate_repository_catalog",
     "provision_external_repository",
 ]
@@ -89,6 +95,15 @@ class CreatedBranch:
     repository_id: str
     name: str
     commit_sha: str
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubRequestLogContext:
+    """Correlation fields attached to execution-worker GitHub request logs."""
+
+    review_id: UUID
+    review_agent_id: UUID | None = None
+    attempt_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -473,11 +488,27 @@ class GitHubClient:
                 "User-Agent": "Trace/1.0",
             },
         )
+        _log_github_api_request(
+            method=method,
+            path=path,
+            request_body_bytes=len(request_body) if request_body is not None else 0,
+        )
         try:
             with urlopen(request, timeout=self._timeout_seconds) as response:
                 raw = response.read(_MAX_RESPONSE_BYTES + 1)
                 headers = response.headers
+                _log_github_api_response(
+                    method=method,
+                    path=path,
+                    status_code=_response_status_code(response),
+                    response_body_bytes=len(raw),
+                )
         except HTTPError as error:
+            _log_github_api_failure(
+                method=method,
+                path=path,
+                error=error,
+            )
             retry_after = _retry_after(error.headers)
             remaining = error.headers.get("X-RateLimit-Remaining")
             if error.code == 429 or (error.code == 403 and remaining == "0"):
@@ -494,6 +525,11 @@ class GitHubClient:
                 kind=kind, retry_after_seconds=retry_after
             ) from error
         except (URLError, TimeoutError, OSError) as error:
+            _log_github_api_failure(
+                method=method,
+                path=path,
+                error=error,
+            )
             raise RepositoryProviderError(kind="unavailable") from error
         if len(raw) > _MAX_RESPONSE_BYTES:
             raise RepositoryProviderError(kind="malformed_response")
@@ -566,6 +602,346 @@ class GitHubClient:
             commit_sha=sha,
             protected=protected,
         )
+
+
+class ReviewGitHubSourceAccess:
+    """Review-scoped GitHub source reader shared by all runtime tools.
+
+    This deliberately sits beside, rather than replaces, :class:`GitHubClient`.
+    Repository-browsing endpoints retain their existing request behaviour; only
+    execution-worker reads share a connection pool, metadata cache, and request
+    budget.
+    """
+
+    def __init__(
+        self,
+        *,
+        repository_service: RepositoryService,
+        owner_id: UUID,
+        repository_identifier: str,
+        revision: str,
+        max_concurrent_requests: int = 2,
+        max_attempts: int = 3,
+        retry_base_seconds: float = 0.25,
+        retry_max_seconds: float = 2.0,
+        retry_after_max_seconds: float = 30.0,
+        client: httpx.Client | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        jitter: Callable[[float, float], float] = random.uniform,
+    ) -> None:
+        if max_concurrent_requests < 1:
+            raise ValueError("max_concurrent_requests must be positive")
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be positive")
+        if retry_base_seconds < 0 or retry_max_seconds < retry_base_seconds:
+            raise ValueError("invalid GitHub retry configuration")
+
+        self._repository_service = repository_service
+        self._owner_id = owner_id
+        self._repository_identifier = _validate_repository_identifier(
+            repository_identifier
+        )
+        self._revision = revision
+        self._max_attempts = max_attempts
+        self._retry_base_seconds = retry_base_seconds
+        self._retry_max_seconds = retry_max_seconds
+        self._retry_after_max_seconds = retry_after_max_seconds
+        self._semaphore = threading.BoundedSemaphore(max_concurrent_requests)
+        self._metadata_lock = threading.Lock()
+        self._credential_lock = threading.Lock()
+        self._repository: RepositoryRecord | None = None
+        self._access_token: str | None = None
+        self._sleep = sleep
+        self._jitter = jitter
+        self._owns_client = client is None
+        self._client = client or httpx.Client(
+            base_url=repository_service._settings.github_api_url.rstrip("/"),
+            timeout=10.0,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": _GITHUB_API_VERSION,
+                "User-Agent": "Trace/1.0",
+            },
+        )
+
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def list_paths(
+        self,
+        *,
+        path_prefix: str | None,
+        max_results: int,
+        log_context: GitHubRequestLogContext,
+    ) -> tuple[list[str], bool]:
+        try:
+            repository = self._repository_metadata(log_context=log_context)
+            if not _GITHUB_SHA.fullmatch(self._revision) or not 1 <= max_results <= 500:
+                raise RepositoryProviderError(kind="malformed_response")
+            payload, _headers = self._request_json(
+                method="GET",
+                path=(
+                    f"/repos/{quote(repository.owner_login, safe='')}/"
+                    f"{quote(repository.name, safe='')}/git/trees/"
+                    f"{self._revision}?recursive=1"
+                ),
+                log_context=log_context,
+            )
+            if not isinstance(payload, dict) or payload.get("truncated") is True:
+                raise RepositoryProviderError(kind="malformed_response")
+            entries = payload.get("tree")
+            if not isinstance(entries, list):
+                raise RepositoryProviderError(kind="malformed_response")
+            normalized_prefix = _review_path_prefix(path_prefix)
+            paths: list[str] = []
+            has_more = False
+            for entry in entries:
+                if not isinstance(entry, dict) or entry.get("type") != "blob":
+                    continue
+                path = entry.get("path")
+                if not isinstance(path, str) or not _is_safe_review_path(path):
+                    raise RepositoryProviderError(kind="malformed_response")
+                if normalized_prefix and not path.startswith(normalized_prefix):
+                    continue
+                if len(paths) == max_results:
+                    has_more = True
+                    break
+                paths.append(path)
+            return paths, has_more
+        except RepositoryProviderError as error:
+            _log_provider_call("list_paths", error.kind, error=error)
+            raise _provider_error(error, operation="review_source") from error
+
+    def read_file(
+        self,
+        *,
+        path: str,
+        log_context: GitHubRequestLogContext,
+    ) -> str:
+        try:
+            repository = self._repository_metadata(log_context=log_context)
+            if not _GITHUB_SHA.fullmatch(self._revision) or not _is_safe_review_path(
+                path
+            ):
+                raise RepositoryProviderError(kind="malformed_response")
+            payload, _headers = self._request_json(
+                method="GET",
+                path=(
+                    f"/repos/{quote(repository.owner_login, safe='')}/"
+                    f"{quote(repository.name, safe='')}/contents/"
+                    f"{quote(path, safe='/')}?ref={self._revision}"
+                ),
+                log_context=log_context,
+            )
+            if not isinstance(payload, dict) or payload.get("type") != "file":
+                raise RepositoryProviderError(kind="malformed_response")
+            encoded_content = payload.get("content")
+            encoding = payload.get("encoding")
+            if not isinstance(encoded_content, str) or encoding != "base64":
+                raise RepositoryProviderError(kind="malformed_response")
+            try:
+                content = base64.b64decode(
+                    "".join(encoded_content.splitlines()), validate=True
+                )
+            except (ValueError, UnicodeEncodeError) as error:
+                raise RepositoryProviderError(kind="malformed_response") from error
+            if len(content) > _MAX_REVIEW_FILE_BYTES:
+                raise RepositoryProviderError(kind="malformed_response")
+            try:
+                return content.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise RepositoryProviderError(kind="malformed_response") from error
+        except RepositoryProviderError as error:
+            _log_provider_call("read_file", error.kind, error=error)
+            raise _provider_error(error, operation="review_source") from error
+
+    def _repository_metadata(
+        self, *, log_context: GitHubRequestLogContext
+    ) -> RepositoryRecord:
+        if self._repository is not None:
+            return self._repository
+        with self._metadata_lock:
+            if self._repository is None:
+                payload, _headers = self._request_json(
+                    method="GET",
+                    path=f"/repositories/{self._repository_identifier}",
+                    log_context=log_context,
+                )
+                self._repository = GitHubClient._repository_record(payload)
+            return self._repository
+
+    def _token(self) -> str:
+        if self._access_token is not None:
+            return self._access_token
+        with self._credential_lock:
+            if self._access_token is None:
+                self._access_token = self._repository_service._access_token(
+                    owner_id=self._owner_id,
+                    provider=RepositoryProvider.GITHUB,
+                )
+            return self._access_token
+
+    def _request_json(
+        self,
+        *,
+        method: str,
+        path: str,
+        log_context: GitHubRequestLogContext,
+    ) -> tuple[object, httpx.Headers]:
+        # The review reader only makes GET requests. Keep that invariant local
+        # so retry policy cannot accidentally be expanded to mutations.
+        if method != "GET":
+            raise ValueError("review source requests must be GET")
+        for request_attempt in range(1, self._max_attempts + 1):
+            try:
+                status_code, response_headers, response_body = self._send_once(
+                    method=method,
+                    path=path,
+                    log_context=log_context,
+                    request_attempt=request_attempt,
+                )
+            except (httpx.TransportError, TimeoutError, OSError) as error:
+                _log_github_api_failure(
+                    method=method,
+                    path=path,
+                    error=error,
+                    log_context=log_context,
+                    request_attempt=request_attempt,
+                )
+                if request_attempt == self._max_attempts:
+                    raise RepositoryProviderError(kind="unavailable") from error
+                self._sleep_before_retry(
+                    method=method,
+                    path=path,
+                    log_context=log_context,
+                    request_attempt=request_attempt,
+                    error=error,
+                )
+                continue
+
+            _log_github_api_response(
+                method=method,
+                path=path,
+                status_code=status_code,
+                response_body_bytes=len(response_body),
+                log_context=log_context,
+                request_attempt=request_attempt,
+            )
+            if len(response_body) > _MAX_RESPONSE_BYTES:
+                raise RepositoryProviderError(kind="malformed_response")
+            if 200 <= status_code < 300:
+                try:
+                    return json.loads(response_body.decode("utf-8")), response_headers
+                except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                    raise RepositoryProviderError(kind="malformed_response") from error
+
+            retryable = status_code == 408 or status_code == 429 or status_code >= 500
+            if retryable and request_attempt < self._max_attempts:
+                self._sleep_before_retry(
+                    method=method,
+                    path=path,
+                    log_context=log_context,
+                    request_attempt=request_attempt,
+                    status_code=status_code,
+                    retry_after_seconds=_retry_after(response_headers),
+                )
+                continue
+            if status_code == 429:
+                raise RepositoryProviderError(
+                    kind="rate_limited",
+                    retry_after_seconds=_retry_after(response_headers),
+                )
+            if status_code in {401, 403}:
+                if response_headers.get("X-RateLimit-Remaining") == "0":
+                    raise RepositoryProviderError(
+                        kind="rate_limited",
+                        retry_after_seconds=_retry_after(response_headers),
+                    )
+                raise RepositoryProviderError(kind="authorization")
+            if status_code == 404:
+                raise RepositoryProviderError(kind="not_found")
+            if status_code == 409:
+                raise RepositoryProviderError(kind="conflict")
+            if retryable:
+                raise RepositoryProviderError(kind="unavailable")
+            raise RepositoryProviderError(kind="malformed_response")
+
+        raise AssertionError("unreachable request retry state")
+
+    def _send_once(
+        self,
+        *,
+        method: str,
+        path: str,
+        log_context: GitHubRequestLogContext,
+        request_attempt: int,
+    ) -> tuple[int, httpx.Headers, bytes]:
+        _log_github_api_request(
+            method=method,
+            path=path,
+            request_body_bytes=0,
+            log_context=log_context,
+            request_attempt=request_attempt,
+        )
+        with (
+            self._semaphore,
+            self._client.stream(
+                method,
+                path,
+                headers={"Authorization": f"Bearer {self._token()}"},
+            ) as response,
+        ):
+            response_body = bytearray()
+            for chunk in response.iter_bytes(chunk_size=64 * 1024):
+                remaining = _MAX_RESPONSE_BYTES + 1 - len(response_body)
+                if len(chunk) > remaining:
+                    response_body.extend(chunk[:remaining])
+                    break
+                response_body.extend(chunk)
+            return response.status_code, response.headers, bytes(response_body)
+
+    def _sleep_before_retry(
+        self,
+        *,
+        method: str,
+        path: str,
+        log_context: GitHubRequestLogContext,
+        request_attempt: int,
+        status_code: int | None = None,
+        retry_after_seconds: int | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        backoff_seconds = min(
+            self._retry_max_seconds,
+            self._retry_base_seconds * (2 ** (request_attempt - 1)),
+        )
+        if retry_after_seconds is not None and status_code == 429:
+            delay_seconds = min(
+                float(retry_after_seconds), self._retry_after_max_seconds
+            )
+        else:
+            delay_seconds = self._jitter(0, backoff_seconds)
+        fields: dict[str, object] = {
+            "event": "github_api_retry_scheduled",
+            "method": method,
+            "request_attempt": request_attempt,
+            "request_path": path,
+            "retry_delay_ms": round(delay_seconds * 1000),
+        }
+        fields.update(_github_log_context_fields(log_context))
+        if status_code is not None:
+            fields["status_code"] = status_code
+        if error is not None:
+            fields["transport_error_class"] = type(error).__name__
+        logger.info(json.dumps(fields, default=str, sort_keys=True))
+        self._sleep(delay_seconds)
 
 
 class RepositoryService:
@@ -747,8 +1123,34 @@ class RepositoryService:
                 path=path,
             )
         except RepositoryProviderError as error:
-            _log_provider_call("read_file", error.kind)
+            _log_provider_call("read_file", error.kind, error=error)
             raise _provider_error(error, operation="review_source") from error
+
+    def open_review_github_source_access(
+        self,
+        *,
+        owner_id: UUID,
+        repository_identifier: str,
+        revision: str,
+        max_concurrent_requests: int = 2,
+        max_attempts: int = 3,
+        retry_base_seconds: float = 0.25,
+        retry_max_seconds: float = 2.0,
+        retry_after_max_seconds: float = 30.0,
+    ) -> ReviewGitHubSourceAccess:
+        """Create one shared GitHub reader for a single review execution."""
+
+        return ReviewGitHubSourceAccess(
+            repository_service=self,
+            owner_id=owner_id,
+            repository_identifier=repository_identifier,
+            revision=revision,
+            max_concurrent_requests=max_concurrent_requests,
+            max_attempts=max_attempts,
+            retry_base_seconds=retry_base_seconds,
+            retry_max_seconds=retry_max_seconds,
+            retry_after_max_seconds=retry_after_max_seconds,
+        )
 
     async def search_branches(
         self,
@@ -1084,9 +1486,11 @@ def _provider(source: str | RepositoryProvider) -> RepositoryProvider:
 
 
 def _review_path_prefix(path_prefix: str | None) -> str:
-    if path_prefix is None or not path_prefix.strip():
+    raw_prefix = (path_prefix or "").strip()
+    if raw_prefix in {"", ".", "./"}:
         return ""
-    normalized = path_prefix.strip().rstrip("/")
+    raw_prefix = raw_prefix.removeprefix("./")
+    normalized = raw_prefix.rstrip("/")
     if not _is_safe_review_path(normalized):
         raise RepositoryProviderError(kind="malformed_response")
     return f"{normalized}/"
@@ -1179,12 +1583,121 @@ def _retry_after(headers: Any) -> int | None:
         return None
 
 
-def _log_provider_call(operation: str, outcome: str) -> None:
+def _log_provider_call(
+    operation: str,
+    outcome: str,
+    *,
+    error: RepositoryProviderError | None = None,
+) -> None:
+    fields: dict[str, object] = {
+        "event": "repository_provider_call",
+        "operation": operation,
+        "provider": RepositoryProvider.GITHUB.value,
+        "outcome": outcome,
+    }
+    if error is not None:
+        cause = error.__cause__
+        if isinstance(cause, HTTPError):
+            fields["http_status"] = cause.code
+        elif cause is not None:
+            fields["transport_error_class"] = type(cause).__name__
     logger.info(
-        "repository_provider_call",
+        json.dumps(fields, sort_keys=True),
         extra={
             "operation": operation,
             "provider": RepositoryProvider.GITHUB.value,
             "outcome": outcome,
         },
     )
+
+
+def _github_log_context_fields(
+    log_context: GitHubRequestLogContext | None,
+) -> dict[str, str]:
+    if log_context is None:
+        return {}
+    fields = {"review_id": str(log_context.review_id)}
+    if log_context.review_agent_id is not None:
+        fields["review_agent_id"] = str(log_context.review_agent_id)
+    if log_context.attempt_id is not None:
+        fields["attempt_id"] = str(log_context.attempt_id)
+    return fields
+
+
+def _log_github_api_request(
+    *,
+    method: str,
+    path: str,
+    request_body_bytes: int,
+    log_context: GitHubRequestLogContext | None = None,
+    request_attempt: int | None = None,
+) -> None:
+    """Record request metadata, excluding URL host, headers, and request body."""
+
+    fields: dict[str, object] = {
+        "event": "github_api_request",
+        "method": method,
+        "request_body_bytes": request_body_bytes,
+        "request_path": path,
+    }
+    fields.update(_github_log_context_fields(log_context))
+    if request_attempt is not None:
+        fields["request_attempt"] = request_attempt
+    logger.info(json.dumps(fields, sort_keys=True))
+
+
+def _log_github_api_response(
+    *,
+    method: str,
+    path: str,
+    status_code: int | None,
+    response_body_bytes: int,
+    log_context: GitHubRequestLogContext | None = None,
+    request_attempt: int | None = None,
+) -> None:
+    """Record safe response metadata without serializing its payload."""
+
+    fields: dict[str, object] = {
+        "event": "github_api_response",
+        "method": method,
+        "request_path": path,
+        "response_body_bytes": response_body_bytes,
+        "status_code": status_code,
+    }
+    fields.update(_github_log_context_fields(log_context))
+    if request_attempt is not None:
+        fields["request_attempt"] = request_attempt
+    logger.info(json.dumps(fields, sort_keys=True))
+
+
+def _log_github_api_failure(
+    *,
+    method: str,
+    path: str,
+    error: Exception,
+    log_context: GitHubRequestLogContext | None = None,
+    request_attempt: int | None = None,
+) -> None:
+    """Record a safe transport or HTTP failure without the provider's response body."""
+
+    fields: dict[str, object] = {
+        "event": "github_api_request_failed",
+        "error_class": type(error).__name__,
+        "method": method,
+        "request_path": path,
+    }
+    if isinstance(error, HTTPError):
+        fields["status_code"] = error.code
+    elif isinstance(error, URLError) and error.reason is not None:
+        fields["transport_reason_class"] = type(error.reason).__name__
+    elif isinstance(error, httpx.TransportError):
+        fields["transport_error_class"] = type(error).__name__
+    fields.update(_github_log_context_fields(log_context))
+    if request_attempt is not None:
+        fields["request_attempt"] = request_attempt
+    logger.info(json.dumps(fields, sort_keys=True))
+
+
+def _response_status_code(response: object) -> int | None:
+    status = getattr(response, "status", None)
+    return status if isinstance(status, int) else None

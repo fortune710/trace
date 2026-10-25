@@ -27,7 +27,6 @@ REQUIRED = (
     "AUTH_RABBITMQ_URL",
     "AUTH_REFRESH_COOKIE_NAME",
     "AUTH_TOKEN_HASH_KEY",
-    "AUTH_VAULT_ADDR",
     "DATABASE_URL",
     "LANGSMITH_API_KEY",
     "LANGSMITH_PROJECT",
@@ -71,11 +70,8 @@ OPTIONAL = (
     "AUTH_GOOGLE_CLIENT_SECRET",
     "AUTH_GOOGLE_REDIRECT_URI",
     "AUTH_JWT_VERIFICATION_KEYS",
-    "AUTH_VAULT_EMAIL_TRANSIT_KEY",
     "AUTH_VAULT_REQUEST_TIMEOUT_SECONDS",
     "AUTH_VAULT_TOKEN_RENEWAL_SECONDS",
-    "AUTH_VAULT_TRANSIT_KEY",
-    "AUTH_VAULT_TRANSIT_MOUNT",
     "BACKEND_HTTP_PORT",
     "LANGSMITH_ENDPOINT",
     "REVIEW_MAX_ATTEMPTS",
@@ -91,6 +87,10 @@ FIXED = {
     "AUTH_COOKIE_SECURE": "true",
     "AUTH_CREDENTIAL_ENCRYPTION_PROVIDER": "vault",
     "AUTH_ENVIRONMENT": "production",
+    "AUTH_VAULT_ADDR": "http://vault:8200",
+    "AUTH_VAULT_EMAIL_TRANSIT_KEY": "trace-email-delivery",
+    "AUTH_VAULT_TRANSIT_KEY": "trace-provider-credentials",
+    "AUTH_VAULT_TRANSIT_MOUNT": "transit",
     "AUTH_SMTP_USE_STARTTLS": "true",
     "LANGSMITH_TRACING": "true",
 }
@@ -104,10 +104,6 @@ def main() -> int:
     missing = [name for name in REQUIRED if not os.environ.get(name)]
     if missing:
         print("Missing required Actions secrets: " + ", ".join(missing), file=sys.stderr)
-        return 1
-
-    if not os.environ["AUTH_VAULT_ADDR"].startswith("https://"):
-        print("AUTH_VAULT_ADDR must use HTTPS in production.", file=sys.stderr)
         return 1
 
     values = dict(FIXED)

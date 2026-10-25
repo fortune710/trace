@@ -448,6 +448,7 @@ services:
       vault-bootstrap:
         condition: service_completed_successfully
     networks:
+      - edge
       - data
       - queue
       - secrets

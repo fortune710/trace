@@ -134,6 +134,25 @@ describe("IntegrationsPage", () => {
     })
   })
 
+  it("allows reconnection when the GitHub status check fails", async () => {
+    apiMocks.githubConnection.mockRejectedValueOnce(new Error("status unavailable"))
+    apiMocks.beginGitHubConnection.mockImplementationOnce(
+      () => new Promise(() => {}),
+    )
+
+    renderPage()
+
+    expect(await screen.findByRole("button", { name: "Try again" })).toBeTruthy()
+    const reconnectButton = screen.getByRole("button", { name: "Reconnect" })
+    expect(reconnectButton.hasAttribute("disabled")).toBe(false)
+
+    fireEvent.click(reconnectButton)
+
+    await waitFor(() => {
+      expect(apiMocks.beginGitHubConnection).toHaveBeenCalledOnce()
+    })
+  })
+
   it("disables the GitHub action while connection initiation is pending", async () => {
     let resolveConnection: ((value: { authorization_url: string }) => void) | undefined
     apiMocks.beginGitHubConnection.mockImplementationOnce(

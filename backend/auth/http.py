@@ -19,7 +19,7 @@ def install_auth_cors(app: FastAPI, settings: AuthSettings) -> None:
         allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "X-CSRF-Token"],
+        allow_headers=["Content-Type", "Idempotency-Key", "X-CSRF-Token"],
         expose_headers=["X-Request-ID"],
         max_age=600,
     )

@@ -97,7 +97,7 @@ def test_owner_rls_isolation_and_transaction_local_context() -> None:
                 )
 
         with engine.connect() as connection:
-            roles = dict(
+            roles: dict[object, object] = dict(
                 connection.execute(
                     sa.text(
                         "SELECT rolname, rolbypassrls "
@@ -124,7 +124,9 @@ def test_owner_rls_isolation_and_transaction_local_context() -> None:
 
 
 @pytest.mark.integration
-def test_internal_worker_role_has_only_the_reads_required_by_internal_workers() -> None:
+def test_internal_worker_role_has_only_the_access_required_by_internal_workers() -> (
+    None
+):
     internal_database_url = os.environ.get("INTERNAL_DATABASE_URL")
     assert internal_database_url and "postgres-test" in internal_database_url
     engine = sa.create_engine(internal_database_url)
@@ -148,9 +150,34 @@ def test_internal_worker_role_has_only_the_reads_required_by_internal_workers() 
                 ).scalar_one()
                 == 0
             )
+            required_privileges = {
+                "public.reviews": {"SELECT", "UPDATE"},
+                "public.review_agents": {"SELECT", "UPDATE"},
+                "public.findings": {"INSERT"},
+                "public.external_repositories": {"SELECT"},
+                "private.review_dispatch_jobs": {"SELECT", "UPDATE", "DELETE"},
+                "private.credentials": {"SELECT", "UPDATE"},
+                "private.review_agent_attempts": {"SELECT", "INSERT", "UPDATE"},
+                "private.review_agent_execution_configs": {"SELECT"},
+            }
+            for relation, privileges in required_privileges.items():
+                for privilege in privileges:
+                    assert connection.execute(
+                        sa.text(
+                            "SELECT has_table_privilege("
+                            "current_user, :relation, :privilege)"
+                        ),
+                        {"relation": relation, "privilege": privilege},
+                    ).scalar_one()
+            for column in ("owner_id", "review_id", "agent_id", "content_digest"):
+                assert connection.execute(
+                    sa.text(
+                        "SELECT has_column_privilege("
+                        "current_user, 'public.findings', :column, 'SELECT')"
+                    ),
+                    {"column": column},
+                ).scalar_one()
             with pytest.raises(sa.exc.DBAPIError):
                 connection.execute(sa.text("SELECT count(*) FROM public.projects"))
-            with pytest.raises(sa.exc.DBAPIError):
-                connection.execute(sa.text("SELECT count(*) FROM public.review_agents"))
     finally:
         engine.dispose()

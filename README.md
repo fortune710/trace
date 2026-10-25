@@ -57,6 +57,9 @@ This preserves PostgreSQL and RabbitMQ data. Use `docker compose down -v` only w
 
 The backend container runs [start.sh](backend/start.sh) with locked dependencies and without runtime downloads. It is non-root, has a read-only filesystem, cannot gain new privileges, and exposes only the API port on localhost. Service images are pinned to immutable digests; update them deliberately as part of maintenance.
 
+For VPS HTTPS, NGINX routing, certificate issuance, and renewal, see
+[Production HTTPS and API routing](docs/production-https.md).
+
 ## Authentication security configuration
 
 Phase 3 uses a 60-minute Ed25519-signed JWT access token and a rotating opaque refresh token that expires after seven days. Both are designed to be sent only in HttpOnly cookies; they are never returned in JSON responses or stored in browser storage. Email/password accounts require email verification before they can sign in.
