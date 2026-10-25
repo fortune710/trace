@@ -39,7 +39,10 @@ def _contract_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[sa.Engine]:
         with admin_engine.connect() as connection:
             connection.execute(sa.text(f'CREATE DATABASE "{database_name}"'))
         contract_url = migration_url.set(database=database_name)
-        monkeypatch.setenv("MIGRATION_DATABASE_URL", str(contract_url))
+        monkeypatch.setenv(
+            "MIGRATION_DATABASE_URL",
+            contract_url.render_as_string(hide_password=False),
+        )
         command.upgrade(_alembic_config(), _PRE_SNAPSHOT_REVISION)
         engine = sa.create_engine(contract_url)
         yield engine
