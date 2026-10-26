@@ -48,6 +48,10 @@ services:
     read_only: true
     cap_drop:
       - ALL
+    # NGINX prepares its temporary cache directories for the unprivileged worker
+    # user during startup. It otherwise runs without Linux capabilities.
+    cap_add:
+      - CHOWN
     security_opt:
       - no-new-privileges:true
     tmpfs:
