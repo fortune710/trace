@@ -177,6 +177,8 @@ class CredentialService:
         named keys at once, distinguished by name. A duplicate active name
         for the owner conflicts, as does an invalid name.
         """
+        if kind is not CredentialKind.API_KEY:
+            raise CredentialPayloadError("Named credentials must be API keys")
         _validate_payload(payload)
         clean_name = _validate_name(name)
         cipher = self._get_cipher()

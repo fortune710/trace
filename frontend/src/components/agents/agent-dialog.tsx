@@ -66,6 +66,8 @@ export function AgentDialog({ agent, catalog, credentials, open, onOpenChange }:
 
   const models = providers.find((item) => item.id === provider)?.models ?? []
   const compatibleCredentials = credentials.filter((credential) => credential.provider === provider)
+  const providerLabel = providers.find((item) => item.id === provider)?.label ?? provider
+  const credentialFallbackLabel = `Your ${providerLabel} API key`
   const isPending = createAgent.isPending || updateAgent.isPending
   const isEditing = agent !== null
 
@@ -120,7 +122,36 @@ export function AgentDialog({ agent, catalog, credentials, open, onOpenChange }:
             <div className="grid gap-2"><Label htmlFor="agent-provider">Provider</Label><Select value={provider} onValueChange={handleProviderChange}><SelectTrigger id="agent-provider" className="w-full"><SelectValue><span className="flex items-center gap-2"><ProviderLogo provider={provider} />{providers.find((item) => item.id === provider)?.label ?? provider}</span></SelectValue></SelectTrigger><SelectContent>{providers.map((item) => <SelectItem key={item.id} value={item.id}><span className="flex items-center gap-2"><ProviderLogo provider={item.id} />{item.label}</span></SelectItem>)}</SelectContent></Select></div>
             <div className="grid gap-2"><Label htmlFor="agent-model">Model</Label><Select value={model} onValueChange={(value) => value && setModel(value)} disabled={models.length === 0}><SelectTrigger id="agent-model" className="w-full"><SelectValue>{models.find((item) => item.id === model)?.label ?? "Choose model"}</SelectValue></SelectTrigger><SelectContent>{models.map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectContent></Select></div>
           </div>
-          <div className="grid gap-2"><Label htmlFor="agent-credential">Model access</Label><Select value={credentialId || "trace-managed"} onValueChange={(value) => setCredentialId(value === "trace-managed" ? "" : value ?? "")}><SelectTrigger id="agent-credential" className="w-full"><SelectValue>{credentialId ? (compatibleCredentials.find((credential) => credential.id === credentialId)?.name ?? "Your API key") : "Trace-managed access"}</SelectValue></SelectTrigger><SelectContent><SelectItem value="trace-managed">Trace-managed access</SelectItem>{compatibleCredentials.map((credential) => <SelectItem key={credential.id} value={credential.id}>{credential.name ?? `Your ${provider} API key`}</SelectItem>)}</SelectContent></Select><p className="text-xs text-muted-foreground">Compatible keys are managed in Settings → API keys.</p></div>
+          <div className="grid gap-2">
+            <Label htmlFor="agent-credential">Model access</Label>
+            <Select
+              value={credentialId || "trace-managed"}
+              onValueChange={(value) =>
+                setCredentialId(value === "trace-managed" ? "" : value ?? "")
+              }
+            >
+              <SelectTrigger id="agent-credential" className="w-full">
+                <SelectValue>
+                  {credentialId
+                    ? (compatibleCredentials.find(
+                        (credential) => credential.id === credentialId,
+                      )?.name ?? credentialFallbackLabel)
+                    : "Trace-managed access"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="trace-managed">Trace-managed access</SelectItem>
+                {compatibleCredentials.map((credential) => (
+                  <SelectItem key={credential.id} value={credential.id}>
+                    {credential.name ?? credentialFallbackLabel}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Compatible keys are managed in Settings → API keys.
+            </p>
+          </div>
           <div className="grid gap-2"><Label htmlFor="agent-avatar">Avatar image URL <span className="text-muted-foreground">optional</span></Label><Input id="agent-avatar" type="url" value={avatar} onChange={(event) => setAvatar(event.target.value)} placeholder="https://…" /></div>
         </form>
         <DialogFooter><Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" form="agent-form" disabled={isPending || !catalog || !name.trim() || !model}>{isPending ? "Saving…" : isEditing ? "Save changes" : "Create agent"}</Button></DialogFooter>

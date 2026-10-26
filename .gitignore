@@ -3,7 +3,6 @@
 .env.*
 .ci.env
 production-secrets/
-production-acme/
 frontend/.env.*.local
 frontend/.env.local
 node_modules

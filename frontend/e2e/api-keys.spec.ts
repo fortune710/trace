@@ -46,7 +46,10 @@ test.describe('isolated authentication stack', () => {
     await registerAndSignIn(page, request)
 
     await page.getByRole('button', { name: `Open account menu for ${email}` }).click()
-    await page.getByRole('link', { name: 'Settings' }).click()
+    await page
+      .getByRole('navigation', { name: 'Account' })
+      .getByRole('link', { name: 'Settings' })
+      .click()
     await expect(page.getByText('Back to app')).toBeVisible()
     await expect(page.getByRole('heading', { name: 'API keys' })).toBeVisible()
     await expect(page.getByText('No API keys yet')).toBeVisible()

@@ -38,7 +38,7 @@ services:
     volumes:
       - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./config/nginx:/etc/nginx/trace:ro
-      - ./production-acme:/var/www/certbot:ro
+      - /var/lib/trace/acme:/var/www/certbot:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
       backend:

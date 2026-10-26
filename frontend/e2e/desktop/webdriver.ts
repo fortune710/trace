@@ -45,7 +45,7 @@ export class WebDriverClient {
       body: JSON.stringify({
         capabilities: {
           alwaysMatch: {
-            browserName: "",
+            browserName: "wry",
             "tauri:options": { application: applicationPath },
           },
         },

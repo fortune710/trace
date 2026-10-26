@@ -93,6 +93,27 @@ def _seed_owner(engine, owner_id) -> None:
         connection.execute(sa.insert(User).values(id=owner_id))
 
 
+def test_create_named_rejects_non_api_keys_before_initializing_cipher() -> None:
+    def cipher_factory() -> CredentialCipher:
+        pytest.fail("create_named should reject non-API-key kinds before encryption")
+
+    service = CredentialService(
+        engine=sa.create_engine("sqlite://"),
+        cipher=cipher_factory,
+    )
+
+    with pytest.raises(
+        CredentialPayloadError, match="Named credentials must be API keys"
+    ):
+        service.create_named(
+            owner_id=uuid4(),
+            provider=CredentialProvider.GITHUB,
+            kind=CredentialKind.OAUTH,
+            name="GitHub OAuth",
+            payload={"access_token": "token"},
+        )
+
+
 @pytest.mark.integration
 def test_create_named_allows_multiple_active_keys_per_provider() -> None:
     database_url = os.environ.get("DATABASE_URL")

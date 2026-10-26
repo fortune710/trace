@@ -173,22 +173,6 @@ export function ApiKeysPage() {
       </AppShell>
     )
   }
-  if (catalog.isError) {
-    return (
-      <AppShell>
-        <section className="mx-auto w-full max-w-6xl px-6 py-8 md:px-10 md:py-10">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void catalog.refetch()}
-          >
-            Try again
-          </Button>
-        </section>
-      </AppShell>
-    )
-  }
-
   const providerLabels = new Map<string, string>(
     catalog.data?.providers.map((item) => [item.id, item.label]) ?? [],
   )
@@ -228,6 +212,24 @@ export function ApiKeysPage() {
             Create API key
           </Button>
         </div>
+        {catalog.isError ? (
+          <div
+            role="alert"
+            className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4"
+          >
+            <p className="text-sm text-destructive">
+              Provider labels could not be loaded. Provider IDs are used as
+              labels while the catalog is unavailable.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void catalog.refetch()}
+            >
+              Try again
+            </Button>
+          </div>
+        ) : null}
         {credentials.isLoading ? (
           <p className="mt-8 text-sm text-muted-foreground">
             Loading your API keys…

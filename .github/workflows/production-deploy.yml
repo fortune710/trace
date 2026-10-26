@@ -187,6 +187,7 @@ jobs:
           export GIT_TERMINAL_PROMPT=0
           git fetch origin main
           git merge --ff-only origin/main
+          install -d -m 0755 /var/lib/trace/acme
           docker compose --env-file .env.production.next -f compose.production.yaml config --quiet
           mv -f .env.production.next .env.production
           docker compose --env-file .env.production -f compose.production.yaml up -d vault
