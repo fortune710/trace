@@ -7,6 +7,8 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ApiKeysPage } from "@/app/settings/api-keys-page"
+import { toast } from "@/components/ui/toast"
+import { ApiError } from "@/lib/api"
 
 const agentMocks = vi.hoisted(() => ({
   catalog: vi.fn(),
@@ -28,6 +30,10 @@ vi.mock("@/hooks/use-agents", () => ({
   useProviderCredentials: agentMocks.credentials,
   useCreateProviderCredential: agentMocks.create,
   useRevokeProviderCredential: agentMocks.revoke,
+}))
+
+vi.mock("@/components/ui/toast", () => ({
+  toast: { add: vi.fn() },
 }))
 
 const catalogData = {
@@ -88,6 +94,7 @@ describe("ApiKeysPage", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks()
+    vi.mocked(toast.add).mockReset()
     agentMocks.catalog.mockReturnValue({
       data: catalogData,
       isLoading: false,
@@ -137,6 +144,35 @@ describe("ApiKeysPage", () => {
     expect(screen.getByText("No API keys yet")).toBeTruthy()
   })
 
+  it("does not show the empty state when loading saved keys fails", () => {
+    agentMocks.credentials.mockReturnValue({
+      credentials: [],
+      isLoading: false,
+      isError: true,
+    })
+    renderPage()
+
+    expect(screen.queryByText("No API keys yet")).toBeNull()
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Could not load your saved API keys",
+    )
+  })
+
+  it("keeps cached keys visible when refreshing them fails", () => {
+    agentMocks.credentials.mockReturnValue({
+      credentials: savedKeys,
+      isLoading: false,
+      isError: true,
+    })
+    renderPage()
+
+    expect(screen.getByText("Primary OpenAI key")).toBeTruthy()
+    expect(screen.getByText("Secondary Anthropic key")).toBeTruthy()
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Could not load your saved API keys",
+    )
+  })
+
   it("creates a named key for the chosen provider", async () => {
     const user = userEvent.setup()
     const createMutate = vi.fn()
@@ -162,6 +198,56 @@ describe("ApiKeysPage", () => {
       },
       expect.anything(),
     )
+  })
+
+  it("explains whether saving failed because the key name is already active", async () => {
+    const user = userEvent.setup()
+    const createMutate = vi.fn((_, callbacks) => {
+      callbacks.onError?.(new ApiError(409, { error: { code: "duplicate_name" } }))
+    })
+    agentMocks.create.mockReturnValue({ mutate: createMutate, isPending: false })
+    renderPage()
+
+    await user.click(screen.getByRole("button", { name: "Create API key" }))
+    const dialog = screen.getByRole("dialog")
+    await user.type(within(dialog).getByLabelText("Name"), "Primary OpenAI key")
+    await user.click(within(dialog).getByText("Choose provider"))
+    await user.click(await screen.findByRole("option", { name: "OpenAI" }))
+    await user.type(within(dialog).getByLabelText("API key"), "sk-test-key")
+    await user.click(
+      within(dialog).getByRole("button", { name: "Create API key" }),
+    )
+
+    expect(toast.add).toHaveBeenCalledWith({
+      type: "error",
+      title: "Key could not be saved",
+      description: "A key with that name already exists. Please try another name.",
+    })
+  })
+
+  it("shows a general error when saving fails for another reason", async () => {
+    const user = userEvent.setup()
+    const createMutate = vi.fn((_, callbacks) => {
+      callbacks.onError?.(new ApiError(500, { error: { code: "request_failed" } }))
+    })
+    agentMocks.create.mockReturnValue({ mutate: createMutate, isPending: false })
+    renderPage()
+
+    await user.click(screen.getByRole("button", { name: "Create API key" }))
+    const dialog = screen.getByRole("dialog")
+    await user.type(within(dialog).getByLabelText("Name"), "Primary OpenAI key")
+    await user.click(within(dialog).getByText("Choose provider"))
+    await user.click(await screen.findByRole("option", { name: "OpenAI" }))
+    await user.type(within(dialog).getByLabelText("API key"), "sk-test-key")
+    await user.click(
+      within(dialog).getByRole("button", { name: "Create API key" }),
+    )
+
+    expect(toast.add).toHaveBeenCalledWith({
+      type: "error",
+      title: "Key could not be saved",
+      description: "Your API key could not be saved. Please try again.",
+    })
   })
 
   it("revokes a key from the list", async () => {

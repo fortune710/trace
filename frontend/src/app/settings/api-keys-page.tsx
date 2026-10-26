@@ -27,7 +27,7 @@ import {
   useProviderCredentials,
   useRevokeProviderCredential,
 } from "@/hooks/use-agents"
-import type { ModelProvider } from "@/lib/api"
+import { ApiError, type ModelProvider } from "@/lib/api"
 
 function CreateApiKeyDialog({
   open,
@@ -73,11 +73,14 @@ function CreateApiKeyDialog({
           })
           close(false)
         },
-        onError: () =>
+        onError: (error) =>
           toast.add({
             type: "error",
             title: "Key could not be saved",
-            description: "A key with that name may already exist. Please try again.",
+            description:
+              error instanceof ApiError && error.status === 409
+                ? "A key with that name already exists. Please try another name."
+                : "Your API key could not be saved. Please try again.",
           }),
       },
     )
@@ -234,7 +237,7 @@ export function ApiKeysPage() {
           <p className="mt-8 text-sm text-muted-foreground">
             Loading your API keys…
           </p>
-        ) : credentials.credentials.length === 0 ? (
+        ) : !credentials.isError && credentials.credentials.length === 0 ? (
           <div className="mt-8 rounded-lg border border-white/14 bg-[#0a0a0c] p-8 text-center">
             <p className="text-sm font-medium">No API keys yet</p>
             <p className="mt-1 text-sm text-muted-foreground">
