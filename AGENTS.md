@@ -1,5 +1,9 @@
 # Development Instructions
 
+## Application Page Layout
+
+- In `AppShell`, use `mx-auto w-full max-w-6xl px-6 py-8 md:px-10 md:py-10` for primary application page content unless a deliberately constrained form or detail view requires an exception.
+
 ## TypeScript and TSX Formatting
 
 - Format TypeScript and TSX for readability. Do not condense component or function bodies, JSX trees, or return statements onto a single line.

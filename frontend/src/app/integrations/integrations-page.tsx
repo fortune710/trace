@@ -8,7 +8,7 @@ export function IntegrationsPage() {
 
   return (
     <AppShell>
-      <section className="mx-auto w-full max-w-4xl px-6 py-8 md:px-10 md:py-10">
+      <section className="mx-auto w-full max-w-6xl px-6 py-8 md:px-10 md:py-10">
         <h1 className="text-xl font-medium tracking-tight">Integrations</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           Connect the services Trace uses to import and review your code.

@@ -300,6 +300,7 @@ class FindingResponse(RequestModel):
     id: UUID
     review_id: UUID
     agent_id: UUID
+    reviewing_agent: ReviewingAgentResponse
     category: ReviewCategory
     severity: FindingSeverity
     title: str
@@ -310,6 +311,13 @@ class FindingResponse(RequestModel):
     status: FindingStatus
     created_at: datetime
     updated_at: datetime
+
+
+class ReviewingAgentResponse(RequestModel):
+    assignment_id: UUID
+    agent_id: UUID
+    display_name: str
+    specialization: ReviewCategory
 
 
 class FindingUpdate(RequestModel):

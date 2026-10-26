@@ -6,6 +6,7 @@ import {
   Folder01Icon,
   Key01Icon,
   Logout01Icon,
+  MessageNotification01Icon,
   PlugIcon,
   Search01Icon,
   Settings01Icon,
@@ -34,7 +35,7 @@ import {
 const navigationItems = [
   { label: "Projects", to: "/projects", icon: Folder01Icon },
   { label: "Agents", to: "/agents", icon: BotIcon },
-  { label: "Integrations", to: "/integrations", icon: PlugIcon },
+  { label: "Notifications", to: "/notifications", icon: MessageNotification01Icon },
   { label: "Settings", to: "/settings", icon: Settings01Icon },
 ] as const
 
@@ -42,6 +43,7 @@ const navigationItems = [
 // same sidebar changes view rather than gaining a second sidebar.
 const settingsItems = [
   { label: "API keys", to: "/settings/api-keys", icon: Key01Icon },
+  { label: "Integrations", to: "/settings/integrations", icon: PlugIcon },
 ] as const
 
 function getInitials(name: string, email: string) {

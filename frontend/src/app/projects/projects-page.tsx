@@ -21,7 +21,7 @@ export function ProjectsPage() {
 
   return (
     <AppShell>
-      <section className="mx-auto w-full max-w-6xl px-6 py-8 md:px-10 md:py-10">
+      <section className="mx-auto w-full max-w-6xl px-6 pt-8 pb-28 md:px-10 md:pt-10">
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-xl font-medium tracking-tight">Projects</h1>
           <Button type="button" onClick={() => setIsCreateOpen(true)}>

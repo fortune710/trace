@@ -11,6 +11,11 @@ import type { Project, Review } from "@/lib/api"
 
 vi.mock("@/hooks/use-projects", () => ({ useProject: vi.fn() }))
 vi.mock("@/hooks/use-reviews", () => ({ useProjectReviews: vi.fn() }))
+vi.mock("@/components/findings/review-findings", () => ({
+  ReviewFindings: ({ review }: { review: Review }) => (
+    <p>Findings for {review.id}</p>
+  ),
+}))
 vi.mock("@/components/layout/app-shell", () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
@@ -101,6 +106,9 @@ describe("ProjectDetailsPage", () => {
   it("shows project details, review history, and the start review action", () => {
     renderPage()
 
+    expect(screen.getByRole("navigation", { name: "breadcrumb" })).toBeTruthy()
+    expect(screen.getByRole("link", { name: "Projects" }).getAttribute("href")).toBe("/projects")
+    expect(screen.getByText("Trace", { selector: "[aria-current=page]" })).toBeTruthy()
     expect(screen.getByRole("heading", { name: "Trace" })).toBeTruthy()
     expect(screen.getByText("fortune710/trace")).toBeTruthy()
     expect(screen.getByText("main")).toBeTruthy()
@@ -113,13 +121,13 @@ describe("ProjectDetailsPage", () => {
     expect(screen.getByRole("dialog", { name: "Start review dialog" })).toBeTruthy()
   })
 
-  it("switches to an empty findings tab", () => {
+  it("switches to the selected review's findings tab", () => {
     renderPage()
 
     fireEvent.click(screen.getByRole("tab", { name: "Findings" }))
 
     expect(screen.getByRole("tabpanel", { name: "Findings" })).toBeTruthy()
-    expect(screen.getByText("No findings yet")).toBeTruthy()
+    expect(screen.getByText("Findings for review-a")).toBeTruthy()
     expect(screen.queryByRole("link", { name: /review review-a/i })).toBeNull()
   })
 

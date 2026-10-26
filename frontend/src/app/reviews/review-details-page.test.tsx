@@ -5,15 +5,28 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ReviewDetailsPage } from "@/app/reviews/review-details-page"
+import { useProject } from "@/hooks/use-projects"
 import { useReview } from "@/hooks/use-reviews"
-import type { Review } from "@/lib/api"
+import type { Project, Review } from "@/lib/api"
 
+vi.mock("@/hooks/use-projects", () => ({ useProject: vi.fn() }))
 vi.mock("@/hooks/use-reviews", () => ({ useReview: vi.fn() }))
+vi.mock("@/components/findings/review-findings", () => ({
+  ReviewFindings: ({ review }: { review: Review }) => (
+    <p>Findings for {review.id}</p>
+  ),
+}))
 vi.mock("@/components/layout/app-shell", () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
 
 const mockedUseReview = vi.mocked(useReview)
+const mockedUseProject = vi.mocked(useProject)
+
+const project = {
+  id: "project-a",
+  name: "Trace",
+} as Project
 
 const review: Review = {
   id: "review-a",
@@ -59,6 +72,12 @@ describe("ReviewDetailsPage", () => {
   afterEach(cleanup)
 
   beforeEach(() => {
+    mockedUseProject.mockReturnValue({
+      data: project,
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useProject>)
     mockedUseReview.mockReturnValue({
       data: review,
       isLoading: false,
@@ -67,7 +86,7 @@ describe("ReviewDetailsPage", () => {
     } as unknown as ReturnType<typeof useReview>)
   })
 
-  it("renders immutable source and reviewer snapshots", () => {
+  it("renders review metadata and reviewers without implementation details", () => {
     render(
       <MemoryRouter initialEntries={["/reviews/review-a"]}>
         <Routes>
@@ -79,11 +98,25 @@ describe("ReviewDetailsPage", () => {
       </MemoryRouter>,
     )
 
+    expect(screen.getByRole("navigation", { name: "breadcrumb" })).toBeTruthy()
+    expect(screen.getByRole("link", { name: "Projects" }).getAttribute("href")).toBe("/projects")
+    expect(screen.getByRole("link", { name: "Trace" }).getAttribute("href")).toBe(
+      "/projects/project-a",
+    )
+    expect(screen.getByText("Review review-a", { selector: "[aria-current=page]" })).toBeTruthy()
     expect(screen.getByText("Review queued")).toBeTruthy()
     expect(screen.getByText("GitHub")).toBeTruthy()
     expect(screen.getByText("123")).toBeTruthy()
-    expect(screen.getByText("git-commit-sha1-v1")).toBeTruthy()
+    expect(screen.getByText("Status").closest("dl")?.className).toContain("grid-cols-1")
+    expect(screen.getByText("Status").closest("dl")?.className).toContain("sm:grid-cols-2")
+    expect(screen.getByText("Status").closest("dl")?.className).toContain("md:grid-cols-4")
+    expect(screen.getByText("Status").closest("dl")?.className).not.toContain("rounded-lg")
+    expect(screen.queryByText("Immutable revision")).toBeNull()
+    expect(screen.queryByText("Integrity algorithm")).toBeNull()
+    expect(screen.queryByText(review.source_revision)).toBeNull()
+    expect(screen.getByRole("heading", { name: "Reviewers" })).toBeTruthy()
     expect(screen.getByText("Security Scout")).toBeTruthy()
+    expect(screen.getByText("security", { selector: "[data-slot=badge]" })).toBeTruthy()
     expect(screen.getByText(/configuration version 1/i)).toBeTruthy()
     expect(screen.queryByText(/credential/i)).toBeNull()
   })
@@ -128,5 +161,23 @@ describe("ReviewDetailsPage", () => {
     )
 
     expect(screen.getByRole("heading", { name: "Review running" })).toBeTruthy()
+  })
+
+  it("opens the findings tab from its URL state", () => {
+    render(
+      <MemoryRouter initialEntries={["/reviews/review-a?tab=findings"]}>
+        <Routes>
+          <Route
+            path="/reviews/:reviewId"
+            element={<ReviewDetailsPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(
+      screen.getByRole("tab", { name: "Findings" }).getAttribute("aria-selected"),
+    ).toBe("true")
+    expect(screen.getByText("Findings for review-a")).toBeTruthy()
   })
 })

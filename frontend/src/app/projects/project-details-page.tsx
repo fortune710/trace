@@ -2,7 +2,16 @@ import { useState } from "react"
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { ReviewSubmissionDialog } from "@/components/reviews/review-submission-dialog"
+import { ReviewFindings } from "@/components/findings/review-findings"
 import { AppShell } from "@/components/layout/app-shell"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import {
   Empty,
@@ -151,6 +160,84 @@ function ProjectReviews({ project }: { project: Project }) {
   )
 }
 
+function ProjectFindings({ project }: { project: Project }) {
+  const [selectedReviewId, setSelectedReviewId] = useState<string | null>(null)
+  const projectId =
+    project.api_project_id ?? (project.source === "github" ? project.id : null)
+  const reviews = useProjectReviews(projectId, 1)
+  const selectedReview =
+    reviews.data?.items.find((review) => review.id === selectedReviewId) ??
+    reviews.data?.items[0]
+
+  if (projectId === null) {
+    return (
+      <Empty className="min-h-56 border border-border bg-card/30">
+        <EmptyHeader>
+          <EmptyTitle>Findings are unavailable</EmptyTitle>
+          <EmptyDescription>
+            Connect this local project before viewing review findings.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  }
+
+  if (reviews.isLoading) {
+    return <p className="text-sm text-muted-foreground">Loading reviews…</p>
+  }
+
+  if (reviews.isError) {
+    return (
+      <div className="grid justify-items-start gap-3">
+        <p className="text-sm text-muted-foreground">
+          We could not load the project’s reviews.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => void reviews.refetch()}
+        >
+          Try again
+        </Button>
+      </div>
+    )
+  }
+
+  if (!selectedReview) {
+    return (
+      <Empty className="min-h-56 border border-border bg-card/30">
+        <EmptyHeader>
+          <EmptyTitle>No findings yet</EmptyTitle>
+          <EmptyDescription>
+            Findings will appear after a review reports a risk.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  }
+
+  return (
+    <div>
+      <label className="grid max-w-sm gap-1 text-sm">
+        Review
+        <select
+          value={selectedReview.id}
+          onChange={(event) => setSelectedReviewId(event.target.value)}
+        >
+          {reviews.data?.items.map((review) => (
+            <option key={review.id} value={review.id}>
+              {`Review ${review.id.slice(0, 8)} · ${review.status}`}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="mt-6">
+        <ReviewFindings review={selectedReview} />
+      </div>
+    </div>
+  )
+}
+
 export function ProjectDetailsPage() {
   const { projectId } = useParams()
   const navigate = useNavigate()
@@ -170,13 +257,20 @@ export function ProjectDetailsPage() {
 
   return (
     <AppShell>
-      <section className="mx-auto w-full max-w-4xl px-6 py-8 md:px-10 md:py-10">
-        <Link
-          className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-          to="/projects"
-        >
-          Projects
-        </Link>
+      <section className="mx-auto w-full max-w-6xl px-6 py-8 md:px-10 md:py-10">
+        <Breadcrumb>
+          <BreadcrumbList>
+            <BreadcrumbItem>
+              <BreadcrumbLink render={<Link to="/projects" />}>
+                Projects
+              </BreadcrumbLink>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage>{project.data?.name ?? "Project"}</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
 
         {project.isLoading ? (
           <p className="mt-6 text-sm text-muted-foreground">Loading project…</p>
@@ -288,14 +382,7 @@ export function ProjectDetailsPage() {
                 aria-labelledby="project-findings-tab"
                 className="mt-6"
               >
-                <Empty className="min-h-56 border border-border bg-card/30">
-                  <EmptyHeader>
-                    <EmptyTitle>No findings yet</EmptyTitle>
-                    <EmptyDescription>
-                      Findings will appear here in a future update.
-                    </EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
+                <ProjectFindings project={project.data} />
               </section>
             )}
 

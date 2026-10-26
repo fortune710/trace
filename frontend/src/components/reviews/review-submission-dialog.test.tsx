@@ -187,7 +187,7 @@ describe("ReviewSubmissionDialog", () => {
     expect(toast.add).toHaveBeenCalledWith({
       type: "error",
       title: "Review could not be started",
-      description: "GitHub access is unavailable. Reconnect GitHub in Integrations and confirm access to this repository before trying again.",
+      description: "GitHub access is unavailable. Reconnect GitHub in Settings → Integrations and confirm access to this repository before trying again.",
     })
   })
 })

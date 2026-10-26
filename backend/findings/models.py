@@ -93,6 +93,13 @@ class Finding(Base):
 
 sa.Index("findings_owner_created_idx", Finding.owner_id, Finding.created_at.desc())
 sa.Index(
+    "findings_owner_review_created_idx",
+    Finding.owner_id,
+    Finding.review_id,
+    Finding.created_at.desc(),
+    Finding.id.desc(),
+)
+sa.Index(
     "findings_owner_review_agent_digest_key",
     Finding.owner_id,
     Finding.review_id,

@@ -38,7 +38,7 @@ function Location() {
   return <output data-testid="location">{`${location.pathname}${location.search}`}</output>
 }
 
-function renderPage(route = "/integrations") {
+function renderPage(route = "/settings/integrations") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={queryClient}>
@@ -91,20 +91,20 @@ describe("IntegrationsPage", () => {
   it("shows a success toast and clears the OAuth callback parameters", async () => {
     const addToast = vi.spyOn(toast, "add")
 
-    renderPage("/integrations?github=connected&request_id=request-123")
+    renderPage("/settings/integrations?github=connected&request_id=request-123")
 
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith(
         expect.objectContaining({ type: "success", title: "GitHub connected" }),
       )
     })
-    expect(screen.getByTestId("location").textContent).toBe("/integrations")
+    expect(screen.getByTestId("location").textContent).toBe("/settings/integrations")
   })
 
   it("shows an error toast for a failed OAuth callback", async () => {
     const addToast = vi.spyOn(toast, "add")
 
-    renderPage("/integrations?github=failed&request_id=request-123")
+    renderPage("/settings/integrations?github=failed&request_id=request-123")
 
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith(

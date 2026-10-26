@@ -117,20 +117,33 @@ export function ProjectPagination({
   onNext: () => void
 }) {
   return (
-    <nav className="mt-6 flex justify-end" aria-label="Project pagination">
-      <div className="flex items-center gap-2">
-        <Button type="button" variant="outline" size="sm" disabled={page === 1 || isFetching} onClick={onPrevious}>
-          <HugeiconsIcon icon={ArrowLeft01Icon} size={15} strokeWidth={2} />
-          Previous
-        </Button>
-        <span className="min-w-16 text-center text-xs text-muted-foreground" aria-live="polite">
-          Page {page}
-        </span>
-        <Button type="button" variant="outline" size="sm" disabled={!hasNextPage || isFetching} onClick={onNext}>
-          Next
-          <HugeiconsIcon icon={ArrowRight01Icon} size={15} strokeWidth={2} />
-        </Button>
-      </div>
+    <nav
+      className="fixed right-6 bottom-6 z-20 flex items-center gap-2 md:right-10"
+      aria-label="Project pagination"
+    >
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={page === 1 || isFetching}
+        onClick={onPrevious}
+      >
+        <HugeiconsIcon icon={ArrowLeft01Icon} size={15} strokeWidth={2} />
+        Previous
+      </Button>
+      <span className="min-w-16 text-center text-xs text-muted-foreground" aria-live="polite">
+        Page {page}
+      </span>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={!hasNextPage || isFetching}
+        onClick={onNext}
+      >
+        Next
+        <HugeiconsIcon icon={ArrowRight01Icon} size={15} strokeWidth={2} />
+      </Button>
     </nav>
   )
 }

@@ -31,6 +31,6 @@ export function useGitHubCallbackToast() {
               : "Please try again.",
           },
     )
-    void navigate("/integrations", { replace: true })
+    void navigate("/settings/integrations", { replace: true })
   }, [navigate, outcome, requestId])
 }
