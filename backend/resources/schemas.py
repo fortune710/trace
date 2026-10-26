@@ -360,6 +360,16 @@ class LocalFileBackupResponse(RequestModel):
 class CredentialCreate(RequestModel):
     provider: CredentialProvider
     kind: CredentialKind
+    # Present for user-named BYOK keys. When absent, creation keeps the
+    # historical one-active-credential-per-provider upsert (used by the
+    # OAuth connect flow and legacy unnamed keys).
+    name: (
+        Annotated[
+            str,
+            StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+        ]
+        | None
+    ) = None
     payload: dict[str, object]
 
 
@@ -367,6 +377,7 @@ class CredentialResponse(RequestModel):
     id: UUID
     provider: CredentialProvider
     kind: CredentialKind
+    name: str | None
     active: bool
     created_at: datetime
     updated_at: datetime

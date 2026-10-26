@@ -110,13 +110,13 @@ describe("agent and credential APIs", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     await agentsApi.create({ name: "Security", review_category: "security", model_provider: "openai", model_name: "gpt-5.1", skills: [] })
-    await credentialsApi.createOrReplace({ provider: "openai", kind: "api_key", payload: { api_key: "secret-value" } })
+    await credentialsApi.create({ provider: "openai", kind: "api_key", name: "Primary OpenAI key", payload: { api_key: "secret-value" } })
 
     const agentInit = fetchMock.mock.calls[0]?.[1] as RequestInit
     const credentialInit = fetchMock.mock.calls[1]?.[1] as RequestInit
     expect(new Headers(agentInit.headers).get("X-CSRF-Token")).toBe("test-token")
     expect(JSON.parse(String(agentInit.body))).toEqual({ name: "Security", review_category: "security", model_provider: "openai", model_name: "gpt-5.1", skills: [] })
-    expect(JSON.parse(String(credentialInit.body))).toEqual({ provider: "openai", kind: "api_key", payload: { api_key: "secret-value" } })
+    expect(JSON.parse(String(credentialInit.body))).toEqual({ provider: "openai", kind: "api_key", name: "Primary OpenAI key", payload: { api_key: "secret-value" } })
   })
 
   it("obtains a CSRF token from the API when its host-only cookie is not visible", async () => {

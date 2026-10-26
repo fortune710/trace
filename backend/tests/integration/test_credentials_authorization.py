@@ -25,6 +25,7 @@ def test_credential_owner_can_create_read_rotate_and_revoke(
         "id",
         "provider",
         "kind",
+        "name",
         "active",
         "created_at",
         "updated_at",
@@ -140,3 +141,68 @@ def test_credentials_require_auth_csrf_and_strict_request_bodies(
 
     unauthenticated = TestClient(integration_app).get("/api/v1/credentials")
     assert unauthenticated.status_code == 401
+
+
+def test_named_api_keys_allow_multiple_per_provider_and_reject_duplicates(
+    account_pair,
+) -> None:
+    owner, _ = account_pair
+
+    first = owner.request(
+        "POST",
+        "/api/v1/credentials",
+        json={
+            "provider": "openai",
+            "kind": "api_key",
+            "name": "Primary OpenAI key",
+            "payload": {"api_key": "sk-first"},
+        },
+    )
+    assert first.status_code == 201, first.text
+    assert first.json()["name"] == "Primary OpenAI key"
+    assert "sk-first" not in first.text
+
+    second = owner.request(
+        "POST",
+        "/api/v1/credentials",
+        json={
+            "provider": "openai",
+            "kind": "api_key",
+            "name": "Secondary OpenAI key",
+            "payload": {"api_key": "sk-second"},
+        },
+    )
+    assert second.status_code == 201, second.text
+    assert second.json()["id"] != first.json()["id"]
+
+    listing = owner.request("GET", "/api/v1/credentials")
+    assert listing.status_code == 200
+    names = {item["name"] for item in listing.json()["items"]}
+    assert {"Primary OpenAI key", "Secondary OpenAI key"} <= names
+
+    duplicate = owner.request(
+        "POST",
+        "/api/v1/credentials",
+        json={
+            "provider": "anthropic",
+            "kind": "api_key",
+            "name": "Primary OpenAI key",
+            "payload": {"api_key": "sk-duplicate"},
+        },
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "resource_conflict"
+    assert "sk-duplicate" not in duplicate.text
+
+    blank = owner.request(
+        "POST",
+        "/api/v1/credentials",
+        json={
+            "provider": "openai",
+            "kind": "api_key",
+            "name": "   ",
+            "payload": {"api_key": "sk-blank"},
+        },
+    )
+    assert blank.status_code == 400
+    assert blank.json()["error"]["code"] == "invalid_request"

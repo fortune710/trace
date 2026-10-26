@@ -56,6 +56,7 @@ class CredentialMetadata:
     owner_id: UUID
     provider: CredentialProvider
     kind: CredentialKind
+    name: str | None
     encryption_provider: CredentialEncryptionProvider
     key_version: str
     aad_version: str
@@ -94,6 +95,9 @@ class CredentialService:
         _validate_payload(payload)
         cipher = self._get_cipher()
         with principal_transaction(self._engine, owner_id) as connection:
+            # Upsert applies to unnamed credentials only. Named BYOK keys
+            # coexist per provider, so including them here could match
+            # several rows at once.
             row = (
                 connection.execute(
                     sa.select(Credential.__table__)
@@ -101,6 +105,7 @@ class CredentialService:
                         Credential.owner_id == owner_id,
                         Credential.provider == provider,
                         Credential.credential_kind == kind,
+                        Credential.name.is_(None),
                         Credential.revoked_at.is_(None),
                     )
                     .with_for_update()
@@ -136,6 +141,7 @@ class CredentialService:
                         Credential.owner_id == owner_id,
                         Credential.provider == provider,
                         Credential.credential_kind == kind,
+                        Credential.name.is_(None),
                         Credential.revoked_at.is_(None),
                     )
                     .values(
@@ -154,6 +160,74 @@ class CredentialService:
                 .mappings()
                 .one()
             )
+        return _metadata(refreshed)
+
+    def create_named(
+        self,
+        *,
+        owner_id: UUID,
+        provider: CredentialProvider,
+        kind: CredentialKind,
+        name: str,
+        payload: dict[str, object],
+    ) -> CredentialMetadata:
+        """Insert a new named credential without replacing any existing one.
+
+        Named keys are the BYOK list: a provider may hold several active
+        named keys at once, distinguished by name. A duplicate active name
+        for the owner conflicts, as does an invalid name.
+        """
+        _validate_payload(payload)
+        clean_name = _validate_name(name)
+        cipher = self._get_cipher()
+        credential_id = uuid7()
+        encrypted = _encrypt(
+            cipher,
+            payload,
+            credential_id=credential_id,
+            owner_id=owner_id,
+            provider=provider,
+            kind=kind,
+        )
+        values = _encrypted_values(encrypted)
+        try:
+            with principal_transaction(self._engine, owner_id) as connection:
+                existing = (
+                    connection.execute(
+                        sa.select(Credential.id).where(
+                            Credential.owner_id == owner_id,
+                            Credential.name == clean_name,
+                            Credential.revoked_at.is_(None),
+                        )
+                    )
+                    .scalars()
+                    .one_or_none()
+                )
+                if existing is not None:
+                    raise CredentialConflict("credential_name_conflict")
+                connection.execute(
+                    sa.insert(Credential).values(
+                        id=credential_id,
+                        owner_id=owner_id,
+                        provider=provider,
+                        credential_kind=kind,
+                        name=clean_name,
+                        **values,
+                    )
+                )
+                refreshed = (
+                    connection.execute(
+                        sa.select(Credential.__table__).where(
+                            Credential.id == credential_id,
+                            Credential.owner_id == owner_id,
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+        except sa.exc.IntegrityError as error:
+            # Race with a concurrent insert of the same name.
+            raise CredentialConflict("credential_name_conflict") from error
         return _metadata(refreshed)
 
     def metadata(self, *, owner_id: UUID, credential_id: UUID) -> CredentialMetadata:
@@ -476,6 +550,13 @@ def _validate_payload(payload: dict[str, object]) -> None:
         raise CredentialPayloadError("Credential payload is invalid")
 
 
+def _validate_name(name: str) -> str:
+    clean = name.strip() if isinstance(name, str) else ""
+    if not clean or len(clean) > 100:
+        raise CredentialPayloadError("Credential name is invalid")
+    return clean
+
+
 def _encrypt(
     cipher: CredentialCipherProtocol,
     payload: dict[str, object],
@@ -525,6 +606,7 @@ def _metadata(row: sa.RowMapping) -> CredentialMetadata:
         owner_id=row["owner_id"],
         provider=row["provider"],
         kind=row["credential_kind"],
+        name=row["name"],
         encryption_provider=row["encryption_provider"],
         key_version=row["key_version"],
         aad_version=row["aad_version"],

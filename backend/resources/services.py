@@ -17,7 +17,7 @@ from agents.models import Agent
 from artifacts.models import LocalFileBackup, PullRequest
 from auth.errors import AuthorizationDenied, ResourceConflict, ResourceNotFound
 from auth.uuids import uuid7
-from credentials.models import Credential
+from credentials.models import Credential, CredentialKind
 from db.rls import principal_transaction
 from db.types import RepositorySource
 from external_repositories.models import ExternalRepository
@@ -569,6 +569,8 @@ class AgentService:
             _raise_access(connection, "credential", credential_id)
         if credential.provider.value != _value(model_provider):
             raise ResourceConflict("credential_provider_mismatch")
+        if credential.credential_kind != CredentialKind.API_KEY:
+            raise ResourceConflict("credential_kind_mismatch")
 
 
 class UnsupportedAgentModel(ValueError):
