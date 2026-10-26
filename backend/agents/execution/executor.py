@@ -35,6 +35,8 @@ from credentials.models import CredentialProvider
 from db.rls import principal_transaction
 from external_repositories.service import RepositoryService, ReviewGitHubSourceAccess
 from findings.models import Finding
+from notifications.models import NotificationEventType
+from notifications.service import create_notification
 from reviews.config import AgentExecutionSettings
 from reviews.models import (
     Review,
@@ -514,24 +516,37 @@ class ReviewExecutionService:
         if not finding_rows:
             return
         with principal_transaction(self._engine, owner_id) as connection:
-            connection.execute(
-                pg_insert(Finding)
-                .values(finding_rows)
-                .on_conflict_do_nothing(
-                    index_elements=[
-                        Finding.owner_id,
-                        Finding.review_id,
-                        Finding.agent_id,
-                        Finding.content_digest,
-                    ],
-                    index_where=Finding.content_digest.is_not(None),
+            inserted_ids = (
+                connection.execute(
+                    pg_insert(Finding)
+                    .values(finding_rows)
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            Finding.owner_id,
+                            Finding.review_id,
+                            Finding.agent_id,
+                            Finding.content_digest,
+                        ],
+                        index_where=Finding.content_digest.is_not(None),
+                    )
+                    .returning(Finding.id)
                 )
+                .scalars()
+                .all()
             )
+            if inserted_ids:
+                create_notification(
+                    connection,
+                    owner_id=owner_id,
+                    event_type=NotificationEventType.FINDINGS_AVAILABLE,
+                    dedupe_key=f"review:{review.id}:findings_available",
+                    review_id=review.id,
+                )
         _log(
             "findings_persisted",
             review_id=review.id,
             review_agent_id=review_agent.id,
-            findings_created=len(finding_rows),
+            findings_created=len(inserted_ids),
         )
 
     def _finish_review_agent_attempt(
@@ -581,22 +596,35 @@ class ReviewExecutionService:
         failure_code: str,
     ) -> None:
         with principal_transaction(self._engine, owner_id) as connection:
-            connection.execute(
-                sa.update(ReviewAgent)
-                .where(
-                    ReviewAgent.owner_id == owner_id, ReviewAgent.review_id == review_id
-                )
-                .values(
-                    status=ReviewAgentStatus.FAILED,
-                    error_reason=failure_code,
-                    completed_at=sa.func.now(),
-                )
-            )
-            connection.execute(
+            updated = connection.execute(
                 sa.update(Review)
-                .where(Review.id == review_id, Review.owner_id == owner_id)
+                .where(
+                    Review.id == review_id,
+                    Review.owner_id == owner_id,
+                    Review.status.in_([ReviewStatus.QUEUED, ReviewStatus.RUNNING]),
+                )
                 .values(status=ReviewStatus.FAILED, completed_at=sa.func.now())
             )
+            if updated.rowcount == 1:
+                connection.execute(
+                    sa.update(ReviewAgent)
+                    .where(
+                        ReviewAgent.owner_id == owner_id,
+                        ReviewAgent.review_id == review_id,
+                    )
+                    .values(
+                        status=ReviewAgentStatus.FAILED,
+                        error_reason=failure_code,
+                        completed_at=sa.func.now(),
+                    )
+                )
+                create_notification(
+                    connection,
+                    owner_id=owner_id,
+                    event_type=NotificationEventType.REVIEW_FAILED,
+                    dedupe_key=f"review:{review_id}:failed",
+                    review_id=review_id,
+                )
         _log(
             "review_execution_failed",
             review_id=review_id,
@@ -615,15 +643,27 @@ class ReviewExecutionService:
                     ReviewAgent.status == ReviewAgentStatus.FAILED,
                 )
             ).scalar_one()
-            connection.execute(
-                sa.update(Review)
-                .where(Review.id == review_id, Review.owner_id == owner_id)
-                .values(
-                    status=(
-                        ReviewStatus.FAILED
-                        if failed_agent_count
-                        else ReviewStatus.COMPLETED
-                    ),
-                    completed_at=sa.func.now(),
-                )
+            terminal_status = (
+                ReviewStatus.FAILED if failed_agent_count else ReviewStatus.COMPLETED
             )
+            updated = connection.execute(
+                sa.update(Review)
+                .where(
+                    Review.id == review_id,
+                    Review.owner_id == owner_id,
+                    Review.status.in_([ReviewStatus.QUEUED, ReviewStatus.RUNNING]),
+                )
+                .values(status=terminal_status, completed_at=sa.func.now())
+            )
+            if updated.rowcount == 1:
+                create_notification(
+                    connection,
+                    owner_id=owner_id,
+                    event_type=(
+                        NotificationEventType.REVIEW_FAILED
+                        if terminal_status is ReviewStatus.FAILED
+                        else NotificationEventType.REVIEW_COMPLETED
+                    ),
+                    dedupe_key=f"review:{review_id}:{terminal_status.value}",
+                    review_id=review_id,
+                )

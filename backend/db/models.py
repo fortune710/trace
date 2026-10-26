@@ -41,6 +41,11 @@ from db.types import (
 )
 from external_repositories.models import ExternalRepository
 from findings.models import Finding, FindingSeverity, FindingStatus
+from notifications.models import (
+    Notification,
+    NotificationCategory,
+    NotificationEventType,
+)
 from projects.models import Project, ProjectCategory
 from remediations.models import Remediation, RemediationStatus
 from reviews.models import (
@@ -79,6 +84,9 @@ __all__ = [
     "IdentityProvider",
     "LocalFileBackup",
     "ModelProvider",
+    "Notification",
+    "NotificationCategory",
+    "NotificationEventType",
     "PasswordCredential",
     "PasswordRecoveryToken",
     "Project",

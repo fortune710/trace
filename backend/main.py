@@ -30,6 +30,7 @@ from db.session import (
     get_engine,
     get_redis_client,
 )
+from notifications.stream import broker as notification_broker
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +100,10 @@ def create_app(
                 )
             )
         try:
+            notification_broker.start()
             yield
         finally:
+            await notification_broker.stop()
             if vault_renewal_task is not None:
                 vault_renewal_task.cancel()
                 with suppress(asyncio.CancelledError):

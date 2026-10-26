@@ -43,7 +43,9 @@ from auth.tokens import (
     jwt_service_from_settings,
 )
 from auth.uuids import uuid7
-from db.rls import principal_transaction
+from db.rls import principal_transaction, set_principal_context
+from notifications.models import NotificationEventType
+from notifications.service import create_notification
 from users.models import User
 
 
@@ -62,6 +64,7 @@ class SessionTokens:
 class LoginResult:
     outcome: Literal["authenticated", "rejected"]
     tokens: SessionTokens | None = None
+    user_id: UUID | None = None
 
 
 class AuthService:
@@ -107,7 +110,7 @@ class AuthService:
 
     def register(
         self, *, email: str, password: str, display_name: str | None, destination: str
-    ) -> None:
+    ) -> UUID | None:
         normalized_email = _normalize_email(email)
         user_id = uuid7()
         token = generate_opaque_token()
@@ -126,7 +129,7 @@ class AuthService:
                     .returning(AuthUser.id)
                 ).scalar_one_or_none()
                 if inserted is None:
-                    return
+                    return None
                 connection.execute(
                     sa.insert(User).values(id=user_id, display_name=display_name)
                 )
@@ -163,11 +166,19 @@ class AuthService:
                     },
                     cipher=self._email_cipher,
                 )
+                set_principal_context(connection, user_id)
+                create_notification(
+                    connection,
+                    owner_id=user_id,
+                    event_type=NotificationEventType.ACCOUNT_REGISTERED,
+                    dedupe_key="account:registered",
+                )
         except (sa.exc.SQLAlchemyError, CredentialEncryptionUnavailable) as error:
             raise AuthenticationUnavailable(
                 "Authentication database is unavailable"
             ) from error
         self._dispatch(job_id)
+        return user_id
 
     def account_profile(self, *, user_id: UUID) -> tuple[str | None, str | None]:
         """Return the authenticated user's display metadata without secrets."""
@@ -187,7 +198,7 @@ class AuthService:
             raise AuthenticationUnavailable("Authenticated account is unavailable")
         return row.email, row.display_name
 
-    def verify_email(self, *, token: str) -> bool:
+    def verify_email(self, *, token: str) -> UUID | None:
         try:
             with self._engine.begin() as connection:
                 token_row = (
@@ -205,7 +216,7 @@ class AuthService:
                     .one_or_none()
                 )
                 if token_row is None:
-                    return False
+                    return None
                 connection.execute(
                     sa.update(EmailVerificationToken)
                     .where(
@@ -222,10 +233,18 @@ class AuthService:
                     )
                     .values(email_confirmed_at=sa.func.now(), updated_at=sa.func.now())
                 )
-                return True
+                owner_id = token_row["user_id"]
+                set_principal_context(connection, owner_id)
+                create_notification(
+                    connection,
+                    owner_id=owner_id,
+                    event_type=NotificationEventType.EMAIL_VERIFIED,
+                    dedupe_key="account:email-verified",
+                )
+                return owner_id
         except (ValueError, sa.exc.SQLAlchemyError) as error:
             if isinstance(error, ValueError):
-                return False
+                return None
             raise AuthenticationUnavailable(
                 "Authentication database is unavailable"
             ) from error
@@ -271,9 +290,16 @@ class AuthService:
                             password_changed_at=sa.func.now(),
                         )
                     )
-                return LoginResult(
-                    "authenticated", self._create_session(connection, user_id=row["id"])
+                owner_id = row["id"]
+                tokens = self._create_session(connection, user_id=owner_id)
+                set_principal_context(connection, owner_id)
+                create_notification(
+                    connection,
+                    owner_id=owner_id,
+                    event_type=NotificationEventType.PASSWORD_SIGNED_IN,
+                    dedupe_key=f"session:{tokens.session_id}:password-signed-in",
                 )
+                return LoginResult("authenticated", tokens, owner_id)
         except sa.exc.SQLAlchemyError as error:
             raise AuthenticationUnavailable(
                 "Authentication database is unavailable"
@@ -319,10 +345,16 @@ class AuthService:
                 if existing is not None:
                     if existing["status"] != UserStatus.ACTIVE:
                         return LoginResult("rejected")
-                    return LoginResult(
-                        "authenticated",
-                        self._create_session(connection, user_id=existing["user_id"]),
+                    owner_id = existing["user_id"]
+                    tokens = self._create_session(connection, user_id=owner_id)
+                    set_principal_context(connection, owner_id)
+                    create_notification(
+                        connection,
+                        owner_id=owner_id,
+                        event_type=NotificationEventType.OAUTH_SIGNED_IN,
+                        dedupe_key=f"session:{tokens.session_id}:oauth-signed-in",
                     )
+                    return LoginResult("authenticated", tokens, owner_id)
 
                 user_id = uuid7()
                 inserted = connection.execute(
@@ -352,9 +384,15 @@ class AuthService:
                         provider_subject=subject,
                     )
                 )
-                return LoginResult(
-                    "authenticated", self._create_session(connection, user_id=user_id)
+                tokens = self._create_session(connection, user_id=user_id)
+                set_principal_context(connection, user_id)
+                create_notification(
+                    connection,
+                    owner_id=user_id,
+                    event_type=NotificationEventType.OAUTH_SIGNED_IN,
+                    dedupe_key=f"session:{tokens.session_id}:oauth-signed-in",
                 )
+                return LoginResult("authenticated", tokens, user_id)
         except sa.exc.SQLAlchemyError as error:
             raise AuthenticationUnavailable(
                 "Authentication database is unavailable"
@@ -484,7 +522,7 @@ class AuthService:
             ) from error
         self._dispatch(job_id)
 
-    def reset_password(self, *, token: str, password: str) -> bool:
+    def reset_password(self, *, token: str, password: str) -> UUID | None:
         try:
             with self._engine.begin() as connection:
                 row = (
@@ -502,7 +540,7 @@ class AuthService:
                     .one_or_none()
                 )
                 if row is None:
-                    return False
+                    return None
                 connection.execute(
                     sa.update(PasswordCredential)
                     .where(PasswordCredential.user_id == row["user_id"])
@@ -539,10 +577,18 @@ class AuthService:
                     )
                     .values(revoked_at=sa.func.now())
                 )
-                return True
+                owner_id = row["user_id"]
+                set_principal_context(connection, owner_id)
+                create_notification(
+                    connection,
+                    owner_id=owner_id,
+                    event_type=NotificationEventType.PASSWORD_RESET,
+                    dedupe_key="account:password-reset",
+                )
+                return owner_id
         except (ValueError, sa.exc.SQLAlchemyError) as error:
             if isinstance(error, ValueError):
-                return False
+                return None
             raise AuthenticationUnavailable(
                 "Authentication database is unavailable"
             ) from error
@@ -562,7 +608,20 @@ class AuthService:
                     .with_for_update()
                 ).scalar_one_or_none()
                 if session_id is not None:
+                    owner_id = connection.execute(
+                        sa.select(AuthSession.user_id).where(
+                            AuthSession.id == session_id
+                        )
+                    ).scalar_one_or_none()
                     self._revoke_session(connection, session_id)
+                    if owner_id is not None:
+                        set_principal_context(connection, owner_id)
+                        create_notification(
+                            connection,
+                            owner_id=owner_id,
+                            event_type=NotificationEventType.LOGGED_OUT,
+                            dedupe_key=f"session:{session_id}:logged-out",
+                        )
         except sa.exc.SQLAlchemyError as error:
             raise AuthenticationUnavailable(
                 "Authentication database is unavailable"

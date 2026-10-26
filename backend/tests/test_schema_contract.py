@@ -16,6 +16,7 @@ from credentials.models import Credential
 from db.base import Base
 from external_repositories.models import ExternalRepository
 from findings.models import Finding
+from notifications.models import Notification
 from projects.models import Project
 from remediations.models import Remediation
 from reviews.models import Review, ReviewAgent, ReviewDispatchJob
@@ -35,6 +36,7 @@ def test_string_columns_use_text_and_provider_fields_use_native_enums() -> None:
     assert isinstance(Credential.__table__.c.encryption_provider.type, sa.Enum)
     assert isinstance(AuthIdentity.__table__.c.provider.type, sa.Enum)
     assert isinstance(Project.__table__.c.source.type, sa.Enum)
+    assert isinstance(Notification.__table__.c.category.type, sa.Enum)
     assert AuthIdentity.__table__.c.provider.type.native_enum
     assert Project.__table__.c.source.type.native_enum
 
@@ -62,6 +64,7 @@ def test_all_auth_and_public_tables_match_the_database_contract() -> None:
             "remediations",
             "pull_requests",
             "local_file_backups",
+            "notifications",
         },
     }
     actual_tables: dict[str, set[str]] = {}

@@ -59,6 +59,8 @@ from external_repositories.service import (
     invalidate_repository_catalog,
     provision_external_repository,
 )
+from notifications.models import NotificationEventType
+from notifications.service import create_notification
 
 _STATE_TTL_SECONDS = 600
 OAUTH_CALLBACK_ROUTE = "/auth/oauth/{provider}/callback"
@@ -496,6 +498,15 @@ def install_oauth_routes(
                     owner_id=UUID(transaction.user_id),
                     source=RepositoryProvider.GITHUB,
                 )
+                with principal_transaction(
+                    get_engine(), UUID(transaction.user_id)
+                ) as connection:
+                    create_notification(
+                        connection,
+                        owner_id=UUID(transaction.user_id),
+                        event_type=NotificationEventType.GITHUB_CONNECTED,
+                        dedupe_key=f"github:connection:{credential_metadata.id}",
+                    )
             else:
                 result = await asyncio.to_thread(
                     auth_service().oauth_login,

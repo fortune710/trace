@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -24,7 +25,9 @@ from auth.errors import (
     ProviderUnavailable,
     RepositoryNotFound,
 )
+from db.types import ReviewCategory
 from external_repositories.service import ReviewSourceFileError
+from notifications.models import NotificationEventType
 from reviews.config import AgentExecutionSettings
 from reviews.dispatch import _open_connection
 
@@ -252,6 +255,77 @@ def test_redaction_removes_common_provider_keys() -> None:
 
     assert "sk-example_secret_key_123456789012345" not in value
     assert "[REDACTED_SECRET]" in value
+
+
+@pytest.mark.parametrize(
+    ("inserted_ids", "expected_notification_count"),
+    [([uuid4()], 1), ([], 0)],
+)
+def test_first_inserted_finding_creates_one_review_notification(
+    monkeypatch, inserted_ids, expected_notification_count
+) -> None:
+    service = object.__new__(ReviewExecutionService)
+    owner_id = uuid4()
+    review_id = uuid4()
+    notifications: list[dict[str, object]] = []
+
+    class InsertResult:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return inserted_ids
+
+    class Connection:
+        def execute(self, _statement):
+            return InsertResult()
+
+    @contextmanager
+    def fake_principal_transaction(_engine, _owner_id):
+        yield Connection()
+
+    def fake_create_notification(_connection, **kwargs):
+        notifications.append(kwargs)
+
+    monkeypatch.setattr(
+        execution_executor_module,
+        "principal_transaction",
+        fake_principal_transaction,
+    )
+    monkeypatch.setattr(
+        execution_executor_module,
+        "create_notification",
+        fake_create_notification,
+    )
+
+    service._engine = object()
+    service._persist_findings(
+        owner_id=owner_id,
+        review=SimpleNamespace(id=review_id),
+        review_agent=SimpleNamespace(
+            id=uuid4(),
+            agent_id=uuid4(),
+            agent_specialization=ReviewCategory.SECURITY,
+        ),
+        finding_outputs=[
+            FindingOutput(
+                severity="high",
+                title="Missing authorization check",
+                explanation="The route does not verify the caller's organization.",
+            )
+        ],
+    )
+
+    assert len(notifications) == expected_notification_count
+    if notifications:
+        assert notifications == [
+            {
+                "owner_id": owner_id,
+                "event_type": NotificationEventType.FINDINGS_AVAILABLE,
+                "dedupe_key": f"review:{review_id}:findings_available",
+                "review_id": review_id,
+            }
+        ]
 
 
 @pytest.mark.parametrize(
