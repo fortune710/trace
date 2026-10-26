@@ -4,6 +4,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { useNavigate } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import {
   Empty,
   EmptyDescription,
@@ -31,6 +32,7 @@ import {
 import { toast } from "@/components/ui/toast"
 import githubLogo from "@/assets/github-invertocat-white.svg"
 import { useDebounce } from "@/hooks/use-debounce"
+import { useGitHubConnection } from "@/hooks/use-github-connection"
 import { useLocalFolderPicker } from "@/hooks/use-local-folder-picker"
 import { type Branch, type Repository } from "@/lib/api"
 import { LocalProjectCreationError } from "@/lib/desktop-projects"
@@ -129,6 +131,7 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
   const navigate = useNavigate()
   const runtime = useRuntimeEnvironment()
   const localFolderPicker = useLocalFolderPicker()
+  const githubConnection = useGitHubConnection()
   const [step, setStep] = useState<Step>(1)
   const [source, setSource] = useState<"github" | "local" | null>(null)
   const [name, setName] = useState("")
@@ -140,8 +143,17 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
   const [branchSearch, setBranchSearch] = useState("")
   const debouncedRepositorySearch = useDebounce(repositorySearch.trim())
   const debouncedBranchSearch = useDebounce(branchSearch.trim())
-  const repositories = useRepositories(debouncedRepositorySearch, open && step === 2)
-  const branches = useBranches(selectedRepository?.repository_id ?? null, debouncedBranchSearch, open && step === 2)
+  const isGitHubConnected = githubConnection.data?.status === "connected"
+  const isGitHubUnavailable = githubConnection.data !== undefined && !isGitHubConnected
+  const repositories = useRepositories(
+    debouncedRepositorySearch,
+    open && step === 2 && isGitHubConnected,
+  )
+  const branches = useBranches(
+    selectedRepository?.repository_id ?? null,
+    debouncedBranchSearch,
+    open && step === 2 && isGitHubConnected,
+  )
   const createProject = useCreateProject()
   const createLocalProject = useCreateLocalProject()
   const repositoryItems = repositories.data?.pages.flatMap((page) => page.items) ?? []
@@ -181,6 +193,8 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
   }
 
   async function handleGitHubSelect() {
+    if (!isGitHubConnected) return
+
     if (source === "local") {
       try {
         await localFolderPicker.clearSelection()
@@ -281,10 +295,32 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
         <form id="create-project-form" className="grid gap-4 px-2.5 pt-1 pb-5" onSubmit={handleSubmit}>
           {step === 1 ? <div className="grid gap-2">
             <p className="px-2 pb-1 text-xs text-muted-foreground">Sources</p>
-            {showGitHub ? <button type="button" onClick={() => void handleGitHubSelect()} className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent focus-visible:text-sidebar-accent-foreground focus-visible:outline-none">
-              <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-black ring-1 ring-white/10"><img src={githubLogo} alt="" className="size-4 object-contain" /></span>
-              <span><span className="block text-sm font-medium">GitHub repository</span><span className="mt-0.5 block text-xs text-muted-foreground">Import a repository and choose a branch</span></span>
-            </button> : null}
+            {showGitHub ? (
+              <button
+                type="button"
+                disabled={!isGitHubConnected}
+                onClick={() => void handleGitHubSelect()}
+                className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent focus-visible:text-sidebar-accent-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-black ring-1 ring-white/10">
+                  <img src={githubLogo} alt="" className="size-4 object-contain" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium">GitHub repository</span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    Import a repository and choose a branch
+                  </span>
+                </span>
+                {isGitHubUnavailable ? (
+                  <Badge
+                    variant="destructive"
+                    className="shrink-0"
+                  >
+                    Not connected
+                  </Badge>
+                ) : null}
+              </button>
+            ) : null}
             {showLocal ? <button type="button" onClick={handleLocalFolderSelect} disabled={localFolderPicker.isSelecting} className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent focus-visible:text-sidebar-accent-foreground focus-visible:outline-none disabled:cursor-wait disabled:opacity-60">
               <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-secondary text-muted-foreground">
                 <HugeiconsIcon icon={FolderOpenIcon} size={16} strokeWidth={2} />
