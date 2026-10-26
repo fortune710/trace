@@ -343,7 +343,7 @@ services:
 
   vault:
     image: hashicorp/vault:1.21.3@sha256:5f244d447c6f90107149c9565da5ffedf847cec673ba0062a82fc3dd83c89e65
-    command: ["server", "-config=/vault/config/vault.hcl"]
+    command: ["server"]
     environment:
       VAULT_ADDR: http://127.0.0.1:8200
       VAULT_DISABLE_MLOCK: "true"
