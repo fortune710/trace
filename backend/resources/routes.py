@@ -550,14 +550,25 @@ def install_resource_routes(
         request: Request, body: CredentialCreate, principal: CurrentPrincipal
     ) -> dict[str, object]:
         _require_csrf(request, principal, settings)
-        result = _credential_operation(
-            lambda: credential_service().create_or_replace(
-                owner_id=principal.user_id,
-                provider=body.provider,
-                kind=body.kind,
-                payload=body.payload,
+        if body.name is not None:
+            result = _credential_operation(
+                lambda: credential_service().create_named(
+                    owner_id=principal.user_id,
+                    provider=body.provider,
+                    kind=body.kind,
+                    name=body.name,
+                    payload=body.payload,
+                )
             )
-        )
+        else:
+            result = _credential_operation(
+                lambda: credential_service().create_or_replace(
+                    owner_id=principal.user_id,
+                    provider=body.provider,
+                    kind=body.kind,
+                    payload=body.payload,
+                )
+            )
         _audit(request, audit_hasher, audit_recorder, "credential", "created")
         return _credential_response(result)
 
@@ -692,6 +703,7 @@ def _credential_response(metadata) -> dict[str, object]:
         "id": metadata.id,
         "provider": metadata.provider,
         "kind": metadata.kind,
+        "name": metadata.name,
         "active": metadata.revoked_at is None,
         "created_at": metadata.created_at,
         "updated_at": metadata.updated_at,

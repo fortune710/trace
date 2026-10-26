@@ -31,13 +31,13 @@ headers with the connecting address and HTTPS scheme before proxying a request.
    group. Check that no host web server or other container already binds these
    ports (`sudo ss -ltnp | grep -E ':(80|443)[[:space:]]'`). Resolve any conflict
    before starting the NGINX container.
-4. From `/root/trace`, create the ACME challenge directory and start NGINX's
-   HTTP bootstrap mode. The first start has no certificate and intentionally
-   serves only `/.well-known/acme-challenge/`:
+4. Create the persistent ACME challenge directory outside the Git checkout and
+   start NGINX's HTTP bootstrap mode. The first start has no certificate and
+   intentionally serves only `/.well-known/acme-challenge/`:
 
    ```sh
+   sudo install -d -m 0755 /var/lib/trace/acme
    cd /root/trace
-   install -d -m 0755 production-acme
    docker compose --env-file .env.production -f compose.production.yaml up -d --no-deps nginx
    ```
 
@@ -46,7 +46,7 @@ headers with the connecting address and HTTPS scheme before proxying a request.
 
    ```sh
    sudo certbot certonly --webroot \
-     --webroot-path /root/trace/production-acme \
+     --webroot-path /var/lib/trace/acme \
      --domain traceapi.fortunealebiosu.dev \
      --email you@example.com --agree-tos --no-eff-email
    ```

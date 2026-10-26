@@ -16,7 +16,11 @@ import { IntegrationsPage } from "@/app/integrations/integrations-page"
 import { ProjectDetailsPage } from "@/app/projects/project-details-page"
 import { ProjectsPage } from "@/app/projects/projects-page"
 import { ReviewDetailsPage } from "@/app/reviews/review-details-page"
-import { CredentialsPage, SettingsIndexRedirect } from "@/app/settings/credentials-page"
+import {
+  ApiKeysPage,
+  LegacyCredentialsRedirect,
+  SettingsIndexRedirect,
+} from "@/app/settings/api-keys-page"
 import { WorkspacePage } from "@/app/workspace/workspace-page"
 
 function App() {
@@ -82,8 +86,12 @@ function App() {
           element={<SettingsIndexRedirect />}
         />
         <Route
+          path="/settings/api-keys"
+          element={<ApiKeysPage />}
+        />
+        <Route
           path="/settings/credentials"
-          element={<CredentialsPage />}
+          element={<LegacyCredentialsRedirect />}
         />
         <Route
           path="/learn-more"

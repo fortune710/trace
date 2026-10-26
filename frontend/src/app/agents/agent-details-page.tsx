@@ -389,14 +389,16 @@ function ModelSettings({ agent, disabled }: { agent: Agent; disabled: boolean })
             <SelectValue>
               {credentialId === "trace-managed"
                 ? "Trace-managed access"
-                : `Your ${providerLabels[provider]} API key`}
+                : (compatibleCredentials.find(
+                    (credential) => credential.id === credentialId,
+                  )?.name ?? `Your ${providerLabels[provider]} API key`)}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="trace-managed">Trace-managed access</SelectItem>
             {compatibleCredentials.map((credential) => (
               <SelectItem key={credential.id} value={credential.id}>
-                Your {providerLabels[provider]} API key
+                {credential.name ?? `Your ${providerLabels[provider]} API key`}
               </SelectItem>
             ))}
           </SelectContent>
