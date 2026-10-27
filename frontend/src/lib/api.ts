@@ -282,6 +282,7 @@ export type Finding = {
   source_location: string | null
   recommendation: string | null
   status: FindingStatus
+  status_changed_at: string | null
   created_at: string
   updated_at: string
 }
@@ -587,6 +588,7 @@ export const findingsApi = {
     category,
     severity,
     status,
+    excludeStatus,
     agentId,
   }: {
     reviewId: string
@@ -595,6 +597,7 @@ export const findingsApi = {
     category?: ReviewCategory
     severity?: FindingSeverity
     status?: FindingStatus
+    excludeStatus?: FindingStatus
     agentId?: string
   }) =>
     request<FindingPage>(
@@ -604,11 +607,16 @@ export const findingsApi = {
         category,
         severity,
         status,
+        exclude_status: excludeStatus,
         agent_id: agentId,
       })}`,
     ),
   get: (findingId: string) =>
     request<Finding>(`/api/v1/findings/${encodeURIComponent(findingId)}`),
+  updateStatus: (findingId: string, status: FindingStatus) =>
+    patch<Finding>(`/api/v1/findings/${encodeURIComponent(findingId)}`, {
+      status,
+    }),
 }
 
 export const notificationsApi = {

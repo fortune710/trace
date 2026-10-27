@@ -102,6 +102,18 @@ export function FindingDetailsPage() {
             </p>
             <dl className="mt-6 grid gap-5 text-sm">
               <div>
+                <dt className="text-muted-foreground">Triage status</dt>
+                <dd className="mt-1 capitalize">{finding.data.status}</dd>
+              </div>
+              {finding.data.status_changed_at ? (
+                <div>
+                  <dt className="text-muted-foreground">Last decision</dt>
+                  <dd className="mt-1">
+                    You · {new Date(finding.data.status_changed_at).toLocaleString()}
+                  </dd>
+                </div>
+              ) : null}
+              <div>
                 <dt className="text-muted-foreground">Reviewer</dt>
                 <dd className="mt-1">
                   {finding.data.reviewing_agent.display_name} ·{" "}

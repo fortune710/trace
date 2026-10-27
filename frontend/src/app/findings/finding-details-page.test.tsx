@@ -35,6 +35,7 @@ const finding: Finding = {
   source_location: "src/auth/redirect.ts:24",
   recommendation: "Allow only trusted relative destinations.",
   status: "open",
+  status_changed_at: null,
   created_at: "2026-10-26T00:00:00Z",
   updated_at: "2026-10-26T00:00:00Z",
 }

@@ -6,10 +6,16 @@ import { MemoryRouter, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ReviewFindings } from "@/components/findings/review-findings"
-import { useReviewFindings } from "@/hooks/use-findings"
+import {
+  useReviewFindings,
+  useUpdateFindingStatus,
+} from "@/hooks/use-findings"
 import type { Finding, Review } from "@/lib/api"
 
-vi.mock("@/hooks/use-findings", () => ({ useReviewFindings: vi.fn() }))
+vi.mock("@/hooks/use-findings", () => ({
+  useReviewFindings: vi.fn(),
+  useUpdateFindingStatus: vi.fn(),
+}))
 
 const review: Review = {
   id: "review-a",
@@ -69,11 +75,14 @@ const finding: Finding = {
   ].join("\n"),
   recommendation: null,
   status: "open",
+  status_changed_at: null,
   created_at: "2026-10-21T00:00:00Z",
   updated_at: "2026-10-21T00:00:00Z",
 }
 
 const mockedUseReviewFindings = vi.mocked(useReviewFindings)
+const mockedUseUpdateFindingStatus = vi.mocked(useUpdateFindingStatus)
+const mutate = vi.fn()
 
 function LocationProbe() {
   const location = useLocation()
@@ -98,6 +107,13 @@ describe("ReviewFindings", () => {
       isFetching: false,
       refetch: vi.fn(),
     } as unknown as ReturnType<typeof useReviewFindings>)
+    mockedUseUpdateFindingStatus.mockReturnValue({
+      mutate,
+      isPending: false,
+      isError: false,
+      variables: undefined,
+      error: null,
+    } as unknown as ReturnType<typeof useUpdateFindingStatus>)
   })
 
   afterEach(() => {
@@ -113,6 +129,7 @@ describe("ReviewFindings", () => {
       severity: "high",
       status: undefined,
       agentId: undefined,
+      excludeStatus: "dismissed",
     })
     expect(screen.getByText("Missing authorization check")).toBeTruthy()
     expect(screen.getByText("Security Scout")).toBeTruthy()
@@ -139,6 +156,7 @@ describe("ReviewFindings", () => {
       severity: undefined,
       status: undefined,
       agentId: "agent-a",
+      excludeStatus: "dismissed",
     })
   })
 
@@ -150,6 +168,7 @@ describe("ReviewFindings", () => {
       severity: undefined,
       status: undefined,
       agentId: undefined,
+      excludeStatus: "dismissed",
     })
     expect(screen.getByRole("combobox", { name: "Reviewer" }).textContent).toContain(
       "All reviewers",
@@ -217,11 +236,34 @@ describe("ReviewFindings", () => {
     expect(screen.getByTestId("location").textContent).toBe(
       "?tab=findings&finding_status=resolved",
     )
-    expect(mockedUseReviewFindings).toHaveBeenLastCalledWith("review-a", 1, {
-      category: undefined,
-      severity: undefined,
-      status: "resolved",
-      agentId: undefined,
+    expect(mockedUseReviewFindings).toHaveBeenNthCalledWith(
+      mockedUseReviewFindings.mock.calls.length - 1,
+      "review-a",
+      1,
+      {
+        category: undefined,
+        severity: undefined,
+        status: "resolved",
+        agentId: undefined,
+      },
+    )
+  })
+
+  it("offers open-finding triage actions and lazily loads dismissed findings", () => {
+    renderFindings()
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }))
+    expect(mutate).toHaveBeenCalledWith({
+      findingId: "finding-a",
+      status: "dismissed",
     })
+
+    fireEvent.click(screen.getByRole("button", { name: "Show dismissed findings" }))
+    expect(mockedUseReviewFindings).toHaveBeenLastCalledWith(
+      "review-a",
+      1,
+      { status: "dismissed" },
+      true,
+    )
   })
 })
