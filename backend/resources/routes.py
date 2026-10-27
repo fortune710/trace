@@ -107,7 +107,7 @@ def install_resource_routes(
 
     @lru_cache
     def finding_service() -> FindingService:
-        return FindingService(get_engine())
+        return FindingService(get_engine(), audit_recorder)
 
     @lru_cache
     def artifact_service() -> ArtifactService:
@@ -382,8 +382,11 @@ def install_resource_routes(
         category: ReviewCategory | None = None,
         severity: FindingSeverity | None = None,
         status: FindingStatus | None = None,
+        exclude_status: FindingStatus | None = None,
         agent_id: UUID | None = None,
     ) -> dict[str, object]:
+        if status is not None and exclude_status is not None:
+            raise RepositoryInvalidRequest()
         items, next_offset = finding_service().list_for_review(
             owner_id=principal.user_id,
             review_id=review_id,
@@ -391,6 +394,7 @@ def install_resource_routes(
                 "category": category,
                 "severity": severity,
                 "status": status,
+                "exclude_status": exclude_status,
                 "agent_id": agent_id,
             },
             limit=page_size,
@@ -411,9 +415,22 @@ def install_resource_routes(
     ) -> dict[str, object]:
         _require_csrf(request, principal, settings)
         result = finding_service().update_status(
-            owner_id=principal.user_id, finding_id=finding_id, status=body.status
+            owner_id=principal.user_id,
+            finding_id=finding_id,
+            status=body.status,
+            request_id=getattr(request.state, "request_id", "unavailable"),
         )
-        _audit(request, audit_hasher, audit_recorder, "finding", "triaged")
+        log_auth_event(
+            event="finding",
+            outcome="accepted",
+            reason="triaged",
+            request_id=getattr(request.state, "request_id", "unavailable"),
+            route=request.url.path,
+            status_code=status.HTTP_200_OK,
+            audit_hasher=audit_hasher,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
         return result
 
     @app.post(

@@ -309,6 +309,7 @@ class FindingResponse(RequestModel):
     source_location: str | None
     recommendation: str | None
     status: FindingStatus
+    status_changed_at: datetime | None
     created_at: datetime
     updated_at: datetime
 

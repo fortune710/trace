@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from agents.catalog import supports_model
 from agents.models import Agent
 from artifacts.models import LocalFileBackup, PullRequest
+from audit.outbox import AuditRecorder
 from auth.errors import AuthorizationDenied, ResourceConflict, ResourceNotFound
 from auth.uuids import uuid7
 from credentials.models import Credential, CredentialKind
@@ -1039,8 +1040,11 @@ class ReviewService:
 
 
 class FindingService:
-    def __init__(self, engine: Engine) -> None:
+    def __init__(
+        self, engine: Engine, audit_recorder: AuditRecorder | None = None
+    ) -> None:
         self._engine = engine
+        self._audit_recorder = audit_recorder
 
     def list_for_review(
         self,
@@ -1065,6 +1069,8 @@ class FindingService:
             for field in ("category", "severity", "status", "agent_id"):
                 if filters.get(field) is not None:
                     query = query.where(getattr(Finding, field) == filters[field])
+            if filters.get("exclude_status") is not None:
+                query = query.where(Finding.status != filters["exclude_status"])
             findings = cast(
                 list[Finding],
                 _orm_scalars_all(
@@ -1103,31 +1109,58 @@ class FindingService:
             return self._response(connection, finding)
 
     def update_status(
-        self, *, owner_id: UUID, finding_id: UUID, status: FindingStatus
+        self,
+        *,
+        owner_id: UUID,
+        finding_id: UUID,
+        status: FindingStatus,
+        request_id: str,
     ) -> dict[str, object]:
         allowed = {
             FindingStatus.OPEN: {
                 FindingStatus.ACCEPTED,
-                FindingStatus.RESOLVED,
                 FindingStatus.DISMISSED,
             },
-            FindingStatus.ACCEPTED: {
-                FindingStatus.OPEN,
-                FindingStatus.RESOLVED,
-                FindingStatus.DISMISSED,
-            },
-            FindingStatus.RESOLVED: {FindingStatus.OPEN},
+            FindingStatus.ACCEPTED: {FindingStatus.RESOLVED},
+            FindingStatus.RESOLVED: {FindingStatus.ACCEPTED},
             FindingStatus.DISMISSED: {FindingStatus.OPEN},
         }
         with principal_transaction(self._engine, owner_id) as connection:
-            finding = self._owned_finding(connection, owner_id, finding_id)
-            if finding.status != status and status not in allowed[finding.status]:
+            connection.execute(
+                sa.text(
+                    "SELECT pg_advisory_xact_lock("
+                    "hashtextextended(CAST(:finding_lock_key AS text), 0))"
+                ),
+                {"finding_lock_key": str(finding_id)},
+            )
+            finding = self._owned_finding(
+                connection, owner_id, finding_id, for_update=True
+            )
+            previous_status = finding.status
+            if status not in allowed[previous_status]:
                 raise ResourceConflict("finding_state_conflict")
             connection.execute(
                 sa.update(Finding)
                 .where(Finding.id == finding_id, Finding.owner_id == owner_id)
-                .values(status=status, updated_at=sa.func.current_timestamp())
+                .values(
+                    status=status,
+                    status_changed_at=sa.func.current_timestamp(),
+                    updated_at=sa.func.current_timestamp(),
+                )
             )
+            if self._audit_recorder is not None:
+                self._audit_recorder.create_event(
+                    event_type="resource.finding.triaged",
+                    request_id=request_id,
+                    owner_id=owner_id,
+                    fields={
+                        "finding_id": str(finding_id),
+                        "review_id": str(finding.review_id),
+                        "from_status": previous_status.value,
+                        "to_status": status.value,
+                    },
+                    connection=connection,
+                )
             finding = self._owned_finding(connection, owner_id, finding_id)
             return self._response(connection, finding)
 
@@ -1148,15 +1181,22 @@ class FindingService:
 
     @staticmethod
     def _owned_finding(
-        connection: sa.Connection, owner_id: UUID, finding_id: UUID
+        connection: sa.Connection,
+        owner_id: UUID,
+        finding_id: UUID,
+        *,
+        for_update: bool = False,
     ) -> Finding:
+        query = sa.select(Finding).where(
+            Finding.id == finding_id, Finding.owner_id == owner_id
+        )
+        if for_update:
+            query = query.with_for_update()
         finding = cast(
             Finding | None,
             _orm_scalar_one_or_none(
                 connection,
-                sa.select(Finding).where(
-                    Finding.id == finding_id, Finding.owner_id == owner_id
-                ),
+                query,
             ),
         )
         if finding is None:
@@ -1183,6 +1223,7 @@ def _finding_response(finding: Finding, review_agent: ReviewAgent) -> dict[str, 
         "source_location": finding.source_location,
         "recommendation": finding.recommendation,
         "status": finding.status,
+        "status_changed_at": finding.status_changed_at,
         "created_at": finding.created_at,
         "updated_at": finding.updated_at,
     }

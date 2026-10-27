@@ -79,6 +79,9 @@ class Finding(Base):
         nullable=False,
         server_default=sa.text("'open'::public.finding_status"),
     )
+    status_changed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,
@@ -96,6 +99,14 @@ sa.Index(
     "findings_owner_review_created_idx",
     Finding.owner_id,
     Finding.review_id,
+    Finding.created_at.desc(),
+    Finding.id.desc(),
+)
+sa.Index(
+    "findings_owner_review_status_created_idx",
+    Finding.owner_id,
+    Finding.review_id,
+    Finding.status,
     Finding.created_at.desc(),
     Finding.id.desc(),
 )

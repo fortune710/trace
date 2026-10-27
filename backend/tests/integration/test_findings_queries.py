@@ -143,6 +143,10 @@ def test_findings_query_validation_and_foreign_review_access_are_safe(
         "GET",
         f"/api/v1/reviews/{graph['review_id']}/findings?severity=urgent",
     )
+    conflicting_status_filters = owner.request(
+        "GET",
+        f"/api/v1/reviews/{graph['review_id']}/findings?status=open&exclude_status=dismissed",
+    )
     malformed_id = owner.request("GET", "/api/v1/findings/not-a-uuid")
     foreign = other.request(
         "GET",
@@ -151,6 +155,38 @@ def test_findings_query_validation_and_foreign_review_access_are_safe(
 
     assert invalid_page.status_code == 400
     assert invalid_filter.status_code == 400
+    assert conflicting_status_filters.status_code == 400
     assert malformed_id.status_code == 400
     assert foreign.status_code == 403
     assert str(owner.user_id) not in foreign.text
+
+
+def test_owner_review_status_query_uses_the_triage_index(
+    account_pair,
+    agent_factory,
+    artifact_graph_factory,
+    integration_engine,
+    local_project_factory,
+) -> None:
+    owner, _ = account_pair
+    project = local_project_factory(owner)
+    agent = agent_factory(owner)
+    graph = artifact_graph_factory(owner, project["id"], agent["id"])
+
+    with principal_transaction(integration_engine, owner.user_id) as connection:
+        connection.execute(sa.text("SET LOCAL enable_seqscan = off"))
+        plan = "\n".join(
+            connection.execute(
+                sa.text(
+                    "EXPLAIN (COSTS OFF) "
+                    "SELECT id FROM public.findings "
+                    "WHERE owner_id = :owner_id "
+                    "AND review_id = :review_id "
+                    "AND status = 'open'::public.finding_status "
+                    "ORDER BY created_at DESC, id DESC"
+                ),
+                {"owner_id": owner.user_id, "review_id": graph["review_id"]},
+            ).scalars()
+        )
+
+    assert "findings_owner_review_status_created_idx" in plan
