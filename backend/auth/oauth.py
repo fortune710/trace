@@ -75,6 +75,18 @@ class OAuthRejected(ValueError):
     pass
 
 
+def _notify_github_connected(owner_id: UUID, credential_id: UUID) -> None:
+    """Persist the best-effort notification after a GitHub connection succeeds."""
+
+    with principal_transaction(get_engine(), owner_id) as connection:
+        create_notification(
+            connection,
+            owner_id=owner_id,
+            event_type=NotificationEventType.GITHUB_CONNECTED,
+            dedupe_key=f"github:connection:{credential_id}",
+        )
+
+
 class OAuthPurpose(StrEnum):
     LOGIN = "login"
     REPOSITORY_CONNECTION = "repository_connection"
@@ -498,15 +510,15 @@ def install_oauth_routes(
                     owner_id=UUID(transaction.user_id),
                     source=RepositoryProvider.GITHUB,
                 )
-                with principal_transaction(
-                    get_engine(), UUID(transaction.user_id)
-                ) as connection:
-                    create_notification(
-                        connection,
-                        owner_id=UUID(transaction.user_id),
-                        event_type=NotificationEventType.GITHUB_CONNECTED,
-                        dedupe_key=f"github:connection:{credential_metadata.id}",
+                try:
+                    await asyncio.to_thread(
+                        _notify_github_connected,
+                        UUID(transaction.user_id),
+                        credential_metadata.id,
                     )
+                except sa.exc.SQLAlchemyError:
+                    # The GitHub connection is already usable; this alert is best-effort.
+                    pass
             else:
                 result = await asyncio.to_thread(
                     auth_service().oauth_login,

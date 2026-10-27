@@ -1075,7 +1075,26 @@ class FindingService:
                 ),
             )
             selected, next_offset = _page(findings, limit, offset)
-            responses = [self._response(connection, finding) for finding in selected]
+            review_agents = {
+                review_agent.agent_id: review_agent
+                for review_agent in cast(
+                    list[ReviewAgent],
+                    _orm_scalars_all(
+                        connection,
+                        sa.select(ReviewAgent).where(
+                            ReviewAgent.owner_id == owner_id,
+                            ReviewAgent.review_id == review_id,
+                            ReviewAgent.agent_id.in_(
+                                {finding.agent_id for finding in selected}
+                            ),
+                        ),
+                    ),
+                )
+            }
+            responses = [
+                _finding_response(finding, review_agents[finding.agent_id])
+                for finding in selected
+            ]
         return responses, next_offset
 
     def get(self, *, owner_id: UUID, finding_id: UUID) -> dict[str, object]:
