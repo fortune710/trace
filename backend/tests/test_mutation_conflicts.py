@@ -203,14 +203,12 @@ def test_finding_triage_serializes_parallel_transitions_and_audits_once() -> Non
                     owner_id=owner_id,
                     finding_id=finding_id,
                     status=FindingStatus.ACCEPTED,
-                    reason=None,
                     request_id="parallel-accept",
                 ),
                 lambda: services[1].update_status(
                     owner_id=owner_id,
                     finding_id=finding_id,
                     status=FindingStatus.DISMISSED,
-                    reason=None,
                     request_id="parallel-dismiss",
                 ),
             ]

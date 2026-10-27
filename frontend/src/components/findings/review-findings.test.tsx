@@ -73,7 +73,6 @@ const finding: Finding = {
   recommendation: null,
   status: "open",
   status_changed_at: null,
-  triage_reason: null,
   created_at: "2026-10-21T00:00:00Z",
   updated_at: "2026-10-21T00:00:00Z",
 }
@@ -260,21 +259,10 @@ describe("ReviewFindings", () => {
   it("offers open-finding triage actions and lazily loads dismissed findings", () => {
     renderFindings()
 
-    fireEvent.change(screen.getByLabelText("Decision reason optional"), {
-      target: { value: "Risk accepted for the current release." },
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Accept" }))
-    expect(mutate).toHaveBeenCalledWith({
-      findingId: "finding-a",
-      status: "accepted",
-      reason: "Risk accepted for the current release.",
-    })
-
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }))
     expect(mutate).toHaveBeenCalledWith({
       findingId: "finding-a",
       status: "dismissed",
-      reason: "Risk accepted for the current release.",
     })
 
     fireEvent.click(

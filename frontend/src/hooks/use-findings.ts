@@ -96,13 +96,11 @@ export function useUpdateFindingStatus() {
     mutationFn: ({
       findingId,
       status,
-      reason,
     }: {
       findingId: string
       status: FindingStatus
-      reason?: string
-    }) => findingsApi.updateStatus(findingId, status, reason),
-    onMutate: async ({ findingId, status, reason }) => {
+    }) => findingsApi.updateStatus(findingId, status),
+    onMutate: async ({ findingId, status }) => {
       await queryClient.cancelQueries({ queryKey: findingsQueryKey })
       const previous = queryClient.getQueriesData({
         queryKey: findingsQueryKey,
@@ -131,7 +129,6 @@ export function useUpdateFindingStatus() {
         ...currentFinding,
         status,
         status_changed_at: optimisticTimestamp,
-        triage_reason: reason ?? null,
       }
 
       previous.forEach(([queryKey, value]) => {

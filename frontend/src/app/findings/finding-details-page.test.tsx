@@ -37,7 +37,6 @@ const finding: Finding = {
   recommendation: "Allow only trusted relative destinations.",
   status: "open",
   status_changed_at: null,
-  triage_reason: null,
   created_at: "2026-10-26T00:00:00Z",
   updated_at: "2026-10-26T00:00:00Z",
 }
@@ -117,26 +116,5 @@ describe("FindingDetailsPage", () => {
     expect(breadcrumbPage?.getAttribute("title")).toBe(finding.title)
     expect(screen.getByRole("heading", { name: finding.title })).toBeTruthy()
     expect(screen.getByText(/Security Scout/)).toBeTruthy()
-  })
-
-  it("renders the saved triage reason", () => {
-    mockedUseFinding.mockReturnValue({
-      data: {
-        ...finding,
-        status: "accepted",
-        status_changed_at: "2026-10-27T13:00:00Z",
-        triage_reason: "Risk accepted for the current release.",
-      },
-      isLoading: false,
-      isError: false,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useFinding>)
-
-    renderPage()
-
-    expect(screen.getByText("Decision reason")).toBeTruthy()
-    expect(
-      screen.getByText("Risk accepted for the current release."),
-    ).toBeTruthy()
   })
 })

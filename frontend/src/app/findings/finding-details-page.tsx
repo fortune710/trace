@@ -112,14 +112,6 @@ export function FindingDetailsPage() {
                   </dd>
                 </div>
               ) : null}
-              {finding.data.triage_reason ? (
-                <div>
-                  <dt className="text-muted-foreground">Decision reason</dt>
-                  <dd className="mt-1 whitespace-pre-wrap">
-                    {finding.data.triage_reason}
-                  </dd>
-                </div>
-              ) : null}
               <div>
                 <dt className="text-muted-foreground">Reviewer</dt>
                 <dd className="mt-1">

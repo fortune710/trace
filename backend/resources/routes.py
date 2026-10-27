@@ -418,7 +418,6 @@ def install_resource_routes(
             owner_id=principal.user_id,
             finding_id=finding_id,
             status=body.status,
-            reason=body.reason,
             request_id=getattr(request.state, "request_id", "unavailable"),
         )
         log_auth_event(

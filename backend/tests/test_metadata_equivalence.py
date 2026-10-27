@@ -250,7 +250,6 @@ EXPECTED_COLUMNS = {
         "recommendation",
         "status",
         "status_changed_at",
-        "triage_reason",
         "created_at",
         "updated_at",
     },

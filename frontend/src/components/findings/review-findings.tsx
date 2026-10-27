@@ -145,11 +145,10 @@ function FindingCard({
   error,
 }: {
   finding: Finding
-  onStatusChange: (status: FindingStatus, reason?: string) => void
+  onStatusChange: (status: FindingStatus) => void
   pending: boolean
   error: string | null
 }) {
-  const [reason, setReason] = useState(finding.triage_reason ?? "")
   const sourceFilesForFinding = finding.source_location
     ? sourceFiles(finding.source_location)
     : []
@@ -207,21 +206,6 @@ function FindingCard({
           </div>
         ) : null}
       </dl>
-      <div className="mt-4 grid gap-1">
-        <Label htmlFor={`finding-reason-${finding.id}`}>
-          Decision reason{" "}
-          <span className="text-muted-foreground">optional</span>
-        </Label>
-        <textarea
-          id={`finding-reason-${finding.id}`}
-          value={reason}
-          maxLength={4000}
-          disabled={pending}
-          onChange={(event) => setReason(event.target.value)}
-          className="min-h-20 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
-          placeholder="Why are you making this decision?"
-        />
-      </div>
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <Link
           to={`/reviews/${encodeURIComponent(finding.review_id)}/findings/${encodeURIComponent(finding.id)}`}
@@ -237,9 +221,7 @@ function FindingCard({
               size="sm"
               variant={action.status === "dismissed" ? "outline" : "default"}
               disabled={pending}
-              onClick={() =>
-                onStatusChange(action.status, reason.trim() || undefined)
-              }
+              onClick={() => onStatusChange(action.status)}
             >
               {action.label}
             </Button>
@@ -311,12 +293,8 @@ export function ReviewFindings({ review }: { review: Review }) {
     })
   }
 
-  function changeStatus(
-    findingId: string,
-    status: FindingStatus,
-    reason?: string,
-  ) {
-    updateStatus.mutate({ findingId, status, reason })
+  function changeStatus(findingId: string, status: FindingStatus) {
+    updateStatus.mutate({ findingId, status })
   }
 
   function findingError(findingId: string) {
@@ -510,9 +488,7 @@ export function ReviewFindings({ review }: { review: Review }) {
             <FindingCard
               key={finding.id}
               finding={finding}
-              onStatusChange={(status, reason) =>
-                changeStatus(finding.id, status, reason)
-              }
+              onStatusChange={(status) => changeStatus(finding.id, status)}
               pending={isFindingPending(finding.id)}
               error={findingError(finding.id)}
             />
@@ -600,9 +576,7 @@ export function ReviewFindings({ review }: { review: Review }) {
               <FindingCard
                 key={finding.id}
                 finding={finding}
-                onStatusChange={(status, reason) =>
-                  changeStatus(finding.id, status, reason)
-                }
+                onStatusChange={(status) => changeStatus(finding.id, status)}
                 pending={isFindingPending(finding.id)}
                 error={findingError(finding.id)}
               />

@@ -285,7 +285,6 @@ export type Finding = {
   recommendation: string | null
   status: FindingStatus
   status_changed_at: string | null
-  triage_reason: string | null
   created_at: string
   updated_at: string
 }
@@ -614,10 +613,9 @@ export const findingsApi = {
     ),
   get: (findingId: string) =>
     request<Finding>(`/api/v1/findings/${encodeURIComponent(findingId)}`),
-  updateStatus: (findingId: string, status: FindingStatus, reason?: string) =>
+  updateStatus: (findingId: string, status: FindingStatus) =>
     patch<Finding>(`/api/v1/findings/${encodeURIComponent(findingId)}`, {
       status,
-      reason,
     }),
 }
 
