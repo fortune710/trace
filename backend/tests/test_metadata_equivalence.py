@@ -249,7 +249,6 @@ EXPECTED_COLUMNS = {
         "source_location",
         "recommendation",
         "status",
-        "status_changed_at",
         "created_at",
         "updated_at",
     },

@@ -284,7 +284,6 @@ export type Finding = {
   source_location: string | null
   recommendation: string | null
   status: FindingStatus
-  status_changed_at: string | null
   created_at: string
   updated_at: string
 }

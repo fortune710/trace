@@ -105,7 +105,6 @@ export function useUpdateFindingStatus() {
       const previous = queryClient.getQueriesData({
         queryKey: findingsQueryKey,
       }) as FindingCacheSnapshot
-      const optimisticTimestamp = new Date().toISOString()
       const cachedFinding = previous
         .map(([, value]) => value)
         .find(
@@ -128,7 +127,6 @@ export function useUpdateFindingStatus() {
       const optimisticFinding: Finding = {
         ...currentFinding,
         status,
-        status_changed_at: optimisticTimestamp,
       }
 
       previous.forEach(([queryKey, value]) => {

@@ -39,7 +39,6 @@ def test_owner_can_read_and_mutate_findings_and_remediations(
     )
     assert updated.status_code == 200
     assert updated.json()["status"] == "accepted"
-    assert updated.json()["status_changed_at"] is not None
     assert updated.json()["updated_at"] == initial_updated_at
 
     duplicate = owner.request(

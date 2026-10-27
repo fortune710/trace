@@ -79,9 +79,6 @@ class Finding(Base):
         nullable=False,
         server_default=sa.text("'open'::public.finding_status"),
     )
-    status_changed_at: Mapped[datetime | None] = mapped_column(
-        sa.DateTime(timezone=True), nullable=True
-    )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,

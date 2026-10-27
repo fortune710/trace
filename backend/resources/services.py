@@ -1144,7 +1144,6 @@ class FindingService:
                 .where(Finding.id == finding_id, Finding.owner_id == owner_id)
                 .values(
                     status=status,
-                    status_changed_at=sa.func.current_timestamp(),
                 )
             )
             if self._audit_recorder is not None:
@@ -1222,7 +1221,6 @@ def _finding_response(finding: Finding, review_agent: ReviewAgent) -> dict[str, 
         "source_location": finding.source_location,
         "recommendation": finding.recommendation,
         "status": finding.status,
-        "status_changed_at": finding.status_changed_at,
         "created_at": finding.created_at,
         "updated_at": finding.updated_at,
     }

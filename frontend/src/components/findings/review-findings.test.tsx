@@ -72,7 +72,6 @@ const finding: Finding = {
   ].join("\n"),
   recommendation: null,
   status: "open",
-  status_changed_at: null,
   created_at: "2026-10-21T00:00:00Z",
   updated_at: "2026-10-21T00:00:00Z",
 }
