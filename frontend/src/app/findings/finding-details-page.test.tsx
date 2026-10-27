@@ -29,13 +29,15 @@ const finding: Finding = {
   },
   category: "security",
   severity: "high",
-  title: "Unsafe redirect destination allows attackers to take over user sessions",
+  title:
+    "Unsafe redirect destination allows attackers to take over user sessions",
   explanation: "The redirect destination is not validated.",
   evidence: "next=https://untrusted.example",
   source_location: "src/auth/redirect.ts:24",
   recommendation: "Allow only trusted relative destinations.",
   status: "open",
   status_changed_at: null,
+  triage_reason: null,
   created_at: "2026-10-26T00:00:00Z",
   updated_at: "2026-10-26T00:00:00Z",
 }
@@ -98,18 +100,43 @@ describe("FindingDetailsPage", () => {
     renderPage()
 
     expect(screen.getByRole("navigation", { name: "breadcrumb" })).toBeTruthy()
-    expect(screen.getByRole("link", { name: "Projects" }).getAttribute("href")).toBe("/projects")
-    expect(screen.getByRole("link", { name: "Trace" }).getAttribute("href")).toBe(
-      "/projects/project-a",
-    )
-    expect(screen.getByRole("link", { name: "Review review-a" }).getAttribute("href")).toBe(
-      "/reviews/review-a?tab=findings",
-    )
+    expect(
+      screen.getByRole("link", { name: "Projects" }).getAttribute("href"),
+    ).toBe("/projects")
+    expect(
+      screen.getByRole("link", { name: "Trace" }).getAttribute("href"),
+    ).toBe("/projects/project-a")
+    expect(
+      screen
+        .getByRole("link", { name: "Review review-a" })
+        .getAttribute("href"),
+    ).toBe("/reviews/review-a?tab=findings")
     const breadcrumbPage = document.querySelector("[aria-current=page]")
     expect(breadcrumbPage?.textContent).toBe(`${finding.title.slice(0, 49)}…`)
     expect(breadcrumbPage?.textContent).toHaveLength(50)
     expect(breadcrumbPage?.getAttribute("title")).toBe(finding.title)
     expect(screen.getByRole("heading", { name: finding.title })).toBeTruthy()
     expect(screen.getByText(/Security Scout/)).toBeTruthy()
+  })
+
+  it("renders the saved triage reason", () => {
+    mockedUseFinding.mockReturnValue({
+      data: {
+        ...finding,
+        status: "accepted",
+        status_changed_at: "2026-10-27T13:00:00Z",
+        triage_reason: "Risk accepted for the current release.",
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useFinding>)
+
+    renderPage()
+
+    expect(screen.getByText("Decision reason")).toBeTruthy()
+    expect(
+      screen.getByText("Risk accepted for the current release."),
+    ).toBeTruthy()
   })
 })

@@ -25,6 +25,7 @@ def test_owner_can_read_and_mutate_findings_and_remediations(
 
     finding = owner.request("GET", f"/api/v1/findings/{graph['finding_id']}")
     assert finding.status_code == 200
+    initial_updated_at = finding.json()["updated_at"]
     invalid_from_open = owner.request(
         "PATCH",
         f"/api/v1/findings/{graph['finding_id']}",
@@ -34,11 +35,13 @@ def test_owner_can_read_and_mutate_findings_and_remediations(
     updated = owner.request(
         "PATCH",
         f"/api/v1/findings/{graph['finding_id']}",
-        json={"status": "accepted"},
+        json={"status": "accepted", "reason": "Risk accepted until the next release."},
     )
     assert updated.status_code == 200
     assert updated.json()["status"] == "accepted"
     assert updated.json()["status_changed_at"] is not None
+    assert updated.json()["triage_reason"] == "Risk accepted until the next release."
+    assert updated.json()["updated_at"] == initial_updated_at
 
     duplicate = owner.request(
         "PATCH",

@@ -54,11 +54,7 @@ const severities: FindingSeverity[] = [
   "critical",
 ]
 
-const filterableStatuses: FindingStatus[] = [
-  "open",
-  "accepted",
-  "resolved",
-]
+const filterableStatuses: FindingStatus[] = ["open", "accepted", "resolved"]
 
 const allFilterValue = "all"
 const visibleSourceLocationLimit = 3
@@ -94,14 +90,18 @@ function findingFiltersFromSearchParams(
       filterableStatuses,
     ),
     agentId: review.agents.some((agent) => agent.agent_id === agentId)
-      ? agentId ?? undefined
+      ? (agentId ?? undefined)
       : undefined,
   }
 }
 
 function pageFromSearchParams(searchParams: URLSearchParams) {
-  const requestedPage = Number(searchParams.get(findingPageParameterName) ?? "1")
-  return Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
+  const requestedPage = Number(
+    searchParams.get(findingPageParameterName) ?? "1",
+  )
+  return Number.isInteger(requestedPage) && requestedPage > 0
+    ? requestedPage
+    : 1
 }
 
 function sourceFiles(value: string) {
@@ -145,15 +145,20 @@ function FindingCard({
   error,
 }: {
   finding: Finding
-  onStatusChange: (status: FindingStatus) => void
+  onStatusChange: (status: FindingStatus, reason?: string) => void
   pending: boolean
   error: string | null
 }) {
+  const [reason, setReason] = useState(finding.triage_reason ?? "")
   const sourceFilesForFinding = finding.source_location
     ? sourceFiles(finding.source_location)
     : []
-  const visibleSourceFiles = sourceFilesForFinding.slice(0, visibleSourceLocationLimit)
-  const hiddenSourceFileCount = sourceFilesForFinding.length - visibleSourceFiles.length
+  const visibleSourceFiles = sourceFilesForFinding.slice(
+    0,
+    visibleSourceLocationLimit,
+  )
+  const hiddenSourceFileCount =
+    sourceFilesForFinding.length - visibleSourceFiles.length
 
   return (
     <article className="rounded-lg border border-border bg-card p-4">
@@ -164,10 +169,7 @@ function FindingCard({
           </p>
           <h3 className="mt-1 text-base font-medium">{finding.title}</h3>
         </div>
-        <Badge
-          variant="outline"
-          className="capitalize text-muted-foreground"
-        >
+        <Badge variant="outline" className="capitalize text-muted-foreground">
           {finding.status}
         </Badge>
       </div>
@@ -205,6 +207,21 @@ function FindingCard({
           </div>
         ) : null}
       </dl>
+      <div className="mt-4 grid gap-1">
+        <Label htmlFor={`finding-reason-${finding.id}`}>
+          Decision reason{" "}
+          <span className="text-muted-foreground">optional</span>
+        </Label>
+        <textarea
+          id={`finding-reason-${finding.id}`}
+          value={reason}
+          maxLength={4000}
+          disabled={pending}
+          onChange={(event) => setReason(event.target.value)}
+          className="min-h-20 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+          placeholder="Why are you making this decision?"
+        />
+      </div>
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <Link
           to={`/reviews/${encodeURIComponent(finding.review_id)}/findings/${encodeURIComponent(finding.id)}`}
@@ -220,7 +237,9 @@ function FindingCard({
               size="sm"
               variant={action.status === "dismissed" ? "outline" : "default"}
               disabled={pending}
-              onClick={() => onStatusChange(action.status)}
+              onClick={() =>
+                onStatusChange(action.status, reason.trim() || undefined)
+              }
             >
               {action.label}
             </Button>
@@ -292,15 +311,25 @@ export function ReviewFindings({ review }: { review: Review }) {
     })
   }
 
-  function changeStatus(findingId: string, status: FindingStatus) {
-    updateStatus.mutate({ findingId, status })
+  function changeStatus(
+    findingId: string,
+    status: FindingStatus,
+    reason?: string,
+  ) {
+    updateStatus.mutate({ findingId, status, reason })
   }
 
   function findingError(findingId: string) {
-    if (updateStatus.variables?.findingId !== findingId || !updateStatus.isError) {
+    if (
+      updateStatus.variables?.findingId !== findingId ||
+      !updateStatus.isError
+    ) {
       return null
     }
-    if (updateStatus.error instanceof ApiError && updateStatus.error.status === 409) {
+    if (
+      updateStatus.error instanceof ApiError &&
+      updateStatus.error.status === 409
+    ) {
       return "This finding changed elsewhere. The latest status has been reloaded."
     }
     return "We could not save this change. Try again."
@@ -347,10 +376,7 @@ export function ReviewFindings({ review }: { review: Review }) {
               })
             }
           >
-            <SelectTrigger
-              id="finding-category"
-              className="w-full"
-            >
+            <SelectTrigger id="finding-category" className="w-full">
               <SelectValue>
                 {filters.category ? label(filters.category) : "All categories"}
               </SelectValue>
@@ -378,13 +404,8 @@ export function ReviewFindings({ review }: { review: Review }) {
               })
             }
           >
-            <SelectTrigger
-              id="finding-severity"
-              className="w-full"
-            >
-              <SelectValue>
-                {filters.severity ?? "All severities"}
-              </SelectValue>
+            <SelectTrigger id="finding-severity" className="w-full">
+              <SelectValue>{filters.severity ?? "All severities"}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={allFilterValue}>All severities</SelectItem>
@@ -409,10 +430,7 @@ export function ReviewFindings({ review }: { review: Review }) {
               })
             }
           >
-            <SelectTrigger
-              id="finding-status"
-              className="w-full"
-            >
+            <SelectTrigger id="finding-status" className="w-full">
               <SelectValue>{filters.status ?? "All statuses"}</SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -432,18 +450,15 @@ export function ReviewFindings({ review }: { review: Review }) {
             onValueChange={(value) =>
               updateFilters({
                 ...filters,
-                agentId:
-                  value && value !== allFilterValue ? value : undefined,
+                agentId: value && value !== allFilterValue ? value : undefined,
               })
             }
           >
-            <SelectTrigger
-              id="finding-reviewer"
-              className="w-full"
-            >
+            <SelectTrigger id="finding-reviewer" className="w-full">
               <SelectValue>
-                {review.agents.find((agent) => agent.agent_id === filters.agentId)
-                  ?.name ?? "All reviewers"}
+                {review.agents.find(
+                  (agent) => agent.agent_id === filters.agentId,
+                )?.name ?? "All reviewers"}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -458,9 +473,7 @@ export function ReviewFindings({ review }: { review: Review }) {
         </div>
       </div>
 
-      {findings.isLoading ? (
-        <ReviewFindingsSkeleton />
-      ) : null}
+      {findings.isLoading ? <ReviewFindingsSkeleton /> : null}
       {findings.isError ? (
         <div className="mt-6 grid justify-items-start gap-3">
           <p className="text-sm text-muted-foreground">
@@ -497,7 +510,9 @@ export function ReviewFindings({ review }: { review: Review }) {
             <FindingCard
               key={finding.id}
               finding={finding}
-              onStatusChange={(status) => changeStatus(finding.id, status)}
+              onStatusChange={(status, reason) =>
+                changeStatus(finding.id, status, reason)
+              }
               pending={isFindingPending(finding.id)}
               error={findingError(finding.id)}
             />
@@ -529,7 +544,10 @@ export function ReviewFindings({ review }: { review: Review }) {
           </Button>
         </nav>
       ) : null}
-      <section className="mt-8 border-t border-border pt-6" aria-label="Dismissed findings">
+      <section
+        className="mt-8 border-t border-border pt-6"
+        aria-label="Dismissed findings"
+      >
         <Button
           type="button"
           variant="ghost"
@@ -540,10 +558,15 @@ export function ReviewFindings({ review }: { review: Review }) {
             setDismissedPage(1)
           }}
         >
-          {dismissedOpen ? "Hide dismissed findings" : "Show dismissed findings"}
+          {dismissedOpen
+            ? "Hide dismissed findings"
+            : "Show dismissed findings"}
         </Button>
         {dismissedOpen && dismissedFindings.isLoading ? (
-          <div className="mt-4 grid gap-3" aria-label="Loading dismissed findings">
+          <div
+            className="mt-4 grid gap-3"
+            aria-label="Loading dismissed findings"
+          >
             <Skeleton className="h-36 w-full" />
             <Skeleton className="h-36 w-full" />
           </div>
@@ -577,7 +600,9 @@ export function ReviewFindings({ review }: { review: Review }) {
               <FindingCard
                 key={finding.id}
                 finding={finding}
-                onStatusChange={(status) => changeStatus(finding.id, status)}
+                onStatusChange={(status, reason) =>
+                  changeStatus(finding.id, status, reason)
+                }
                 pending={isFindingPending(finding.id)}
                 error={findingError(finding.id)}
               />

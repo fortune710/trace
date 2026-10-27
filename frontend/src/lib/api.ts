@@ -1,6 +1,10 @@
 import { isTauri } from "@tauri-apps/api/core"
 
-import { clearDesktopCsrfToken, getDesktopCsrfToken, setDesktopCsrfToken } from "@/lib/desktop-auth-state"
+import {
+  clearDesktopCsrfToken,
+  getDesktopCsrfToken,
+  setDesktopCsrfToken,
+} from "@/lib/desktop-auth-state"
 import { runtimeConfig } from "@/lib/runtime-config"
 
 export type Session = {
@@ -11,9 +15,7 @@ export type Session = {
 }
 
 export type GitHubConnectionStatus =
-  | "connected"
-  | "never_connected"
-  | "needs_reconnection"
+  "connected" | "never_connected" | "needs_reconnection"
 
 export type GitHubConnection = {
   provider: "github"
@@ -283,6 +285,7 @@ export type Finding = {
   recommendation: string | null
   status: FindingStatus
   status_changed_at: string | null
+  triage_reason: string | null
   created_at: string
   updated_at: string
 }
@@ -321,7 +324,7 @@ export class ApiError extends Error {
   constructor(
     status: number,
     payload: ApiErrorPayload,
-    retryAfterSeconds?: number
+    retryAfterSeconds?: number,
   ) {
     super(payload.error?.message ?? "Unable to complete the request.")
     this.code = payload.error?.code ?? "request_failed"
@@ -405,7 +408,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(
       response.status,
       payload,
-      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined
+      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
     )
   }
 
@@ -431,7 +434,7 @@ function remove(path: string) {
 }
 
 function pageQuery(
-  values: Record<string, string | number | boolean | undefined>
+  values: Record<string, string | number | boolean | undefined>,
 ) {
   const query = new URLSearchParams()
 
@@ -463,7 +466,7 @@ export const authApi = {
     rememberDesktopCsrf(await post<AuthenticatedResponse>("/auth/refresh")),
   login: async (email: string, password: string) =>
     rememberDesktopCsrf(
-      await post<AuthenticatedResponse>("/auth/login", { email, password })
+      await post<AuthenticatedResponse>("/auth/login", { email, password }),
     ),
   register: (email: string, password: string) =>
     post<{ message: string }>("/auth/register", {
@@ -498,32 +501,30 @@ export const authApi = {
     post<{ authorization_url: string }>("/auth/oauth/github/connect/start"),
   oauthUrl: (provider: "github" | "google") =>
     `${runtimeConfig.apiBaseUrl}/auth/oauth/${provider}/start?return_to=${encodeURIComponent(
-      window.location.origin
+      window.location.origin,
     )}`,
-  desktopOAuthUrl: (
-    provider: "github" | "google",
-    challenge: string
-  ) =>
+  desktopOAuthUrl: (provider: "github" | "google", challenge: string) =>
     `${runtimeConfig.apiBaseUrl}/auth/oauth/${provider}/desktop/start?challenge=${encodeURIComponent(
-      challenge
+      challenge,
     )}`,
   exchangeDesktopOAuth: async (code: string, verifier: string) =>
     rememberDesktopCsrf(
       await post<AuthenticatedResponse>("/auth/oauth/desktop/exchange", {
         code,
         verifier,
-      })
+      }),
     ),
 }
 
 export const projectsApi = {
   list: ({ page, pageSize }: { page: number; pageSize: number }) =>
     request<ProjectPage>(
-      `/api/v1/projects?${pageQuery({ page, page_size: pageSize })}`
+      `/api/v1/projects?${pageQuery({ page, page_size: pageSize })}`,
     ),
   get: (projectId: string) =>
     request<Project>(`/api/v1/projects/${encodeURIComponent(projectId)}`),
-  create: (project: ProjectCreate) => post<Project>("/api/v1/projects", project),
+  create: (project: ProjectCreate) =>
+    post<Project>("/api/v1/projects", project),
 }
 
 export const agentsApi = {
@@ -541,7 +542,7 @@ export const agentsApi = {
         page,
         page_size: pageSize,
         include_disabled: includeDisabled,
-      })}`
+      })}`,
     ),
   get: (agentId: string) =>
     request<Agent>(`/api/v1/agents/${encodeURIComponent(agentId)}`),
@@ -613,9 +614,10 @@ export const findingsApi = {
     ),
   get: (findingId: string) =>
     request<Finding>(`/api/v1/findings/${encodeURIComponent(findingId)}`),
-  updateStatus: (findingId: string, status: FindingStatus) =>
+  updateStatus: (findingId: string, status: FindingStatus, reason?: string) =>
     patch<Finding>(`/api/v1/findings/${encodeURIComponent(findingId)}`, {
       status,
+      reason,
     }),
 }
 
@@ -640,7 +642,7 @@ export const notificationsApi = {
 export const credentialsApi = {
   list: ({ page, pageSize }: { page: number; pageSize: number }) =>
     request<CredentialPage>(
-      `/api/v1/credentials?${pageQuery({ page, page_size: pageSize })}`
+      `/api/v1/credentials?${pageQuery({ page, page_size: pageSize })}`,
     ),
   create: (credential: CredentialCreate) =>
     post<Credential>("/api/v1/credentials", credential),
@@ -656,7 +658,7 @@ export const repositoriesApi = {
         page,
         page_size: 5,
         query,
-      })}`
+      })}`,
     ),
   listBranches: ({
     repositoryId,
@@ -668,12 +670,14 @@ export const repositoriesApi = {
     query?: string
   }) =>
     request<BranchPage>(
-      `/api/v1/repositories/${encodeURIComponent(repositoryId)}/branches?${pageQuery({
-        source: "github",
-        page,
-        page_size: 5,
-        query,
-      })}`
+      `/api/v1/repositories/${encodeURIComponent(repositoryId)}/branches?${pageQuery(
+        {
+          source: "github",
+          page,
+          page_size: 5,
+          query,
+        },
+      )}`,
     ),
 }
 

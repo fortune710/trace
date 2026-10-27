@@ -72,9 +72,7 @@ export function FindingDetailsPage() {
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
-        {finding.isLoading ? (
-          <FindingDetailsPageSkeleton />
-        ) : null}
+        {finding.isLoading ? <FindingDetailsPageSkeleton /> : null}
         {finding.isError ? (
           <div className="mt-6 grid justify-items-start gap-3">
             <p className="text-sm text-muted-foreground">
@@ -109,7 +107,16 @@ export function FindingDetailsPage() {
                 <div>
                   <dt className="text-muted-foreground">Last decision</dt>
                   <dd className="mt-1">
-                    You · {new Date(finding.data.status_changed_at).toLocaleString()}
+                    You ·{" "}
+                    {new Date(finding.data.status_changed_at).toLocaleString()}
+                  </dd>
+                </div>
+              ) : null}
+              {finding.data.triage_reason ? (
+                <div>
+                  <dt className="text-muted-foreground">Decision reason</dt>
+                  <dd className="mt-1 whitespace-pre-wrap">
+                    {finding.data.triage_reason}
                   </dd>
                 </div>
               ) : null}

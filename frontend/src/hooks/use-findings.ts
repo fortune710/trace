@@ -6,7 +6,6 @@ import {
 } from "@tanstack/react-query"
 
 import {
-  ApiError,
   findingsApi,
   type Finding,
   type FindingPage,
@@ -85,7 +84,8 @@ function statusMatchesFindingPage(
 function insertByCreatedAt(items: Finding[], finding: Finding) {
   return [...items.filter((item) => item.id !== finding.id), finding].toSorted(
     (left, right) =>
-      new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
+      new Date(right.created_at).getTime() -
+      new Date(left.created_at).getTime(),
   )
 }
 
@@ -96,11 +96,13 @@ export function useUpdateFindingStatus() {
     mutationFn: ({
       findingId,
       status,
+      reason,
     }: {
       findingId: string
       status: FindingStatus
-    }) => findingsApi.updateStatus(findingId, status),
-    onMutate: async ({ findingId, status }) => {
+      reason?: string
+    }) => findingsApi.updateStatus(findingId, status, reason),
+    onMutate: async ({ findingId, status, reason }) => {
       await queryClient.cancelQueries({ queryKey: findingsQueryKey })
       const previous = queryClient.getQueriesData({
         queryKey: findingsQueryKey,
@@ -129,7 +131,7 @@ export function useUpdateFindingStatus() {
         ...currentFinding,
         status,
         status_changed_at: optimisticTimestamp,
-        updated_at: optimisticTimestamp,
+        triage_reason: reason ?? null,
       }
 
       previous.forEach(([queryKey, value]) => {
@@ -149,7 +151,10 @@ export function useUpdateFindingStatus() {
           queryClient.setQueryData(
             queryKey,
             dismissedPage
-              ? { ...page, items: insertByCreatedAt(page.items, optimisticFinding) }
+              ? {
+                  ...page,
+                  items: insertByCreatedAt(page.items, optimisticFinding),
+                }
               : {
                   ...page,
                   items: page.items.filter((item) => item.id !== findingId),
@@ -182,10 +187,15 @@ export function useUpdateFindingStatus() {
       return { previous }
     },
     onSuccess: (finding) => {
-      queryClient.getQueriesData({ queryKey: findingsQueryKey }).forEach(
-        ([queryKey, value]) => {
+      queryClient
+        .getQueriesData({ queryKey: findingsQueryKey })
+        .forEach(([queryKey, value]) => {
           if (!value || typeof value !== "object") return
-          if ("id" in value && value.id === finding.id && "review_id" in value) {
+          if (
+            "id" in value &&
+            value.id === finding.id &&
+            "review_id" in value
+          ) {
             queryClient.setQueryData(queryKey, finding)
             return
           }
@@ -198,16 +208,15 @@ export function useUpdateFindingStatus() {
               ),
             })
           }
-        },
-      )
+        })
     },
-    onError: (error, _variables, context) => {
+    onError: (_error, _variables, context) => {
       context?.previous.forEach(([queryKey, value]) => {
         queryClient.setQueryData(queryKey, value)
       })
-      if (error instanceof ApiError && error.status === 409) {
-        void queryClient.invalidateQueries({ queryKey: findingsQueryKey })
-      }
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: findingsQueryKey })
     },
   })
 }

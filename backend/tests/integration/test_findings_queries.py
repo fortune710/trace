@@ -174,6 +174,27 @@ def test_owner_review_status_query_uses_the_triage_index(
     graph = artifact_graph_factory(owner, project["id"], agent["id"])
 
     with principal_transaction(integration_engine, owner.user_id) as connection:
+        created_at = datetime(2026, 10, 27, tzinfo=UTC)
+        connection.execute(
+            sa.insert(Finding),
+            [
+                {
+                    "id": uuid4(),
+                    "owner_id": owner.user_id,
+                    "review_id": graph["review_id"],
+                    "agent_id": UUID(agent["id"]),
+                    "category": "engineering",
+                    "severity": FindingSeverity.LOW,
+                    "title": f"Dismissed finding {index}",
+                    "explanation": "A bounded explanation.",
+                    "status": FindingStatus.DISMISSED,
+                    "created_at": created_at + timedelta(seconds=index),
+                    "updated_at": created_at + timedelta(seconds=index),
+                }
+                for index in range(100)
+            ],
+        )
+        connection.execute(sa.text("ANALYZE public.findings"))
         connection.execute(sa.text("SET LOCAL enable_seqscan = off"))
         plan = "\n".join(
             connection.execute(

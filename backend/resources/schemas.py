@@ -310,6 +310,7 @@ class FindingResponse(RequestModel):
     recommendation: str | None
     status: FindingStatus
     status_changed_at: datetime | None
+    triage_reason: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -323,6 +324,13 @@ class ReviewingAgentResponse(RequestModel):
 
 class FindingUpdate(RequestModel):
     status: FindingStatus
+    reason: (
+        Annotated[
+            str,
+            StringConstraints(strip_whitespace=True, min_length=1, max_length=4_000),
+        ]
+        | None
+    ) = None
 
 
 class FindingPage(RequestModel):

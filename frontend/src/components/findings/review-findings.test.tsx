@@ -6,10 +6,7 @@ import { MemoryRouter, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ReviewFindings } from "@/components/findings/review-findings"
-import {
-  useReviewFindings,
-  useUpdateFindingStatus,
-} from "@/hooks/use-findings"
+import { useReviewFindings, useUpdateFindingStatus } from "@/hooks/use-findings"
 import type { Finding, Review } from "@/lib/api"
 
 vi.mock("@/hooks/use-findings", () => ({
@@ -76,6 +73,7 @@ const finding: Finding = {
   recommendation: null,
   status: "open",
   status_changed_at: null,
+  triage_reason: null,
   created_at: "2026-10-21T00:00:00Z",
   updated_at: "2026-10-21T00:00:00Z",
 }
@@ -133,13 +131,17 @@ describe("ReviewFindings", () => {
     })
     expect(screen.getByText("Missing authorization check")).toBeTruthy()
     expect(screen.getByText("Security Scout")).toBeTruthy()
-    expect(screen.getByText("backend/routes.py:42").getAttribute("data-slot")).toBe("badge")
+    expect(
+      screen.getByText("backend/routes.py:42").getAttribute("data-slot"),
+    ).toBe("badge")
     expect(screen.getByText("frontend/src/lib/api.ts:82")).toBeTruthy()
-    expect(screen.getByText("+1").getAttribute("title")).toBe("1 additional source file")
-    expect(screen.queryByText("frontend/src/hooks/use-auth.ts:48")).toBeNull()
-    expect(screen.getByRole("link", { name: "View finding" }).getAttribute("href")).toBe(
-      "/reviews/review-a/findings/finding-a",
+    expect(screen.getByText("+1").getAttribute("title")).toBe(
+      "1 additional source file",
     )
+    expect(screen.queryByText("frontend/src/hooks/use-auth.ts:48")).toBeNull()
+    expect(
+      screen.getByRole("link", { name: "View finding" }).getAttribute("href"),
+    ).toBe("/reviews/review-a/findings/finding-a")
 
     fireEvent.click(screen.getByRole("button", { name: "Clear filters" }))
 
@@ -170,9 +172,9 @@ describe("ReviewFindings", () => {
       agentId: undefined,
       excludeStatus: "dismissed",
     })
-    expect(screen.getByRole("combobox", { name: "Reviewer" }).textContent).toContain(
-      "All reviewers",
-    )
+    expect(
+      screen.getByRole("combobox", { name: "Reviewer" }).textContent,
+    ).toContain("All reviewers")
   })
 
   it("retries after a finding query failure", () => {
@@ -201,7 +203,9 @@ describe("ReviewFindings", () => {
       refetch: vi.fn(),
     } as unknown as ReturnType<typeof useReviewFindings>)
 
-    renderFindings("/reviews/review-a?tab=findings&finding_category=engineering")
+    renderFindings(
+      "/reviews/review-a?tab=findings&finding_category=engineering",
+    )
 
     expect(screen.getByText("No findings match these filters")).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
@@ -222,7 +226,11 @@ describe("ReviewFindings", () => {
     renderFindings()
 
     expect(screen.getByText("No findings for this review")).toBeTruthy()
-    expect(screen.getByText("The reviewers did not report any findings for this review.")).toBeTruthy()
+    expect(
+      screen.getByText(
+        "The reviewers did not report any findings for this review.",
+      ),
+    ).toBeTruthy()
     expect(document.querySelector("[data-slot=empty]")).toBeTruthy()
   })
 
@@ -252,13 +260,26 @@ describe("ReviewFindings", () => {
   it("offers open-finding triage actions and lazily loads dismissed findings", () => {
     renderFindings()
 
+    fireEvent.change(screen.getByLabelText("Decision reason optional"), {
+      target: { value: "Risk accepted for the current release." },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }))
+    expect(mutate).toHaveBeenCalledWith({
+      findingId: "finding-a",
+      status: "accepted",
+      reason: "Risk accepted for the current release.",
+    })
+
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }))
     expect(mutate).toHaveBeenCalledWith({
       findingId: "finding-a",
       status: "dismissed",
+      reason: "Risk accepted for the current release.",
     })
 
-    fireEvent.click(screen.getByRole("button", { name: "Show dismissed findings" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show dismissed findings" }),
+    )
     expect(mockedUseReviewFindings).toHaveBeenLastCalledWith(
       "review-a",
       1,

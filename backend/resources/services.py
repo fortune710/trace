@@ -1114,6 +1114,7 @@ class FindingService:
         owner_id: UUID,
         finding_id: UUID,
         status: FindingStatus,
+        reason: str | None,
         request_id: str,
     ) -> dict[str, object]:
         allowed = {
@@ -1145,7 +1146,7 @@ class FindingService:
                 .values(
                     status=status,
                     status_changed_at=sa.func.current_timestamp(),
-                    updated_at=sa.func.current_timestamp(),
+                    triage_reason=reason,
                 )
             )
             if self._audit_recorder is not None:
@@ -1224,6 +1225,7 @@ def _finding_response(finding: Finding, review_agent: ReviewAgent) -> dict[str, 
         "recommendation": finding.recommendation,
         "status": finding.status,
         "status_changed_at": finding.status_changed_at,
+        "triage_reason": finding.triage_reason,
         "created_at": finding.created_at,
         "updated_at": finding.updated_at,
     }
