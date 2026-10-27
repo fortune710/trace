@@ -1,5 +1,6 @@
 import { Link, useParams } from "react-router-dom"
 
+import { FindingDetailsPageSkeleton } from "@/components/findings/finding-details-page-skeleton"
 import { AppShell } from "@/components/layout/app-shell"
 import {
   Breadcrumb,
@@ -72,7 +73,7 @@ export function FindingDetailsPage() {
           </BreadcrumbList>
         </Breadcrumb>
         {finding.isLoading ? (
-          <p className="mt-6 text-sm text-muted-foreground">Loading finding…</p>
+          <FindingDetailsPageSkeleton />
         ) : null}
         {finding.isError ? (
           <div className="mt-6 grid justify-items-start gap-3">

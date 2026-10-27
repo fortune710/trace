@@ -3,6 +3,7 @@ import { useState } from "react"
 import { AppShell } from "@/components/layout/app-shell"
 import { Button } from "@/components/ui/button"
 import { CreateProjectDialog } from "@/components/projects/create-project-dialog"
+import { ProjectsPageSkeleton } from "@/components/projects/projects-page-skeleton"
 import {
   EmptyProjects,
   ProjectList,
@@ -32,7 +33,7 @@ export function ProjectsPage() {
 
         <div className="mt-8">
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading projects…</p>
+            <ProjectsPageSkeleton />
           ) : isError ? (
             <Button type="button" variant="outline" onClick={() => void refetch()}>
               Try again

@@ -105,7 +105,9 @@ describe("NotificationsPage", () => {
       }),
     )
     const { rerender } = renderPage()
-    expect(screen.getByText("Loading notifications…")).toBeTruthy()
+    expect(
+      screen.getByLabelText("Loading notifications").getAttribute("aria-busy"),
+    ).toBe("true")
     expect(screen.queryByText("No notifications yet.")).toBeNull()
 
     mockedUseNotifications.mockReturnValue(

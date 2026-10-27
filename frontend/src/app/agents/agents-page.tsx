@@ -3,6 +3,7 @@ import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
 import { AgentDialog } from "@/components/agents/agent-dialog"
+import { AgentsPageSkeleton } from "@/components/agents/agents-page-skeleton"
 import { AgentList } from "@/components/agents/agent-list"
 import { AppShell } from "@/components/layout/app-shell"
 import { Button } from "@/components/ui/button"
@@ -29,7 +30,7 @@ export function AgentsPage() {
         </div>
         <div className="mt-8">
           {agents.isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading agents…</p>
+            <AgentsPageSkeleton />
           ) : null}
           {agents.isError ? (
             <Button type="button" variant="outline" onClick={() => void agents.refetch()}>

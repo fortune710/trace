@@ -4,8 +4,13 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { Link } from "react-router-dom"
 
 import { AppShell } from "@/components/layout/app-shell"
+import { NotificationsPageSkeleton } from "@/components/notifications/notifications-page-skeleton"
 import { Button } from "@/components/ui/button"
-import { useMarkAllNotificationsRead, useMarkNotificationRead, useNotifications } from "@/hooks/use-notifications"
+import {
+  useMarkAllNotificationsRead,
+  useMarkNotificationRead,
+  useNotifications,
+} from "@/hooks/use-notifications"
 
 function isSafeActionPath(actionPath: string | null): actionPath is string {
   return Boolean(actionPath && /^\/[^/]/.test(actionPath))
@@ -35,7 +40,9 @@ export function NotificationsPage() {
           <div>
             <h1 className="text-xl font-medium tracking-tight">Notifications</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {notifications.unreadCount ? `${notifications.unreadCount} unread` : "You are all caught up."}
+              {notifications.unreadCount
+                ? `${notifications.unreadCount} unread`
+                : "You are all caught up."}
             </p>
           </div>
           <Button
@@ -49,7 +56,7 @@ export function NotificationsPage() {
         </div>
         <div className="mt-8 space-y-3">
           {notifications.isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading notifications…</p>
+            <NotificationsPageSkeleton />
           ) : null}
           {notifications.isError ? (
             <Button
@@ -71,7 +78,11 @@ export function NotificationsPage() {
             <article
               key={notification.id}
               aria-label={`${notification.read_at ? "Read" : "Unread"} ${formatCategory(notification.category)} notification: ${notification.title}`}
-              className={`rounded-lg border p-4 ${notification.read_at ? "bg-card" : "border-primary/30 bg-primary/5"}`}
+              className={`rounded-lg border p-4 ${
+                notification.read_at
+                  ? "bg-card"
+                  : "border-primary/30 bg-primary/5"
+              }`}
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
@@ -79,7 +90,9 @@ export function NotificationsPage() {
                     {formatCategory(notification.category)}
                   </p>
                   <p className="text-sm font-medium">{notification.title}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">{notification.body}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {notification.body}
+                  </p>
                   <time
                     className="mt-2 block text-xs text-muted-foreground"
                     dateTime={notification.created_at}
