@@ -100,6 +100,14 @@ sa.Index(
     Finding.id.desc(),
 )
 sa.Index(
+    "findings_owner_review_status_created_idx",
+    Finding.owner_id,
+    Finding.review_id,
+    Finding.status,
+    Finding.created_at.desc(),
+    Finding.id.desc(),
+)
+sa.Index(
     "findings_owner_review_agent_digest_key",
     Finding.owner_id,
     Finding.review_id,

@@ -4,6 +4,9 @@ from uuid import uuid4
 
 import pytest
 
+from findings.models import FindingStatus
+from resources.services import FindingService
+
 pytestmark = pytest.mark.integration
 
 
@@ -12,6 +15,7 @@ def test_owner_can_read_and_mutate_findings_and_remediations(
     local_project_factory,
     agent_factory,
     artifact_graph_factory,
+    recording_audit_recorder,
 ) -> None:
     owner, _ = account_pair
     project = local_project_factory(owner)
@@ -24,6 +28,13 @@ def test_owner_can_read_and_mutate_findings_and_remediations(
 
     finding = owner.request("GET", f"/api/v1/findings/{graph['finding_id']}")
     assert finding.status_code == 200
+    initial_updated_at = finding.json()["updated_at"]
+    invalid_from_open = owner.request(
+        "PATCH",
+        f"/api/v1/findings/{graph['finding_id']}",
+        json={"status": "resolved"},
+    )
+    assert invalid_from_open.status_code == 409
     updated = owner.request(
         "PATCH",
         f"/api/v1/findings/{graph['finding_id']}",
@@ -31,6 +42,73 @@ def test_owner_can_read_and_mutate_findings_and_remediations(
     )
     assert updated.status_code == 200
     assert updated.json()["status"] == "accepted"
+    assert updated.json()["updated_at"] == initial_updated_at
+
+    duplicate = owner.request(
+        "PATCH",
+        f"/api/v1/findings/{graph['finding_id']}",
+        json={"status": "accepted"},
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "resource_conflict"
+
+    invalid_from_accepted = owner.request(
+        "PATCH",
+        f"/api/v1/findings/{graph['finding_id']}",
+        json={"status": "dismissed"},
+    )
+    assert invalid_from_accepted.status_code == 409
+
+    resolved = owner.request(
+        "PATCH",
+        f"/api/v1/findings/{graph['finding_id']}",
+        json={"status": "resolved"},
+    )
+    assert resolved.status_code == 200
+    assert resolved.json()["status"] == "resolved"
+
+    invalid_from_resolved = owner.request(
+        "PATCH",
+        f"/api/v1/findings/{graph['finding_id']}",
+        json={"status": "open"},
+    )
+    assert invalid_from_resolved.status_code == 409
+
+    unresolved = owner.request(
+        "PATCH",
+        f"/api/v1/findings/{graph['finding_id']}",
+        json={"status": "accepted"},
+    )
+    assert unresolved.status_code == 200
+    assert unresolved.json()["status"] == "accepted"
+
+    second_graph = artifact_graph_factory(owner, project["id"], agent["id"])
+    dismissed = owner.request(
+        "PATCH",
+        f"/api/v1/findings/{second_graph['finding_id']}",
+        json={"status": "dismissed"},
+    )
+    assert dismissed.status_code == 200
+    reopened = owner.request(
+        "PATCH",
+        f"/api/v1/findings/{second_graph['finding_id']}",
+        json={"status": "open"},
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["status"] == "open"
+
+    triage_events = [
+        event
+        for event in recording_audit_recorder.events
+        if event["event_type"] == "resource.finding.triaged"
+    ]
+    assert len(triage_events) == 5
+    assert triage_events[0]["fields"] == {
+        "finding_id": str(graph["finding_id"]),
+        "review_id": str(graph["review_id"]),
+        "from_status": "open",
+        "to_status": "accepted",
+    }
 
     created = owner.request(
         "POST",
@@ -72,6 +150,28 @@ def test_owner_can_read_and_mutate_findings_and_remediations(
         ).status_code
         == 200
     )
+
+
+def test_finding_triage_succeeds_when_auditing_is_disabled(
+    account_pair,
+    agent_factory,
+    artifact_graph_factory,
+    integration_engine,
+    local_project_factory,
+) -> None:
+    owner, _ = account_pair
+    project = local_project_factory(owner)
+    agent = agent_factory(owner)
+    graph = artifact_graph_factory(owner, project["id"], agent["id"])
+
+    updated = FindingService(integration_engine).update_status(
+        owner_id=owner.user_id,
+        finding_id=graph["finding_id"],
+        status=FindingStatus.ACCEPTED,
+        request_id="audit-disabled-triage",
+    )
+
+    assert updated["status"] == FindingStatus.ACCEPTED
 
 
 def test_foreign_findings_remediations_and_artifacts_are_denied(

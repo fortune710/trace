@@ -72,9 +72,7 @@ export function FindingDetailsPage() {
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
-        {finding.isLoading ? (
-          <FindingDetailsPageSkeleton />
-        ) : null}
+        {finding.isLoading ? <FindingDetailsPageSkeleton /> : null}
         {finding.isError ? (
           <div className="mt-6 grid justify-items-start gap-3">
             <p className="text-sm text-muted-foreground">
@@ -101,6 +99,10 @@ export function FindingDetailsPage() {
               {finding.data.explanation}
             </p>
             <dl className="mt-6 grid gap-5 text-sm">
+              <div>
+                <dt className="text-muted-foreground">Triage status</dt>
+                <dd className="mt-1 capitalize">{finding.data.status}</dd>
+              </div>
               <div>
                 <dt className="text-muted-foreground">Reviewer</dt>
                 <dd className="mt-1">

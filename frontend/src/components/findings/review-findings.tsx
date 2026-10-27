@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 
 import {
@@ -14,6 +15,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Label } from "@/components/ui/label"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Select,
   SelectContent,
@@ -23,8 +25,10 @@ import {
 } from "@/components/ui/select"
 import {
   useReviewFindings,
+  useUpdateFindingStatus,
   type FindingFilters,
 } from "@/hooks/use-findings"
+import { ApiError } from "@/lib/api"
 import type {
   Finding,
   FindingSeverity,
@@ -50,12 +54,7 @@ const severities: FindingSeverity[] = [
   "critical",
 ]
 
-const statuses: FindingStatus[] = [
-  "open",
-  "accepted",
-  "resolved",
-  "dismissed",
-]
+const filterableStatuses: FindingStatus[] = ["open", "accepted", "resolved"]
 
 const allFilterValue = "all"
 const visibleSourceLocationLimit = 3
@@ -88,17 +87,21 @@ function findingFiltersFromSearchParams(
     ),
     status: validFilterValue(
       searchParams.get(findingFilterParameterNames.status),
-      statuses,
+      filterableStatuses,
     ),
     agentId: review.agents.some((agent) => agent.agent_id === agentId)
-      ? agentId ?? undefined
+      ? (agentId ?? undefined)
       : undefined,
   }
 }
 
 function pageFromSearchParams(searchParams: URLSearchParams) {
-  const requestedPage = Number(searchParams.get(findingPageParameterName) ?? "1")
-  return Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
+  const requestedPage = Number(
+    searchParams.get(findingPageParameterName) ?? "1",
+  )
+  return Number.isInteger(requestedPage) && requestedPage > 0
+    ? requestedPage
+    : 1
 }
 
 function sourceFiles(value: string) {
@@ -119,12 +122,42 @@ function sourceFiles(value: string) {
   ]
 }
 
-function FindingCard({ finding }: { finding: Finding }) {
+function findingActions(status: FindingStatus) {
+  switch (status) {
+    case "open":
+      return [
+        { label: "Accept", status: "accepted" as const },
+        { label: "Dismiss", status: "dismissed" as const },
+      ]
+    case "accepted":
+      return [{ label: "Resolve", status: "resolved" as const }]
+    case "dismissed":
+      return [{ label: "Reopen", status: "open" as const }]
+    case "resolved":
+      return [{ label: "Unresolve", status: "accepted" as const }]
+  }
+}
+
+function FindingCard({
+  finding,
+  onStatusChange,
+  pending,
+  error,
+}: {
+  finding: Finding
+  onStatusChange: (status: FindingStatus) => void
+  pending: boolean
+  error: string | null
+}) {
   const sourceFilesForFinding = finding.source_location
     ? sourceFiles(finding.source_location)
     : []
-  const visibleSourceFiles = sourceFilesForFinding.slice(0, visibleSourceLocationLimit)
-  const hiddenSourceFileCount = sourceFilesForFinding.length - visibleSourceFiles.length
+  const visibleSourceFiles = sourceFilesForFinding.slice(
+    0,
+    visibleSourceLocationLimit,
+  )
+  const hiddenSourceFileCount =
+    sourceFilesForFinding.length - visibleSourceFiles.length
 
   return (
     <article className="rounded-lg border border-border bg-card p-4">
@@ -135,10 +168,7 @@ function FindingCard({ finding }: { finding: Finding }) {
           </p>
           <h3 className="mt-1 text-base font-medium">{finding.title}</h3>
         </div>
-        <Badge
-          variant="outline"
-          className="capitalize text-muted-foreground"
-        >
+        <Badge variant="outline" className="capitalize text-muted-foreground">
           {finding.status}
         </Badge>
       </div>
@@ -176,21 +206,54 @@ function FindingCard({ finding }: { finding: Finding }) {
           </div>
         ) : null}
       </dl>
-      <Link
-        to={`/reviews/${encodeURIComponent(finding.review_id)}/findings/${encodeURIComponent(finding.id)}`}
-        className="mt-4 inline-block text-sm text-primary hover:underline"
-      >
-        View finding
-      </Link>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <Link
+          to={`/reviews/${encodeURIComponent(finding.review_id)}/findings/${encodeURIComponent(finding.id)}`}
+          className="text-sm text-primary hover:underline"
+        >
+          View finding
+        </Link>
+        <div className="flex flex-wrap justify-end gap-2">
+          {findingActions(finding.status).map((action) => (
+            <Button
+              key={action.status}
+              type="button"
+              size="sm"
+              variant={action.status === "dismissed" ? "outline" : "default"}
+              disabled={pending}
+              onClick={() => onStatusChange(action.status)}
+            >
+              {action.label}
+            </Button>
+          ))}
+        </div>
+      </div>
+      {error ? (
+        <p className="mt-3 text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      ) : null}
     </article>
   )
 }
 
 export function ReviewFindings({ review }: { review: Review }) {
   const [searchParams, setSearchParams] = useSearchParams()
+  const [dismissedOpen, setDismissedOpen] = useState(false)
+  const [dismissedPage, setDismissedPage] = useState(1)
   const filters = findingFiltersFromSearchParams(searchParams, review)
   const page = pageFromSearchParams(searchParams)
-  const findings = useReviewFindings(review.id, page, filters)
+  const primaryFilters = filters.status
+    ? filters
+    : { ...filters, excludeStatus: "dismissed" as const }
+  const findings = useReviewFindings(review.id, page, primaryFilters)
+  const dismissedFindings = useReviewFindings(
+    review.id,
+    dismissedPage,
+    { status: "dismissed" },
+    dismissedOpen,
+  )
+  const updateStatus = useUpdateFindingStatus()
   const hasFilters = Object.values(filters).some(Boolean)
   const hasNextPage = findings.data?.next_offset != null
   const isEmpty =
@@ -230,6 +293,32 @@ export function ReviewFindings({ review }: { review: Review }) {
     })
   }
 
+  function changeStatus(findingId: string, status: FindingStatus) {
+    updateStatus.mutate({ findingId, status })
+  }
+
+  function findingError(findingId: string) {
+    if (
+      updateStatus.variables?.findingId !== findingId ||
+      !updateStatus.isError
+    ) {
+      return null
+    }
+    if (
+      updateStatus.error instanceof ApiError &&
+      updateStatus.error.status === 409
+    ) {
+      return "This finding changed elsewhere. The latest status has been reloaded."
+    }
+    return "We could not save this change. Try again."
+  }
+
+  function isFindingPending(findingId: string) {
+    return (
+      updateStatus.isPending && updateStatus.variables?.findingId === findingId
+    )
+  }
+
   return (
     <section aria-label="Findings">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -265,10 +354,7 @@ export function ReviewFindings({ review }: { review: Review }) {
               })
             }
           >
-            <SelectTrigger
-              id="finding-category"
-              className="w-full"
-            >
+            <SelectTrigger id="finding-category" className="w-full">
               <SelectValue>
                 {filters.category ? label(filters.category) : "All categories"}
               </SelectValue>
@@ -296,13 +382,8 @@ export function ReviewFindings({ review }: { review: Review }) {
               })
             }
           >
-            <SelectTrigger
-              id="finding-severity"
-              className="w-full"
-            >
-              <SelectValue>
-                {filters.severity ?? "All severities"}
-              </SelectValue>
+            <SelectTrigger id="finding-severity" className="w-full">
+              <SelectValue>{filters.severity ?? "All severities"}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={allFilterValue}>All severities</SelectItem>
@@ -327,15 +408,12 @@ export function ReviewFindings({ review }: { review: Review }) {
               })
             }
           >
-            <SelectTrigger
-              id="finding-status"
-              className="w-full"
-            >
+            <SelectTrigger id="finding-status" className="w-full">
               <SelectValue>{filters.status ?? "All statuses"}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={allFilterValue}>All statuses</SelectItem>
-              {statuses.map((status) => (
+              {filterableStatuses.map((status) => (
                 <SelectItem key={status} value={status}>
                   {status}
                 </SelectItem>
@@ -350,18 +428,15 @@ export function ReviewFindings({ review }: { review: Review }) {
             onValueChange={(value) =>
               updateFilters({
                 ...filters,
-                agentId:
-                  value && value !== allFilterValue ? value : undefined,
+                agentId: value && value !== allFilterValue ? value : undefined,
               })
             }
           >
-            <SelectTrigger
-              id="finding-reviewer"
-              className="w-full"
-            >
+            <SelectTrigger id="finding-reviewer" className="w-full">
               <SelectValue>
-                {review.agents.find((agent) => agent.agent_id === filters.agentId)
-                  ?.name ?? "All reviewers"}
+                {review.agents.find(
+                  (agent) => agent.agent_id === filters.agentId,
+                )?.name ?? "All reviewers"}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -376,9 +451,7 @@ export function ReviewFindings({ review }: { review: Review }) {
         </div>
       </div>
 
-      {findings.isLoading ? (
-        <ReviewFindingsSkeleton />
-      ) : null}
+      {findings.isLoading ? <ReviewFindingsSkeleton /> : null}
       {findings.isError ? (
         <div className="mt-6 grid justify-items-start gap-3">
           <p className="text-sm text-muted-foreground">
@@ -412,7 +485,13 @@ export function ReviewFindings({ review }: { review: Review }) {
       {findings.data?.items.length ? (
         <div className="mt-6 grid gap-3">
           {findings.data.items.map((finding) => (
-            <FindingCard key={finding.id} finding={finding} />
+            <FindingCard
+              key={finding.id}
+              finding={finding}
+              onStatusChange={(status) => changeStatus(finding.id, status)}
+              pending={isFindingPending(finding.id)}
+              error={findingError(finding.id)}
+            />
           ))}
         </div>
       ) : null}
@@ -441,6 +520,99 @@ export function ReviewFindings({ review }: { review: Review }) {
           </Button>
         </nav>
       ) : null}
+      <section
+        className="mt-8 border-t border-border pt-6"
+        aria-label="Dismissed findings"
+      >
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-expanded={dismissedOpen}
+          onClick={() => {
+            setDismissedOpen((open) => !open)
+            setDismissedPage(1)
+          }}
+        >
+          {dismissedOpen
+            ? "Hide dismissed findings"
+            : "Show dismissed findings"}
+        </Button>
+        {dismissedOpen && dismissedFindings.isLoading ? (
+          <div
+            className="mt-4 grid gap-3"
+            aria-label="Loading dismissed findings"
+          >
+            <Skeleton className="h-36 w-full" />
+            <Skeleton className="h-36 w-full" />
+          </div>
+        ) : null}
+        {dismissedOpen && dismissedFindings.isError ? (
+          <div className="mt-4 grid justify-items-start gap-3">
+            <p className="text-sm text-muted-foreground">
+              We could not load dismissed findings.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void dismissedFindings.refetch()}
+            >
+              Try again
+            </Button>
+          </div>
+        ) : null}
+        {dismissedOpen &&
+        !dismissedFindings.isLoading &&
+        !dismissedFindings.isError &&
+        dismissedFindings.data?.items.length === 0 ? (
+          <p className="mt-4 text-sm text-muted-foreground">
+            No dismissed findings.
+          </p>
+        ) : null}
+        {dismissedOpen && dismissedFindings.data?.items.length ? (
+          <div className="mt-4 grid gap-3">
+            {dismissedFindings.data.items.map((finding) => (
+              <FindingCard
+                key={finding.id}
+                finding={finding}
+                onStatusChange={(status) => changeStatus(finding.id, status)}
+                pending={isFindingPending(finding.id)}
+                error={findingError(finding.id)}
+              />
+            ))}
+          </div>
+        ) : null}
+        {dismissedOpen &&
+        (dismissedPage > 1 || dismissedFindings.data?.next_offset != null) ? (
+          <nav
+            className="mt-5 flex justify-end gap-3"
+            aria-label="Dismissed findings pagination"
+          >
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={dismissedPage === 1 || dismissedFindings.isFetching}
+              onClick={() => setDismissedPage((current) => current - 1)}
+            >
+              Previous
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={
+                dismissedFindings.data?.next_offset == null ||
+                dismissedFindings.isFetching
+              }
+              onClick={() => setDismissedPage((current) => current + 1)}
+            >
+              Next
+            </Button>
+          </nav>
+        ) : null}
+      </section>
     </section>
   )
 }

@@ -396,6 +396,7 @@ def test_indexes_and_enum_contracts_are_stable() -> None:
         "private_review_dispatch_jobs_review_idx",
         "findings_owner_created_idx",
         "findings_owner_review_created_idx",
+        "findings_owner_review_status_created_idx",
         "findings_owner_review_agent_digest_key",
         "notifications_owner_created_idx",
         "notifications_owner_unread_idx",

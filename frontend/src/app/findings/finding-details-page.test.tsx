@@ -29,7 +29,8 @@ const finding: Finding = {
   },
   category: "security",
   severity: "high",
-  title: "Unsafe redirect destination allows attackers to take over user sessions",
+  title:
+    "Unsafe redirect destination allows attackers to take over user sessions",
   explanation: "The redirect destination is not validated.",
   evidence: "next=https://untrusted.example",
   source_location: "src/auth/redirect.ts:24",
@@ -97,13 +98,17 @@ describe("FindingDetailsPage", () => {
     renderPage()
 
     expect(screen.getByRole("navigation", { name: "breadcrumb" })).toBeTruthy()
-    expect(screen.getByRole("link", { name: "Projects" }).getAttribute("href")).toBe("/projects")
-    expect(screen.getByRole("link", { name: "Trace" }).getAttribute("href")).toBe(
-      "/projects/project-a",
-    )
-    expect(screen.getByRole("link", { name: "Review review-a" }).getAttribute("href")).toBe(
-      "/reviews/review-a?tab=findings",
-    )
+    expect(
+      screen.getByRole("link", { name: "Projects" }).getAttribute("href"),
+    ).toBe("/projects")
+    expect(
+      screen.getByRole("link", { name: "Trace" }).getAttribute("href"),
+    ).toBe("/projects/project-a")
+    expect(
+      screen
+        .getByRole("link", { name: "Review review-a" })
+        .getAttribute("href"),
+    ).toBe("/reviews/review-a?tab=findings")
     const breadcrumbPage = document.querySelector("[aria-current=page]")
     expect(breadcrumbPage?.textContent).toBe(`${finding.title.slice(0, 49)}…`)
     expect(breadcrumbPage?.textContent).toHaveLength(50)

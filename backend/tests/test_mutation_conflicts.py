@@ -17,11 +17,11 @@ from auth.models import AuthUser, UserStatus
 from credentials.models import CredentialKind, CredentialProvider
 from db.rls import principal_transaction
 from db.types import ProjectSourceType, RepositorySource
-from findings.models import Finding, FindingSeverity
+from findings.models import Finding, FindingSeverity, FindingStatus
 from projects.models import Project
 from remediations.models import Remediation, RemediationStatus
 from resources import services as resource_services
-from resources.services import ArtifactService, ReviewService
+from resources.services import ArtifactService, FindingService, ReviewService
 from reviews.models import (
     Review,
     ReviewAgent,
@@ -108,6 +108,126 @@ def _run_concurrently(
     with ThreadPoolExecutor(max_workers=len(callables)) as executor:
         futures = [executor.submit(invoke, callable) for callable in callables]
         return [future.result() for future in futures]
+
+
+class RecordingFindingAuditRecorder:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def create_event(self, **kwargs: object) -> None:
+        self.events.append(kwargs)
+
+
+@pytest.mark.integration
+def test_finding_triage_serializes_parallel_transitions_and_audits_once() -> None:
+    engine = sa.create_engine(_database_url())
+    owner_id = uuid4()
+    project_id = uuid4()
+    agent_id = uuid4()
+    review_id = uuid4()
+    finding_id = uuid4()
+    recorder = RecordingFindingAuditRecorder()
+    try:
+        with engine.begin() as connection:
+            _create_user(connection, owner_id, "mutation-finding")
+        with principal_transaction(engine, owner_id) as connection:
+            connection.execute(
+                sa.insert(Project).values(
+                    id=project_id,
+                    owner_id=owner_id,
+                    name="triage project",
+                    source=ProjectSourceType.LOCAL,
+                    local_path_hash=resource_services._local_source_identity_hash(
+                        project_id
+                    ),
+                    source_hash=b"s" * 32,
+                )
+            )
+            connection.execute(
+                sa.insert(Agent).values(
+                    id=agent_id,
+                    owner_id=owner_id,
+                    name="triage agent",
+                    review_category="security",
+                    model_provider="openai",
+                    model_name="test",
+                )
+            )
+            connection.execute(
+                sa.insert(Review).values(
+                    id=review_id,
+                    owner_id=owner_id,
+                    project_id=project_id,
+                    source_revision="a" * 64,
+                    source_kind=RepositorySource.LOCAL,
+                    source_identifier="triage-local-source",
+                    integrity_algorithm="sha256-directory-manifest-v1",
+                    status=ReviewStatus.COMPLETED,
+                )
+            )
+            connection.execute(
+                sa.insert(ReviewAgent).values(
+                    owner_id=owner_id,
+                    review_id=review_id,
+                    agent_id=agent_id,
+                    agent_display_name="triage agent",
+                    agent_specialization="security",
+                    agent_model_provider="openai",
+                    agent_model_name="test",
+                    agent_skills=[],
+                    agent_configuration_version=1,
+                    status=ReviewAgentStatus.COMPLETED,
+                )
+            )
+            connection.execute(
+                sa.insert(Finding).values(
+                    id=finding_id,
+                    owner_id=owner_id,
+                    review_id=review_id,
+                    agent_id=agent_id,
+                    category="security",
+                    severity=FindingSeverity.HIGH,
+                    title="Concurrent triage finding",
+                    explanation="Concurrent triage explanation",
+                    status=FindingStatus.OPEN,
+                )
+            )
+
+        services = [
+            FindingService(engine, recorder),
+            FindingService(engine, recorder),
+        ]
+        results = _run_concurrently(
+            [
+                lambda: services[0].update_status(
+                    owner_id=owner_id,
+                    finding_id=finding_id,
+                    status=FindingStatus.ACCEPTED,
+                    request_id="parallel-accept",
+                ),
+                lambda: services[1].update_status(
+                    owner_id=owner_id,
+                    finding_id=finding_id,
+                    status=FindingStatus.DISMISSED,
+                    request_id="parallel-dismiss",
+                ),
+            ]
+        )
+
+        assert sum(isinstance(result, dict) for result in results) == 1
+        conflicts = [result for result in results if isinstance(result, Exception)]
+        assert len(conflicts) == 1
+        assert isinstance(conflicts[0], ResourceConflict)
+        with principal_transaction(engine, owner_id) as connection:
+            status = connection.execute(
+                sa.select(Finding.status).where(Finding.id == finding_id)
+            ).scalar_one()
+        assert status in {FindingStatus.ACCEPTED, FindingStatus.DISMISSED}
+        assert len(recorder.events) == 1
+    finally:
+        with engine.begin() as connection:
+            connection.execute(sa.delete(AuthUser).where(AuthUser.id == owner_id))
+        engine.dispose()
 
 
 @pytest.mark.integration
