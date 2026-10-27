@@ -73,7 +73,10 @@ function validFilterValue<T extends string>(
 
 function findingFiltersFromSearchParams(
   searchParams: URLSearchParams,
+  review: Review,
 ): FindingFilters {
+  const agentId = searchParams.get(findingFilterParameterNames.agentId)
+
   return {
     category: validFilterValue(
       searchParams.get(findingFilterParameterNames.category),
@@ -87,7 +90,9 @@ function findingFiltersFromSearchParams(
       searchParams.get(findingFilterParameterNames.status),
       statuses,
     ),
-    agentId: searchParams.get(findingFilterParameterNames.agentId) ?? undefined,
+    agentId: review.agents.some((agent) => agent.agent_id === agentId)
+      ? agentId ?? undefined
+      : undefined,
   }
 }
 
@@ -183,7 +188,7 @@ function FindingCard({ finding }: { finding: Finding }) {
 
 export function ReviewFindings({ review }: { review: Review }) {
   const [searchParams, setSearchParams] = useSearchParams()
-  const filters = findingFiltersFromSearchParams(searchParams)
+  const filters = findingFiltersFromSearchParams(searchParams, review)
   const page = pageFromSearchParams(searchParams)
   const findings = useReviewFindings(review.id, page, filters)
   const hasFilters = Object.values(filters).some(Boolean)

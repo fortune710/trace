@@ -7,6 +7,7 @@ import { ReviewFindings } from "@/components/findings/review-findings"
 import {
   ProjectActivitySkeleton,
   ProjectDetailsPageSkeleton,
+  ProjectFindingsSkeleton,
 } from "@/components/projects/project-details-page-skeleton"
 import { AppShell } from "@/components/layout/app-shell"
 import {
@@ -189,7 +190,7 @@ function ProjectFindings({ project }: { project: Project }) {
   }
 
   if (reviews.isLoading) {
-    return <ProjectActivitySkeleton />
+    return <ProjectFindingsSkeleton />
   }
 
   if (reviews.isError) {

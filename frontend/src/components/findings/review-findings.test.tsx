@@ -142,6 +142,20 @@ describe("ReviewFindings", () => {
     })
   })
 
+  it("ignores a reviewer filter that is not assigned to the review", () => {
+    renderFindings("/reviews/review-a?tab=findings&finding_agent=agent-other")
+
+    expect(mockedUseReviewFindings).toHaveBeenCalledWith("review-a", 1, {
+      category: undefined,
+      severity: undefined,
+      status: undefined,
+      agentId: undefined,
+    })
+    expect(screen.getByRole("combobox", { name: "Reviewer" }).textContent).toContain(
+      "All reviewers",
+    )
+  })
+
   it("retries after a finding query failure", () => {
     const refetch = vi.fn()
     mockedUseReviewFindings.mockReturnValue({

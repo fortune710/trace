@@ -142,6 +142,24 @@ describe("ProjectDetailsPage", () => {
     expect(screen.queryByRole("link", { name: /review review-a/i })).toBeNull()
   })
 
+  it("shows a findings-shaped skeleton while project reviews load", () => {
+    mockedUseProjectReviews.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useProjectReviews>)
+
+    renderPage()
+    fireEvent.click(screen.getByRole("tab", { name: "Findings" }))
+
+    const skeleton = screen.getByLabelText("Loading project findings")
+    expect(skeleton).toBeTruthy()
+    expect(skeleton.querySelector(".sm\\:grid-cols-2")).toBeTruthy()
+    expect(skeleton.querySelector(".lg\\:grid-cols-4")).toBeTruthy()
+  })
+
   it("clears finding filters and pagination when selecting another review", () => {
     const secondReview: Review = {
       ...review,
