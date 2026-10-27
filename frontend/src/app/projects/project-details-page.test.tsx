@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
-import { MemoryRouter, Route, Routes } from "react-router-dom"
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ProjectDetailsPage } from "@/app/projects/project-details-page"
@@ -68,15 +68,22 @@ const review: Review = {
 const mockedUseProject = vi.mocked(useProject)
 const mockedUseProjectReviews = vi.mocked(useProjectReviews)
 
-function renderPage() {
+function LocationProbe() {
+  const location = useLocation()
+
+  return <output data-testid="location">{location.search}</output>
+}
+
+function renderPage(initialEntry = "/projects/project-a") {
   return render(
-    <MemoryRouter initialEntries={["/projects/project-a"]}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
         <Route
           path="/projects/:projectId"
           element={<ProjectDetailsPage />}
         />
       </Routes>
+      <LocationProbe />
     </MemoryRouter>,
   )
 }
@@ -112,6 +119,10 @@ describe("ProjectDetailsPage", () => {
     expect(screen.getByRole("heading", { name: "Trace" })).toBeTruthy()
     expect(screen.getByText("fortune710/trace")).toBeTruthy()
     expect(screen.getByText("main")).toBeTruthy()
+    expect(screen.getByText("Source").closest("dl")?.className).toContain("grid-cols-1")
+    expect(screen.getByText("Source").closest("dl")?.className).toContain("sm:grid-cols-2")
+    expect(screen.getByText("Source").closest("dl")?.className).toContain("md:grid-cols-4")
+    expect(screen.getByText("Source").closest("dl")?.className).not.toContain("rounded-lg")
     expect(screen.getByRole("link", { name: /review review-a/i }).getAttribute("href")).toBe(
       "/reviews/review-a",
     )
@@ -129,6 +140,31 @@ describe("ProjectDetailsPage", () => {
     expect(screen.getByRole("tabpanel", { name: "Findings" })).toBeTruthy()
     expect(screen.getByText("Findings for review-a")).toBeTruthy()
     expect(screen.queryByRole("link", { name: /review review-a/i })).toBeNull()
+  })
+
+  it("clears finding filters and pagination when selecting another review", () => {
+    const secondReview: Review = {
+      ...review,
+      id: "review-b",
+    }
+    mockedUseProjectReviews.mockReturnValue({
+      data: { items: [review, secondReview], next_offset: null },
+      isLoading: false,
+      isError: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useProjectReviews>)
+
+    renderPage(
+      "/projects/project-a?finding_category=security&finding_severity=high&finding_status=open&finding_agent=agent-a&finding_page=2",
+    )
+    fireEvent.click(screen.getByRole("tab", { name: "Findings" }))
+    fireEvent.change(screen.getByRole("combobox", { name: "Review" }), {
+      target: { value: "review-b" },
+    })
+
+    expect(screen.getByText("Findings for review-b")).toBeTruthy()
+    expect(screen.getByTestId("location").textContent).toBe("")
   })
 
   it("uses the API project ID for a desktop-cached project", () => {

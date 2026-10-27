@@ -129,6 +129,19 @@ describe("ReviewFindings", () => {
     expect(screen.getByTestId("location").textContent).toBe("?tab=findings")
   })
 
+  it("ignores invalid enum filters from the URL", () => {
+    renderFindings(
+      "/reviews/review-a?tab=findings&finding_category=unknown&finding_severity=urgent&finding_status=pending&finding_agent=agent-a",
+    )
+
+    expect(mockedUseReviewFindings).toHaveBeenCalledWith("review-a", 1, {
+      category: undefined,
+      severity: undefined,
+      status: undefined,
+      agentId: "agent-a",
+    })
+  })
+
   it("retries after a finding query failure", () => {
     const refetch = vi.fn()
     mockedUseReviewFindings.mockReturnValue({

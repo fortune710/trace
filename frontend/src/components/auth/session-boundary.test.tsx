@@ -18,6 +18,9 @@ const sessionState = {
 vi.mock("@/hooks/use-session", () => ({
   useSession: () => sessionState,
 }))
+vi.mock("@/hooks/use-notifications", () => ({
+  NotificationStream: () => <output data-testid="notification-stream" />,
+}))
 
 function Location() {
   const location = useLocation()
@@ -86,6 +89,12 @@ describe("SessionBoundary", () => {
 
     expect(screen.queryByRole("dialog")).toBeNull()
     expect(screen.getByTestId("sign-in-page")).toBeTruthy()
+  })
+
+  it("starts the notification stream for authenticated routes only", () => {
+    renderGuardedBoundary()
+
+    expect(screen.getByTestId("notification-stream")).toBeTruthy()
   })
 
   it("keeps the protected route mounted while the expiration dialog is shown", async () => {

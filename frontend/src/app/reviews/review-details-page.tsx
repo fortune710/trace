@@ -2,6 +2,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { ReviewFindings } from "@/components/findings/review-findings"
 import { AppShell } from "@/components/layout/app-shell"
+import { ReviewDetailsPageSkeleton } from "@/components/reviews/review-details-page-skeleton"
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -74,7 +75,7 @@ export function ReviewDetailsPage() {
         </Breadcrumb>
 
         {review.isLoading ? (
-          <p className="mt-6 text-sm text-muted-foreground">Loading review…</p>
+          <ReviewDetailsPageSkeleton />
         ) : null}
         {review.isError ? (
           <div className="mt-6 grid justify-items-start gap-3">
@@ -175,7 +176,11 @@ export function ReviewDetailsPage() {
             </div>
 
             {activeTab === "overview" ? (
-              <section className="mt-8" role="tabpanel" aria-label="Overview">
+              <section
+                className="mt-8"
+                role="tabpanel"
+                aria-label="Overview"
+              >
                 <h2 className="text-base font-medium">Reviewers</h2>
                 <div className="mt-3 grid gap-3">
                   {review.data.agents.map((agent) => (
@@ -185,7 +190,10 @@ export function ReviewDetailsPage() {
                     >
                       <div className="flex items-start justify-between gap-3">
                         <h3 className="font-medium">{agent.name}</h3>
-                        <Badge variant="outline" className="capitalize">
+                        <Badge
+                          variant="outline"
+                          className="capitalize"
+                        >
                           {agent.review_category}
                         </Badge>
                       </div>
@@ -211,7 +219,11 @@ export function ReviewDetailsPage() {
                 </div>
               </section>
             ) : (
-              <div className="mt-8" role="tabpanel" aria-label="Findings">
+              <div
+                className="mt-8"
+                role="tabpanel"
+                aria-label="Findings"
+              >
                 <ReviewFindings review={review.data} />
               </div>
             )}

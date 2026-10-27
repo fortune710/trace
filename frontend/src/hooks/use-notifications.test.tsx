@@ -10,11 +10,13 @@ import {
   notificationsQueryKey,
   useMarkAllNotificationsRead,
   useMarkNotificationRead,
+  useNotifications,
 } from "@/hooks/use-notifications"
 import { toast } from "@/components/ui/toast"
 import type { NotificationPage } from "@/lib/api"
 
 const apiMocks = vi.hoisted(() => ({
+  list: vi.fn(),
   markAllRead: vi.fn(),
   markRead: vi.fn(),
   streamUrl: vi.fn(() => "http://api.example.test/api/v1/notifications/stream"),
@@ -139,6 +141,19 @@ describe("notification hooks", () => {
         25,
       ]),
     ).toEqual(page)
+  })
+
+  it("does not expose a next page while notification data is unavailable", async () => {
+    const queryClient = createQueryClient()
+    apiMocks.list.mockRejectedValueOnce(new Error("network unavailable"))
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    )
+    const { result } = renderHook(() => useNotifications(1), { wrapper })
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+
+    expect(result.current.hasNextPage).toBe(false)
   })
 
   it("optimistically marks all cached pages read and restores them after failure", async () => {

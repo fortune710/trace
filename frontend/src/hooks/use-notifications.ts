@@ -39,7 +39,9 @@ function unreadNotificationPage(
         ? { ...notification, read_at: readAt }
         : notification,
     ),
-    unread_count: wasUnread ? Math.max(0, page.unread_count - 1) : page.unread_count,
+    unread_count: wasUnread
+      ? Math.max(0, page.unread_count - 1)
+      : page.unread_count,
   }
 }
 
@@ -50,7 +52,9 @@ function allReadNotificationPage(
   return {
     ...page,
     items: page.items.map((notification) =>
-      notification.read_at === null ? { ...notification, read_at: readAt } : notification,
+      notification.read_at === null
+        ? { ...notification, read_at: readAt }
+        : notification,
     ),
     unread_count: 0,
   }
@@ -77,7 +81,7 @@ export function useNotifications(page: number) {
     ...query,
     notifications: query.data?.items ?? [],
     unreadCount: query.data?.unread_count ?? 0,
-    hasNextPage: query.data?.next_offset !== null,
+    hasNextPage: query.data?.next_offset != null,
   }
 }
 
@@ -147,15 +151,27 @@ export function NotificationStream() {
   const [isLeader, setIsLeader] = useState(false)
 
   useEffect(() => {
-    if (!session.data) return
+    if (!session.data) {
+      return
+    }
     const tabId = crypto.randomUUID()
     const leaderKey = "trace.notifications.stream.leader"
     const claimLeadership = () => {
       const now = Date.now()
       try {
-        const current = JSON.parse(localStorage.getItem(leaderKey) ?? "null") as { id?: string; expiresAt?: number } | null
-        if (!current || !current.expiresAt || current.expiresAt < now || current.id === tabId) {
-          localStorage.setItem(leaderKey, JSON.stringify({ id: tabId, expiresAt: now + 10_000 }))
+        const current = JSON.parse(
+          localStorage.getItem(leaderKey) ?? "null",
+        ) as { id?: string; expiresAt?: number } | null
+        if (
+          !current ||
+          !current.expiresAt ||
+          current.expiresAt < now ||
+          current.id === tabId
+        ) {
+          localStorage.setItem(
+            leaderKey,
+            JSON.stringify({ id: tabId, expiresAt: now + 10_000 }),
+          )
           setIsLeader(true)
           return
         }
@@ -174,8 +190,12 @@ export function NotificationStream() {
       window.clearInterval(heartbeat)
       window.removeEventListener("storage", onStorage)
       try {
-        const current = JSON.parse(localStorage.getItem(leaderKey) ?? "null") as { id?: string } | null
-        if (current?.id === tabId) localStorage.removeItem(leaderKey)
+        const current = JSON.parse(
+          localStorage.getItem(leaderKey) ?? "null",
+        ) as { id?: string } | null
+        if (current?.id === tabId) {
+          localStorage.removeItem(leaderKey)
+        }
       } catch {
         // Storage can be unavailable in privacy-restricted contexts.
       }
@@ -183,13 +203,17 @@ export function NotificationStream() {
   }, [session.data])
 
   useEffect(() => {
-    if (!session.data || !isLeader) return
-    if (typeof EventSource === "undefined") return
+    if (!session.data || !isLeader || typeof EventSource === "undefined") {
+      return
+    }
 
-    const channel = typeof BroadcastChannel === "undefined"
-      ? null
-      : new BroadcastChannel("trace.notifications")
-    const stream = new EventSource(notificationsApi.streamUrl(), { withCredentials: true })
+    const channel =
+      typeof BroadcastChannel === "undefined"
+        ? null
+        : new BroadcastChannel("trace.notifications")
+    const stream = new EventSource(notificationsApi.streamUrl(), {
+      withCredentials: true,
+    })
     const seen = new Set<string>()
     const refreshNotifications = () =>
       void queryClient.invalidateQueries({ queryKey: notificationsQueryKey })
@@ -231,10 +255,16 @@ export function NotificationStream() {
   }, [isLeader, navigate, queryClient, session.data])
 
   useEffect(() => {
-    if (!session.data || isLeader) return
-    if (typeof BroadcastChannel === "undefined") return
+    if (
+      !session.data ||
+      isLeader ||
+      typeof BroadcastChannel === "undefined"
+    ) {
+      return
+    }
     const channel = new BroadcastChannel("trace.notifications")
-    channel.onmessage = () => void queryClient.invalidateQueries({ queryKey: notificationsQueryKey })
+    channel.onmessage = () =>
+      void queryClient.invalidateQueries({ queryKey: notificationsQueryKey })
     return () => channel.close()
   }, [isLeader, queryClient, session.data])
 

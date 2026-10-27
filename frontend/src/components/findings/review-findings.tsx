@@ -1,5 +1,10 @@
 import { Link, useSearchParams } from "react-router-dom"
 
+import {
+  findingFilterParameterNames,
+  findingPageParameterName,
+} from "@/components/findings/finding-search-params"
+import { ReviewFindingsSkeleton } from "@/components/findings/review-findings-skeleton"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -52,13 +57,6 @@ const statuses: FindingStatus[] = [
   "dismissed",
 ]
 
-const filterParameterNames = {
-  category: "finding_category",
-  severity: "finding_severity",
-  status: "finding_status",
-  agentId: "finding_agent",
-} as const
-
 const allFilterValue = "all"
 const visibleSourceLocationLimit = 3
 
@@ -66,23 +64,35 @@ function label(value: string) {
   return value.replaceAll("_", " ")
 }
 
-function findingFiltersFromSearchParams(searchParams: URLSearchParams): FindingFilters {
+function validFilterValue<T extends string>(
+  value: string | null,
+  allowedValues: readonly T[],
+): T | undefined {
+  return allowedValues.find((allowedValue) => allowedValue === value)
+}
+
+function findingFiltersFromSearchParams(
+  searchParams: URLSearchParams,
+): FindingFilters {
   return {
-    category:
-      (searchParams.get(filterParameterNames.category) as ReviewCategory | null) ??
-      undefined,
-    severity:
-      (searchParams.get(filterParameterNames.severity) as FindingSeverity | null) ??
-      undefined,
-    status:
-      (searchParams.get(filterParameterNames.status) as FindingStatus | null) ??
-      undefined,
-    agentId: searchParams.get(filterParameterNames.agentId) ?? undefined,
+    category: validFilterValue(
+      searchParams.get(findingFilterParameterNames.category),
+      categories,
+    ),
+    severity: validFilterValue(
+      searchParams.get(findingFilterParameterNames.severity),
+      severities,
+    ),
+    status: validFilterValue(
+      searchParams.get(findingFilterParameterNames.status),
+      statuses,
+    ),
+    agentId: searchParams.get(findingFilterParameterNames.agentId) ?? undefined,
   }
 }
 
 function pageFromSearchParams(searchParams: URLSearchParams) {
-  const requestedPage = Number(searchParams.get("finding_page") ?? "1")
+  const requestedPage = Number(searchParams.get(findingPageParameterName) ?? "1")
   return Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
 }
 
@@ -120,7 +130,10 @@ function FindingCard({ finding }: { finding: Finding }) {
           </p>
           <h3 className="mt-1 text-base font-medium">{finding.title}</h3>
         </div>
-        <Badge variant="outline" className="capitalize text-muted-foreground">
+        <Badge
+          variant="outline"
+          className="capitalize text-muted-foreground"
+        >
           {finding.status}
         </Badge>
       </div>
@@ -183,10 +196,10 @@ export function ReviewFindings({ review }: { review: Review }) {
   function updateFilters(nextFilters: FindingFilters) {
     setSearchParams((currentSearchParams) => {
       const nextSearchParams = new URLSearchParams(currentSearchParams)
-      nextSearchParams.delete("finding_page")
+      nextSearchParams.delete(findingPageParameterName)
 
       for (const [filterName, parameterName] of Object.entries(
-        filterParameterNames,
+        findingFilterParameterNames,
       ) as Array<[keyof FindingFilters, string]>) {
         const value = nextFilters[filterName]
         if (value) {
@@ -204,9 +217,9 @@ export function ReviewFindings({ review }: { review: Review }) {
     setSearchParams((currentSearchParams) => {
       const nextSearchParams = new URLSearchParams(currentSearchParams)
       if (nextPage === 1) {
-        nextSearchParams.delete("finding_page")
+        nextSearchParams.delete(findingPageParameterName)
       } else {
-        nextSearchParams.set("finding_page", String(nextPage))
+        nextSearchParams.set(findingPageParameterName, String(nextPage))
       }
       return nextSearchParams
     })
@@ -247,7 +260,10 @@ export function ReviewFindings({ review }: { review: Review }) {
               })
             }
           >
-            <SelectTrigger id="finding-category" className="w-full">
+            <SelectTrigger
+              id="finding-category"
+              className="w-full"
+            >
               <SelectValue>
                 {filters.category ? label(filters.category) : "All categories"}
               </SelectValue>
@@ -275,7 +291,10 @@ export function ReviewFindings({ review }: { review: Review }) {
               })
             }
           >
-            <SelectTrigger id="finding-severity" className="w-full">
+            <SelectTrigger
+              id="finding-severity"
+              className="w-full"
+            >
               <SelectValue>
                 {filters.severity ?? "All severities"}
               </SelectValue>
@@ -303,7 +322,10 @@ export function ReviewFindings({ review }: { review: Review }) {
               })
             }
           >
-            <SelectTrigger id="finding-status" className="w-full">
+            <SelectTrigger
+              id="finding-status"
+              className="w-full"
+            >
               <SelectValue>{filters.status ?? "All statuses"}</SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -328,7 +350,10 @@ export function ReviewFindings({ review }: { review: Review }) {
               })
             }
           >
-            <SelectTrigger id="finding-reviewer" className="w-full">
+            <SelectTrigger
+              id="finding-reviewer"
+              className="w-full"
+            >
               <SelectValue>
                 {review.agents.find((agent) => agent.agent_id === filters.agentId)
                   ?.name ?? "All reviewers"}
@@ -347,7 +372,7 @@ export function ReviewFindings({ review }: { review: Review }) {
       </div>
 
       {findings.isLoading ? (
-        <p className="mt-6 text-sm text-muted-foreground">Loading findings…</p>
+        <ReviewFindingsSkeleton />
       ) : null}
       {findings.isError ? (
         <div className="mt-6 grid justify-items-start gap-3">

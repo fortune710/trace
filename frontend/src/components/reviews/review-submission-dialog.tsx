@@ -74,7 +74,7 @@ export function ReviewSubmissionDialog({
           toast.add({
             type: "success",
             title: "Review queued",
-            description: "Your immutable source and reviewer snapshots were saved.",
+            description: "Your review has been queued.",
           })
           setSelectedAgentIds([])
           onCreated(review.id)

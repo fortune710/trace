@@ -1,7 +1,6 @@
 import type { ReactNode } from "react"
 
 import { AppSidebar } from "@/components/navigation/app-sidebar"
-import { NotificationStream } from "@/hooks/use-notifications"
 import {
   SidebarInset,
   SidebarProvider,
@@ -11,7 +10,6 @@ import {
 export function AppShell({ children }: { children: ReactNode }) {
   return (
     <SidebarProvider>
-      <NotificationStream />
       <AppSidebar />
       <SidebarInset>
         <header className="flex h-14 items-center border-b border-border px-4 md:hidden">

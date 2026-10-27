@@ -117,6 +117,11 @@ describe("ReviewSubmissionDialog", () => {
     )
     expect(props.onCreated).toHaveBeenCalledWith("review-a")
     expect(props.onOpenChange).toHaveBeenCalledWith(false)
+    expect(toast.add).toHaveBeenCalledWith({
+      type: "success",
+      title: "Review queued",
+      description: "Your review has been queued.",
+    })
   })
 
   it("explains when no enabled agents are available", async () => {

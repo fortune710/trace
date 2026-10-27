@@ -2,7 +2,12 @@ import { useState } from "react"
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { ReviewSubmissionDialog } from "@/components/reviews/review-submission-dialog"
+import { clearFindingSearchParams } from "@/components/findings/finding-search-params"
 import { ReviewFindings } from "@/components/findings/review-findings"
+import {
+  ProjectActivitySkeleton,
+  ProjectDetailsPageSkeleton,
+} from "@/components/projects/project-details-page-skeleton"
 import { AppShell } from "@/components/layout/app-shell"
 import {
   Breadcrumb,
@@ -75,7 +80,7 @@ function ProjectReviews({ project }: { project: Project }) {
   }
 
   if (reviews.isLoading) {
-    return <p className="text-sm text-muted-foreground">Loading reviews…</p>
+    return <ProjectActivitySkeleton />
   }
 
   if (reviews.isError) {
@@ -162,6 +167,7 @@ function ProjectReviews({ project }: { project: Project }) {
 
 function ProjectFindings({ project }: { project: Project }) {
   const [selectedReviewId, setSelectedReviewId] = useState<string | null>(null)
+  const [, setSearchParams] = useSearchParams()
   const projectId =
     project.api_project_id ?? (project.source === "github" ? project.id : null)
   const reviews = useProjectReviews(projectId, 1)
@@ -183,7 +189,7 @@ function ProjectFindings({ project }: { project: Project }) {
   }
 
   if (reviews.isLoading) {
-    return <p className="text-sm text-muted-foreground">Loading reviews…</p>
+    return <ProjectActivitySkeleton />
   }
 
   if (reviews.isError) {
@@ -222,7 +228,10 @@ function ProjectFindings({ project }: { project: Project }) {
         Review
         <select
           value={selectedReview.id}
-          onChange={(event) => setSelectedReviewId(event.target.value)}
+          onChange={(event) => {
+            setSelectedReviewId(event.target.value)
+            setSearchParams(clearFindingSearchParams)
+          }}
         >
           {reviews.data?.items.map((review) => (
             <option key={review.id} value={review.id}>
@@ -273,7 +282,7 @@ export function ProjectDetailsPage() {
         </Breadcrumb>
 
         {project.isLoading ? (
-          <p className="mt-6 text-sm text-muted-foreground">Loading project…</p>
+          <ProjectDetailsPageSkeleton />
         ) : null}
 
         {project.isError ? (
@@ -310,21 +319,23 @@ export function ProjectDetailsPage() {
               </Button>
             </div>
 
-            <dl className="mt-8 grid gap-4 rounded-lg border border-border bg-card p-5 text-sm sm:grid-cols-2">
-              <div>
+            <dl
+              className="mt-8 grid grid-cols-1 gap-x-6 gap-y-5 text-sm sm:grid-cols-2 md:grid-cols-4"
+            >
+              <div className="min-w-0">
                 <dt className="text-muted-foreground">Source</dt>
                 <dd className="mt-1 text-foreground">
                   {project.data.source === "local" ? "Local folder" : "GitHub"}
                 </dd>
               </div>
-              <div>
+              <div className="min-w-0">
                 <dt className="text-muted-foreground">Category</dt>
                 <dd className="mt-1 capitalize text-foreground">
                   {categoryLabel(project.data.category)}
                 </dd>
               </div>
               {project.data.source === "github" ? (
-                <div>
+                <div className="min-w-0">
                   <dt className="text-muted-foreground">Branch</dt>
                   <dd className="mt-1 font-mono text-foreground">
                     {project.data.branch_name}
@@ -332,7 +343,7 @@ export function ProjectDetailsPage() {
                 </div>
               ) : null}
               {project.data.source === "github" ? (
-                <div className="sm:col-span-2">
+                <div className="min-w-0">
                   <dt className="text-muted-foreground">Last imported commit</dt>
                   <dd className="mt-1 break-all font-mono text-foreground">
                     {project.data.current_revision}
