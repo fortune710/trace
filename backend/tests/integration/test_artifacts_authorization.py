@@ -4,6 +4,9 @@ from uuid import uuid4
 
 import pytest
 
+from findings.models import FindingStatus
+from resources.services import FindingService
+
 pytestmark = pytest.mark.integration
 
 
@@ -147,6 +150,28 @@ def test_owner_can_read_and_mutate_findings_and_remediations(
         ).status_code
         == 200
     )
+
+
+def test_finding_triage_succeeds_when_auditing_is_disabled(
+    account_pair,
+    agent_factory,
+    artifact_graph_factory,
+    integration_engine,
+    local_project_factory,
+) -> None:
+    owner, _ = account_pair
+    project = local_project_factory(owner)
+    agent = agent_factory(owner)
+    graph = artifact_graph_factory(owner, project["id"], agent["id"])
+
+    updated = FindingService(integration_engine).update_status(
+        owner_id=owner.user_id,
+        finding_id=graph["finding_id"],
+        status=FindingStatus.ACCEPTED,
+        request_id="audit-disabled-triage",
+    )
+
+    assert updated["status"] == FindingStatus.ACCEPTED
 
 
 def test_foreign_findings_remediations_and_artifacts_are_denied(

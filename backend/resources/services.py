@@ -1040,6 +1040,12 @@ class ReviewService:
 
 
 class FindingService:
+    """Owner-scoped finding access and triage.
+
+    When auditing is disabled, ``audit_recorder`` is ``None``. Triage updates
+    remain available, but no ``resource.finding.triaged`` audit event is emitted.
+    """
+
     def __init__(
         self, engine: Engine, audit_recorder: AuditRecorder | None = None
     ) -> None:
