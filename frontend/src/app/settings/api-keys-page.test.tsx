@@ -129,6 +129,7 @@ describe("ApiKeysPage", () => {
 
     expect(screen.getByText("Back to app")).toBeTruthy()
     expect(screen.getAllByText("API keys").length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText("Integrations")).toBeTruthy()
     expect(screen.queryByText("Projects")).toBeNull()
     expect(screen.queryByText("Agents")).toBeNull()
   })

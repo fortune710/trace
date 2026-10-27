@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
-import { MemoryRouter, Route, Routes } from "react-router-dom"
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ProjectDetailsPage } from "@/app/projects/project-details-page"
@@ -11,6 +11,11 @@ import type { Project, Review } from "@/lib/api"
 
 vi.mock("@/hooks/use-projects", () => ({ useProject: vi.fn() }))
 vi.mock("@/hooks/use-reviews", () => ({ useProjectReviews: vi.fn() }))
+vi.mock("@/components/findings/review-findings", () => ({
+  ReviewFindings: ({ review }: { review: Review }) => (
+    <p>Findings for {review.id}</p>
+  ),
+}))
 vi.mock("@/components/layout/app-shell", () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
@@ -63,15 +68,22 @@ const review: Review = {
 const mockedUseProject = vi.mocked(useProject)
 const mockedUseProjectReviews = vi.mocked(useProjectReviews)
 
-function renderPage() {
+function LocationProbe() {
+  const location = useLocation()
+
+  return <output data-testid="location">{location.search}</output>
+}
+
+function renderPage(initialEntry = "/projects/project-a") {
   return render(
-    <MemoryRouter initialEntries={["/projects/project-a"]}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
         <Route
           path="/projects/:projectId"
           element={<ProjectDetailsPage />}
         />
       </Routes>
+      <LocationProbe />
     </MemoryRouter>,
   )
 }
@@ -101,9 +113,16 @@ describe("ProjectDetailsPage", () => {
   it("shows project details, review history, and the start review action", () => {
     renderPage()
 
+    expect(screen.getByRole("navigation", { name: "breadcrumb" })).toBeTruthy()
+    expect(screen.getByRole("link", { name: "Projects" }).getAttribute("href")).toBe("/projects")
+    expect(screen.getByText("Trace", { selector: "[aria-current=page]" })).toBeTruthy()
     expect(screen.getByRole("heading", { name: "Trace" })).toBeTruthy()
     expect(screen.getByText("fortune710/trace")).toBeTruthy()
     expect(screen.getByText("main")).toBeTruthy()
+    expect(screen.getByText("Source").closest("dl")?.className).toContain("grid-cols-1")
+    expect(screen.getByText("Source").closest("dl")?.className).toContain("sm:grid-cols-2")
+    expect(screen.getByText("Source").closest("dl")?.className).toContain("md:grid-cols-4")
+    expect(screen.getByText("Source").closest("dl")?.className).not.toContain("rounded-lg")
     expect(screen.getByRole("link", { name: /review review-a/i }).getAttribute("href")).toBe(
       "/reviews/review-a",
     )
@@ -113,14 +132,57 @@ describe("ProjectDetailsPage", () => {
     expect(screen.getByRole("dialog", { name: "Start review dialog" })).toBeTruthy()
   })
 
-  it("switches to an empty findings tab", () => {
+  it("switches to the selected review's findings tab", () => {
     renderPage()
 
     fireEvent.click(screen.getByRole("tab", { name: "Findings" }))
 
     expect(screen.getByRole("tabpanel", { name: "Findings" })).toBeTruthy()
-    expect(screen.getByText("No findings yet")).toBeTruthy()
+    expect(screen.getByText("Findings for review-a")).toBeTruthy()
     expect(screen.queryByRole("link", { name: /review review-a/i })).toBeNull()
+  })
+
+  it("shows a findings-shaped skeleton while project reviews load", () => {
+    mockedUseProjectReviews.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useProjectReviews>)
+
+    renderPage()
+    fireEvent.click(screen.getByRole("tab", { name: "Findings" }))
+
+    const skeleton = screen.getByLabelText("Loading project findings")
+    expect(skeleton).toBeTruthy()
+    expect(skeleton.querySelector(".sm\\:grid-cols-2")).toBeTruthy()
+    expect(skeleton.querySelector(".lg\\:grid-cols-4")).toBeTruthy()
+  })
+
+  it("clears finding filters and pagination when selecting another review", () => {
+    const secondReview: Review = {
+      ...review,
+      id: "review-b",
+    }
+    mockedUseProjectReviews.mockReturnValue({
+      data: { items: [review, secondReview], next_offset: null },
+      isLoading: false,
+      isError: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useProjectReviews>)
+
+    renderPage(
+      "/projects/project-a?finding_category=security&finding_severity=high&finding_status=open&finding_agent=agent-a&finding_page=2",
+    )
+    fireEvent.click(screen.getByRole("tab", { name: "Findings" }))
+    fireEvent.change(screen.getByRole("combobox", { name: "Review" }), {
+      target: { value: "review-b" },
+    })
+
+    expect(screen.getByText("Findings for review-b")).toBeTruthy()
+    expect(screen.getByTestId("location").textContent).toBe("")
   })
 
   it("uses the API project ID for a desktop-cached project", () => {

@@ -22,6 +22,8 @@ from db.rls import principal_transaction
 from db.types import RepositorySource
 from external_repositories.models import ExternalRepository
 from findings.models import Finding, FindingStatus
+from notifications.models import NotificationEventType
+from notifications.service import create_notification
 from projects.models import Project, ProjectCategory
 from remediations.models import Remediation, RemediationStatus
 from reviews.models import (
@@ -929,6 +931,13 @@ class ReviewService:
                         for assignment in assignments
                     ],
                 )
+                create_notification(
+                    connection,
+                    owner_id=owner_id,
+                    event_type=NotificationEventType.REVIEW_QUEUED,
+                    dedupe_key=f"review:{review_id}:queued",
+                    review_id=review_id,
+                )
         except sa.exc.IntegrityError as error:
             # A concurrent identical request can win the unique idempotency
             # index after this transaction performed its initial lookup.
@@ -1065,13 +1074,33 @@ class FindingService:
                     .limit(limit + 1),
                 ),
             )
-        selected, next_offset = _page(findings, limit, offset)
-        return [_finding_response(finding) for finding in selected], next_offset
+            selected, next_offset = _page(findings, limit, offset)
+            review_agents = {
+                review_agent.agent_id: review_agent
+                for review_agent in cast(
+                    list[ReviewAgent],
+                    _orm_scalars_all(
+                        connection,
+                        sa.select(ReviewAgent).where(
+                            ReviewAgent.owner_id == owner_id,
+                            ReviewAgent.review_id == review_id,
+                            ReviewAgent.agent_id.in_(
+                                {finding.agent_id for finding in selected}
+                            ),
+                        ),
+                    ),
+                )
+            }
+            responses = [
+                _finding_response(finding, review_agents[finding.agent_id])
+                for finding in selected
+            ]
+        return responses, next_offset
 
     def get(self, *, owner_id: UUID, finding_id: UUID) -> dict[str, object]:
         with principal_transaction(self._engine, owner_id) as connection:
             finding = self._owned_finding(connection, owner_id, finding_id)
-        return _finding_response(finding)
+            return self._response(connection, finding)
 
     def update_status(
         self, *, owner_id: UUID, finding_id: UUID, status: FindingStatus
@@ -1100,7 +1129,22 @@ class FindingService:
                 .values(status=status, updated_at=sa.func.current_timestamp())
             )
             finding = self._owned_finding(connection, owner_id, finding_id)
-        return _finding_response(finding)
+            return self._response(connection, finding)
+
+    @staticmethod
+    def _response(connection: sa.Connection, finding: Finding) -> dict[str, object]:
+        review_agent = cast(
+            ReviewAgent,
+            _orm_scalar_one(
+                connection,
+                sa.select(ReviewAgent).where(
+                    ReviewAgent.owner_id == finding.owner_id,
+                    ReviewAgent.review_id == finding.review_id,
+                    ReviewAgent.agent_id == finding.agent_id,
+                ),
+            ),
+        )
+        return _finding_response(finding, review_agent)
 
     @staticmethod
     def _owned_finding(
@@ -1120,11 +1164,17 @@ class FindingService:
         return finding
 
 
-def _finding_response(finding: Finding) -> dict[str, object]:
+def _finding_response(finding: Finding, review_agent: ReviewAgent) -> dict[str, object]:
     return {
         "id": finding.id,
         "review_id": finding.review_id,
         "agent_id": finding.agent_id,
+        "reviewing_agent": {
+            "assignment_id": review_agent.id,
+            "agent_id": review_agent.agent_id,
+            "display_name": review_agent.agent_display_name,
+            "specialization": review_agent.agent_specialization,
+        },
         "category": finding.category,
         "severity": finding.severity,
         "title": finding.title,

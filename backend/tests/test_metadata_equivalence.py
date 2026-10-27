@@ -252,6 +252,19 @@ EXPECTED_COLUMNS = {
         "created_at",
         "updated_at",
     },
+    "public.notifications": {
+        "id",
+        "owner_id",
+        "category",
+        "event_type",
+        "title",
+        "body",
+        "action_path",
+        "data",
+        "dedupe_key",
+        "created_at",
+        "read_at",
+    },
     "public.remediations": {
         "id",
         "owner_id",
@@ -353,6 +366,17 @@ def test_primary_keys_foreign_keys_and_named_constraints_are_registered() -> Non
         "public.review_agents.id",
     }
 
+    notifications = Base.metadata.tables["public.notifications"]
+    assert {
+        foreign_key.target_fullname for foreign_key in notifications.foreign_keys
+    } == {"public.users.id"}
+    assert {constraint.name for constraint in notifications.constraints} >= {
+        "notifications_owner_dedupe_key",
+        "notifications_title_length",
+        "notifications_body_length",
+        "notifications_action_path_relative",
+    }
+
 
 def test_indexes_and_enum_contracts_are_stable() -> None:
     expected_indexes = {
@@ -371,7 +395,10 @@ def test_indexes_and_enum_contracts_are_stable() -> None:
         "private_review_dispatch_jobs_pending_claim_idx",
         "private_review_dispatch_jobs_review_idx",
         "findings_owner_created_idx",
+        "findings_owner_review_created_idx",
         "findings_owner_review_agent_digest_key",
+        "notifications_owner_created_idx",
+        "notifications_owner_unread_idx",
         "remediations_owner_created_idx",
         "pull_requests_owner_created_idx",
         "local_file_backups_owner_created_idx",

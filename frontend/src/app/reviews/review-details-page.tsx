@@ -1,7 +1,19 @@
-import { Link, useNavigate, useParams } from "react-router-dom"
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
+import { ReviewFindings } from "@/components/findings/review-findings"
 import { AppShell } from "@/components/layout/app-shell"
+import { ReviewDetailsPageSkeleton } from "@/components/reviews/review-details-page-skeleton"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { useProject } from "@/hooks/use-projects"
 import { useReview } from "@/hooks/use-reviews"
 
 function displaySourceKind(kind: "github" | "local") {
@@ -25,20 +37,45 @@ const reviewStatusDescriptions = {
 export function ReviewDetailsPage() {
   const { reviewId } = useParams()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const review = useReview(reviewId)
+  const project = useProject(review.data?.project_id)
+  const activeTab =
+    searchParams.get("tab") === "findings" ? "findings" : "overview"
+  const reviewLabel = review.data ? `Review ${review.data.id.slice(0, 8)}` : "Review"
+  const projectPath = review.data
+    ? `/projects/${encodeURIComponent(review.data.project_id)}`
+    : null
 
   return (
     <AppShell>
-      <section className="mx-auto w-full max-w-4xl px-6 py-8 md:px-10 md:py-10">
-        <Link
-          className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-          to="/projects"
-        >
-          Projects
-        </Link>
+      <section className="mx-auto w-full max-w-6xl px-6 py-8 md:px-10 md:py-10">
+        <Breadcrumb>
+          <BreadcrumbList>
+            <BreadcrumbItem>
+              <BreadcrumbLink render={<Link to="/projects" />}>
+                Projects
+              </BreadcrumbLink>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              {projectPath ? (
+                <BreadcrumbLink render={<Link to={projectPath} />}>
+                  {project.data?.name ?? "Project"}
+                </BreadcrumbLink>
+              ) : (
+                <span>Project</span>
+              )}
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage>{reviewLabel}</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
 
         {review.isLoading ? (
-          <p className="mt-6 text-sm text-muted-foreground">Loading review…</p>
+          <ReviewDetailsPageSkeleton />
         ) : null}
         {review.isError ? (
           <div className="mt-6 grid justify-items-start gap-3">
@@ -76,38 +113,28 @@ export function ReviewDetailsPage() {
               </Button>
             </div>
 
-            <dl className="mt-8 grid gap-4 rounded-lg border border-border bg-card p-5 text-sm sm:grid-cols-2">
-              <div>
+            <dl
+              className="mt-8 grid grid-cols-1 gap-x-6 gap-y-5 text-sm sm:grid-cols-2 md:grid-cols-4"
+            >
+              <div className="min-w-0">
                 <dt className="text-muted-foreground">Status</dt>
                 <dd className="mt-1 capitalize text-foreground">
                   {review.data.status}
                 </dd>
               </div>
-              <div>
+              <div className="min-w-0">
                 <dt className="text-muted-foreground">Source</dt>
                 <dd className="mt-1 text-foreground">
                   {displaySourceKind(review.data.source_snapshot.source_kind)}
                 </dd>
               </div>
-              <div className="sm:col-span-2">
+              <div className="min-w-0">
                 <dt className="text-muted-foreground">Source identifier</dt>
                 <dd className="mt-1 break-all font-mono text-foreground">
                   {review.data.source_snapshot.source_identifier}
                 </dd>
               </div>
-              <div className="sm:col-span-2">
-                <dt className="text-muted-foreground">Immutable revision</dt>
-                <dd className="mt-1 break-all font-mono text-foreground">
-                  {review.data.source_snapshot.revision}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">Integrity algorithm</dt>
-                <dd className="mt-1 font-mono text-foreground">
-                  {review.data.source_snapshot.integrity_algorithm}
-                </dd>
-              </div>
-              <div>
+              <div className="min-w-0">
                 <dt className="text-muted-foreground">Captured</dt>
                 <dd className="mt-1 text-foreground">
                   {new Date(review.data.source_snapshot.captured_at).toLocaleString()}
@@ -115,35 +142,91 @@ export function ReviewDetailsPage() {
               </div>
             </dl>
 
-            <section className="mt-8">
-              <h2 className="text-base font-medium">Reviewer snapshots</h2>
-              <div className="mt-3 grid gap-3">
-                {review.data.agents.map((agent) => (
-                  <article
-                    key={agent.assignment_id}
-                    className="rounded-lg border border-border bg-card p-4"
-                  >
-                    <h3 className="font-medium">{agent.name}</h3>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {agent.review_category} · {agent.model_provider}/{agent.model_name}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Configuration version {agent.configuration_version} · {agent.status}
-                    </p>
-                    {agent.personality ? (
-                      <p className="mt-3 text-sm text-muted-foreground">
-                        {agent.personality}
+            <div
+              className="mt-8 border-b border-border"
+              role="tablist"
+              aria-label="Review content"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "overview"}
+                onClick={() => setSearchParams({})}
+                className={`mr-5 border-b-2 px-1 pb-3 text-sm ${
+                  activeTab === "overview"
+                    ? "border-foreground text-foreground"
+                    : "border-transparent text-muted-foreground"
+                }`}
+              >
+                Overview
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "findings"}
+                onClick={() => setSearchParams({ tab: "findings" })}
+                className={`border-b-2 px-1 pb-3 text-sm ${
+                  activeTab === "findings"
+                    ? "border-foreground text-foreground"
+                    : "border-transparent text-muted-foreground"
+                }`}
+              >
+                Findings
+              </button>
+            </div>
+
+            {activeTab === "overview" ? (
+              <section
+                className="mt-8"
+                role="tabpanel"
+                aria-label="Overview"
+              >
+                <h2 className="text-base font-medium">Reviewers</h2>
+                <div className="mt-3 grid gap-3">
+                  {review.data.agents.map((agent) => (
+                    <article
+                      key={agent.assignment_id}
+                      className="rounded-lg border border-border bg-card p-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <h3 className="font-medium">{agent.name}</h3>
+                        <Badge
+                          variant="outline"
+                          className="capitalize"
+                        >
+                          {agent.review_category}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {agent.model_provider}/{agent.model_name}
                       </p>
-                    ) : null}
-                    {agent.skills.length > 0 ? (
-                      <p className="mt-3 text-xs text-muted-foreground">
-                        Snapshot skills: {displaySkills(agent.skills)}
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Configuration version {agent.configuration_version} ·{" "}
+                        {agent.status}
                       </p>
-                    ) : null}
-                  </article>
-                ))}
+                      {agent.personality ? (
+                        <p className="mt-3 text-sm text-muted-foreground">
+                          {agent.personality}
+                        </p>
+                      ) : null}
+                      {agent.skills.length > 0 ? (
+                        <p className="mt-3 text-xs text-muted-foreground">
+                          Snapshot skills: {displaySkills(agent.skills)}
+                        </p>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ) : (
+              <div
+                className="mt-8"
+                role="tabpanel"
+                aria-label="Findings"
+              >
+                <ReviewFindings review={review.data} />
               </div>
-            </section>
+            )}
           </div>
         ) : null}
       </section>

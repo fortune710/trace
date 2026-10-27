@@ -20,6 +20,7 @@ from credentials.models import (
 )
 from external_repositories.models import ExternalRepository
 from findings.models import Finding
+from notifications.models import Notification
 from projects.models import Project
 from remediations.models import Remediation
 from reviews.models import (
@@ -45,6 +46,7 @@ __all__ = [
     "ExternalRepository",
     "Finding",
     "LocalFileBackup",
+    "Notification",
     "PasswordCredential",
     "PasswordRecoveryToken",
     "Project",

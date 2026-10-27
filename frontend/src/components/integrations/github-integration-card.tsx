@@ -1,6 +1,7 @@
 import { useMutation } from "@tanstack/react-query"
 
 import githubLogo from "@/assets/github-invertocat-white.svg"
+import { IntegrationCardSkeleton } from "@/components/integrations/integrations-page-skeleton"
 import { Button } from "@/components/ui/button"
 import { toast } from "@/components/ui/toast"
 import { useGitHubConnection } from "@/hooks/use-github-connection"
@@ -54,6 +55,10 @@ export function GitHubIntegrationCard() {
   const actionLabel = status === "never_connected" ? "Connect GitHub" : "Reconnect"
   const isConnectionStarting = connect.isPending || connect.isSuccess
 
+  if (connection.isPending) {
+    return <IntegrationCardSkeleton />
+  }
+
   return (
     <article className="rounded-lg border border-border bg-card p-5">
       <div className="flex items-start justify-between gap-4">
@@ -75,7 +80,7 @@ export function GitHubIntegrationCard() {
 
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
         <p className="text-sm text-muted-foreground">
-          {connection.isPending ? "Checking GitHub connection…" : copy?.description}
+          {copy?.description}
         </p>
         <div className="flex flex-wrap items-center gap-2">
           {connection.isError ? (
@@ -91,7 +96,7 @@ export function GitHubIntegrationCard() {
           <Button
             size="sm"
             type="button"
-            disabled={connection.isPending || isConnectionStarting}
+            disabled={isConnectionStarting}
             onClick={() => connect.mutate()}
           >
             {isConnectionStarting ? "Connecting…" : actionLabel}

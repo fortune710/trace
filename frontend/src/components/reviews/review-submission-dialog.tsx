@@ -74,7 +74,7 @@ export function ReviewSubmissionDialog({
           toast.add({
             type: "success",
             title: "Review queued",
-            description: "Your immutable source and reviewer snapshots were saved.",
+            description: "Your review has been queued.",
           })
           setSelectedAgentIds([])
           onCreated(review.id)
@@ -89,7 +89,7 @@ export function ReviewSubmissionDialog({
             type: "error",
             title: "Review could not be started",
             description: githubAccessUnavailable
-              ? "GitHub access is unavailable. Reconnect GitHub in Integrations and confirm access to this repository before trying again."
+              ? "GitHub access is unavailable. Reconnect GitHub in Settings → Integrations and confirm access to this repository before trying again."
               : "The source could not be captured or the review request was rejected. Try again.",
           })
         },

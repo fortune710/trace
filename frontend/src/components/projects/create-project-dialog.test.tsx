@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { CreateProjectDialog } from "@/components/projects/create-project-dialog"
+import { useGitHubConnection } from "@/hooks/use-github-connection"
 import { useLocalFolderPicker } from "@/hooks/use-local-folder-picker"
 import { useRuntimeEnvironment } from "@/hooks/use-runtime-environment"
 import { LocalProjectCreationError } from "@/lib/desktop-projects"
@@ -14,6 +15,10 @@ vi.mock("@/hooks/use-runtime-environment", () => ({
 
 vi.mock("@/hooks/use-local-folder-picker", () => ({
   useLocalFolderPicker: vi.fn(),
+}))
+
+vi.mock("@/hooks/use-github-connection", () => ({
+  useGitHubConnection: vi.fn(),
 }))
 
 const mockedLocalMutate = vi.hoisted(() => vi.fn())
@@ -66,6 +71,7 @@ vi.mock("@/components/ui/toast", () => ({
 
 const mockedRuntime = vi.mocked(useRuntimeEnvironment)
 const mockedFolderPicker = vi.mocked(useLocalFolderPicker)
+const mockedGitHubConnection = vi.mocked(useGitHubConnection)
 
 function renderDialog(onOpenChange = vi.fn()) {
   return render(
@@ -96,6 +102,9 @@ describe("CreateProjectDialog local folder source", () => {
     mockedLocalMutate.mockReset()
     selectFolder.mockResolvedValue(null)
     clearSelection.mockResolvedValue(undefined)
+    mockedGitHubConnection.mockReturnValue({
+      data: { provider: "github", status: "connected" },
+    } as ReturnType<typeof useGitHubConnection>)
   })
 
   afterEach(() => {
@@ -108,6 +117,20 @@ describe("CreateProjectDialog local folder source", () => {
     renderDialog()
 
     expect(screen.queryByRole("button", { name: /local folder/i })).toBeNull()
+  })
+
+  it("disables the GitHub source and labels it when GitHub is not connected", () => {
+    mockedGitHubConnection.mockReturnValue({
+      data: { provider: "github", status: "never_connected" },
+    } as ReturnType<typeof useGitHubConnection>)
+
+    renderDialog()
+
+    const githubSource = screen.getByRole("button", {
+      name: /github repository.*not connected/i,
+    })
+    expect(githubSource.hasAttribute("disabled")).toBe(true)
+    expect(screen.getByText("Not connected")).toBeTruthy()
   })
 
   it("shows and invokes the local source picker in Tauri", () => {

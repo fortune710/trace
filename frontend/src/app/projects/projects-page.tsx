@@ -3,6 +3,7 @@ import { useState } from "react"
 import { AppShell } from "@/components/layout/app-shell"
 import { Button } from "@/components/ui/button"
 import { CreateProjectDialog } from "@/components/projects/create-project-dialog"
+import { ProjectsPageSkeleton } from "@/components/projects/projects-page-skeleton"
 import {
   EmptyProjects,
   ProjectList,
@@ -21,7 +22,7 @@ export function ProjectsPage() {
 
   return (
     <AppShell>
-      <section className="mx-auto w-full max-w-6xl px-6 py-8 md:px-10 md:py-10">
+      <section className="mx-auto w-full max-w-6xl px-6 pt-8 pb-28 md:px-10 md:pt-10">
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-xl font-medium tracking-tight">Projects</h1>
           <Button type="button" onClick={() => setIsCreateOpen(true)}>
@@ -32,7 +33,7 @@ export function ProjectsPage() {
 
         <div className="mt-8">
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading projects…</p>
+            <ProjectsPageSkeleton />
           ) : isError ? (
             <Button type="button" variant="outline" onClick={() => void refetch()}>
               Try again

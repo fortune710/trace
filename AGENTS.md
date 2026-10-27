@@ -1,5 +1,14 @@
 # Development Instructions
 
+## Application Page Layout
+
+- In `AppShell`, use `mx-auto w-full max-w-6xl px-6 py-8 md:px-10 md:py-10` for primary application page content unless a deliberately constrained form or detail view requires an exception.
+
+## Loading Skeletons
+
+- Every routed page must have a dedicated loading skeleton component in the matching `frontend/src/components/<feature>/` folder. Pages that intentionally share one layout, such as the authentication flows, may share a single explicitly named skeleton component.
+- Initial asynchronous page loading must render that skeleton instead of text-only loading copy. The skeleton must use `frontend/src/components/ui/skeleton.tsx` and mirror the page's structure, spacing, responsive grid, and primary content shape.
+
 ## TypeScript and TSX Formatting
 
 - Format TypeScript and TSX for readability. Do not condense component or function bodies, JSX trees, or return statements onto a single line.

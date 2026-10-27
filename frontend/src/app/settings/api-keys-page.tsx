@@ -2,6 +2,10 @@ import { useState, type FormEvent } from "react"
 import { Navigate } from "react-router-dom"
 
 import { AppShell } from "@/components/layout/app-shell"
+import {
+  ApiKeysListSkeleton,
+  ApiKeysPageSkeleton,
+} from "@/components/settings/api-keys-page-skeleton"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -171,7 +175,7 @@ export function ApiKeysPage() {
     return (
       <AppShell>
         <section className="mx-auto w-full max-w-6xl px-6 py-8 md:px-10 md:py-10">
-          <p className="text-sm text-muted-foreground">Loading settings…</p>
+          <ApiKeysPageSkeleton />
         </section>
       </AppShell>
     )
@@ -234,9 +238,7 @@ export function ApiKeysPage() {
           </div>
         ) : null}
         {credentials.isLoading ? (
-          <p className="mt-8 text-sm text-muted-foreground">
-            Loading your API keys…
-          </p>
+          <ApiKeysListSkeleton />
         ) : !credentials.isError && credentials.credentials.length === 0 ? (
           <div className="mt-8 rounded-lg border border-white/14 bg-[#0a0a0c] p-8 text-center">
             <p className="text-sm font-medium">No API keys yet</p>

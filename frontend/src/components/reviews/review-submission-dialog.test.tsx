@@ -117,6 +117,11 @@ describe("ReviewSubmissionDialog", () => {
     )
     expect(props.onCreated).toHaveBeenCalledWith("review-a")
     expect(props.onOpenChange).toHaveBeenCalledWith(false)
+    expect(toast.add).toHaveBeenCalledWith({
+      type: "success",
+      title: "Review queued",
+      description: "Your review has been queued.",
+    })
   })
 
   it("explains when no enabled agents are available", async () => {
@@ -187,7 +192,7 @@ describe("ReviewSubmissionDialog", () => {
     expect(toast.add).toHaveBeenCalledWith({
       type: "error",
       title: "Review could not be started",
-      description: "GitHub access is unavailable. Reconnect GitHub in Integrations and confirm access to this repository before trying again.",
+      description: "GitHub access is unavailable. Reconnect GitHub in Settings → Integrations and confirm access to this repository before trying again.",
     })
   })
 })

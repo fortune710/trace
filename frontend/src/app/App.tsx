@@ -13,6 +13,8 @@ import { AuthenticatedOnly, GuestOnly } from "@/app/auth/route-guards"
 import { AgentsPage } from "@/app/agents/agents-page"
 import { AgentDetailsPage } from "@/app/agents/agent-details-page"
 import { IntegrationsPage } from "@/app/integrations/integrations-page"
+import { NotificationsPage } from "@/app/notifications/notifications-page"
+import { FindingDetailsPage } from "@/app/findings/finding-details-page"
 import { ProjectDetailsPage } from "@/app/projects/project-details-page"
 import { ProjectsPage } from "@/app/projects/projects-page"
 import { ReviewDetailsPage } from "@/app/reviews/review-details-page"
@@ -70,6 +72,10 @@ function App() {
           element={<ReviewDetailsPage />}
         />
         <Route
+          path="/reviews/:reviewId/findings/:findingId"
+          element={<FindingDetailsPage />}
+        />
+        <Route
           path="/agents"
           element={<AgentsPage />}
         />
@@ -78,8 +84,16 @@ function App() {
           element={<AgentDetailsPage />}
         />
         <Route
-          path="/integrations"
+          path="/settings/integrations"
           element={<IntegrationsPage />}
+        />
+        <Route
+          path="/integrations"
+          element={<Navigate to="/settings/integrations" replace />}
+        />
+        <Route
+          path="/notifications"
+          element={<NotificationsPage />}
         />
         <Route
           path="/settings"

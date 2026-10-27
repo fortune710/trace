@@ -3,6 +3,7 @@ import { Navigate, Outlet, useLocation } from "react-router-dom"
 import { rememberReturnTo } from "@/app/auth/return-to"
 import { AuthLoading } from "@/components/auth/layout"
 import { useSessionBoundary } from "@/components/auth/session-boundary-context"
+import { NotificationStream } from "@/hooks/use-notifications"
 import { useSession } from "@/hooks/use-session"
 
 export function AuthenticatedOnly() {
@@ -19,7 +20,12 @@ export function AuthenticatedOnly() {
     return <Navigate to="/sign-in" replace />
   }
 
-  return <Outlet />
+  return (
+    <>
+      <NotificationStream />
+      <Outlet />
+    </>
+  )
 }
 
 export function GuestOnly() {

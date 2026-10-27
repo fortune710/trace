@@ -259,6 +259,58 @@ export type ReviewCreate = {
   local_source_snapshot?: LocalSourceSnapshot
 }
 
+export type FindingSeverity = "info" | "low" | "medium" | "high" | "critical"
+export type FindingStatus = "open" | "accepted" | "resolved" | "dismissed"
+
+export type ReviewingAgent = {
+  assignment_id: string
+  agent_id: string
+  display_name: string
+  specialization: ReviewCategory
+}
+
+export type Finding = {
+  id: string
+  review_id: string
+  agent_id: string
+  reviewing_agent: ReviewingAgent
+  category: ReviewCategory
+  severity: FindingSeverity
+  title: string
+  explanation: string
+  evidence: string | null
+  source_location: string | null
+  recommendation: string | null
+  status: FindingStatus
+  created_at: string
+  updated_at: string
+}
+
+export type FindingPage = {
+  items: Finding[]
+  next_offset: number | null
+}
+
+export type NotificationCategory = "info" | "security" | "warning"
+
+export type Notification = {
+  id: string
+  category: NotificationCategory
+  event_type: string
+  title: string
+  body: string
+  action_path: string | null
+  data: Record<string, unknown>
+  created_at: string
+  read_at: string | null
+}
+
+export type NotificationPage = {
+  items: Notification[]
+  next_offset: number | null
+  unread_count: number
+}
+
 export class ApiError extends Error {
   readonly code: string
   readonly requestId?: string
@@ -525,6 +577,56 @@ export const reviewsApi = {
     }),
   get: (reviewId: string) =>
     request<Review>(`/api/v1/reviews/${encodeURIComponent(reviewId)}`),
+}
+
+export const findingsApi = {
+  list: ({
+    reviewId,
+    page,
+    pageSize,
+    category,
+    severity,
+    status,
+    agentId,
+  }: {
+    reviewId: string
+    page: number
+    pageSize: number
+    category?: ReviewCategory
+    severity?: FindingSeverity
+    status?: FindingStatus
+    agentId?: string
+  }) =>
+    request<FindingPage>(
+      `/api/v1/reviews/${encodeURIComponent(reviewId)}/findings?${pageQuery({
+        page,
+        page_size: pageSize,
+        category,
+        severity,
+        status,
+        agent_id: agentId,
+      })}`,
+    ),
+  get: (findingId: string) =>
+    request<Finding>(`/api/v1/findings/${encodeURIComponent(findingId)}`),
+}
+
+export const notificationsApi = {
+  list: ({ page, pageSize }: { page: number; pageSize: number }) =>
+    request<NotificationPage>(
+      `/api/v1/notifications?${pageQuery({ page, page_size: pageSize })}`,
+    ),
+  markRead: (notificationId: string) =>
+    patch<{ item: Notification; changed: boolean }>(
+      `/api/v1/notifications/${encodeURIComponent(notificationId)}/read`,
+      {},
+    ),
+  markAllRead: () =>
+    patch<{ marked_count: number; read_at: string | null }>(
+      "/api/v1/notifications/read",
+      {},
+    ),
+  streamUrl: () => `${runtimeConfig.apiBaseUrl}/api/v1/notifications/stream`,
 }
 
 export const credentialsApi = {

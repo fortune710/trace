@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Link, useParams } from "react-router-dom"
 
+import { AgentDetailsPageSkeleton } from "@/components/agents/agent-details-page-skeleton"
 import { ProviderLogo } from "@/components/agents/provider-logo"
 import { AppShell } from "@/components/layout/app-shell"
 import {
@@ -443,7 +444,7 @@ export function AgentDetailsPage() {
 
   return (
     <AppShell>
-      <section className="mx-auto w-full max-w-4xl px-6 py-8 md:px-10 md:py-10">
+      <section className="mx-auto w-full max-w-6xl px-6 py-8 md:px-10 md:py-10">
         <Breadcrumb>
           <BreadcrumbList>
             <BreadcrumbItem>
@@ -459,7 +460,7 @@ export function AgentDetailsPage() {
         </Breadcrumb>
 
         {agent.isLoading ? (
-          <p className="mt-6 text-sm text-muted-foreground">Loading agent…</p>
+          <AgentDetailsPageSkeleton />
         ) : null}
 
         {agent.isError ? (
