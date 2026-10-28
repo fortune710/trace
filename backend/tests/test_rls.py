@@ -223,3 +223,22 @@ def test_internal_worker_role_has_only_the_access_required_by_internal_workers()
                 connection.execute(sa.text("SELECT name FROM public.projects"))
     finally:
         engine.dispose()
+
+
+@pytest.mark.integration
+def test_internal_worker_can_read_automatic_pull_request_preference() -> None:
+    internal_database_url = os.environ.get("INTERNAL_DATABASE_URL")
+    assert internal_database_url and "postgres-test" in internal_database_url
+    engine = sa.create_engine(internal_database_url)
+    try:
+        with engine.connect() as connection:
+            for column in ("id", "automatic_pull_requests"):
+                assert connection.execute(
+                    sa.text(
+                        "SELECT has_column_privilege("
+                        "current_user, 'public.users', :column, 'SELECT')"
+                    ),
+                    {"column": column},
+                ).scalar_one()
+    finally:
+        engine.dispose()
