@@ -26,6 +26,9 @@ _OAUTH_PROVIDER_DEFAULTS = {
     "google_authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
     "google_token_url": "https://oauth2.googleapis.com/token",
     "google_jwks_url": "https://www.googleapis.com/oauth2/v3/certs",
+    "linear_authorize_url": "https://linear.app/oauth/authorize",
+    "linear_token_url": "https://api.linear.app/oauth/token",
+    "linear_api_url": "https://api.linear.app/graphql",
 }
 
 
@@ -97,6 +100,12 @@ class AuthSettings(BaseSettings):
     google_authorize_url: str = _OAUTH_PROVIDER_DEFAULTS["google_authorize_url"]
     google_token_url: str = _OAUTH_PROVIDER_DEFAULTS["google_token_url"]
     google_jwks_url: str = _OAUTH_PROVIDER_DEFAULTS["google_jwks_url"]
+    linear_client_id: str | None = None
+    linear_client_secret: SecretStr | None = None
+    linear_redirect_uri: str | None = None
+    linear_authorize_url: str = _OAUTH_PROVIDER_DEFAULTS["linear_authorize_url"]
+    linear_token_url: str = _OAUTH_PROVIDER_DEFAULTS["linear_token_url"]
+    linear_api_url: str = _OAUTH_PROVIDER_DEFAULTS["linear_api_url"]
 
     model_config = SettingsConfigDict(env_prefix="AUTH_", extra="ignore")
 
@@ -263,6 +272,9 @@ class AuthSettings(BaseSettings):
             "google_authorize_url": self.google_authorize_url,
             "google_token_url": self.google_token_url,
             "google_jwks_url": self.google_jwks_url,
+            "linear_authorize_url": self.linear_authorize_url,
+            "linear_token_url": self.linear_token_url,
+            "linear_api_url": self.linear_api_url,
         }
         if self.environment != "test" and configured != _OAUTH_PROVIDER_DEFAULTS:
             raise AuthenticationConfigurationError(

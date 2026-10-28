@@ -6,10 +6,16 @@ from uuid import UUID, uuid4
 
 import pytest
 from langchain_core.tools import ToolException
+from pydantic import ValidationError
 
 import agents.execution.agent as execution_agent_module
 import agents.execution.executor as execution_executor_module
-from agents.execution.agent import Agent, FindingBatch, FindingOutput, ReviewTarget
+from agents.execution.agent import (
+    Agent,
+    FindingBatch,
+    RemediationFindingOutput,
+    ReviewTarget,
+)
 from agents.execution.executor import ReviewExecutionService, _source_failure_code
 from agents.execution.orchestrator import OrchestratorAgent
 from agents.execution.redaction import redact_text
@@ -25,9 +31,15 @@ from auth.errors import (
     ProviderUnavailable,
     RepositoryNotFound,
 )
-from db.types import ReviewCategory
+from db.types import RepositorySource, ReviewCategory
 from external_repositories.service import ReviewSourceFileError
+from findings.models import Finding
 from notifications.models import NotificationEventType
+from remediations.models import (
+    Remediation,
+    RemediationPullRequestOutboxJob,
+    RemediationStatus,
+)
 from reviews.config import AgentExecutionSettings
 from reviews.dispatch import _open_connection
 
@@ -41,6 +53,25 @@ def _tool_context() -> ToolExecutionContext:
         repository_access=None,  # type: ignore[arg-type]
         review_id=UUID("00000000-0000-0000-0000-000000000001"),
     )
+
+
+def _remediation_finding(**overrides: str) -> RemediationFindingOutput:
+    values = {
+        "severity": "high",
+        "title": "Missing authorization check",
+        "explanation": "The route does not verify the caller's organization.",
+        "prompt_text": "Add an organization authorization check to the route.",
+        "diff": (
+            "diff --git a/app.py b/app.py\n"
+            "--- a/app.py\n"
+            "+++ b/app.py\n"
+            "@@ -1 +1 @@\n"
+            "-allow = True\n"
+            "+allow = has_organization_access(user)\n"
+        ),
+    }
+    values.update(overrides)
+    return RemediationFindingOutput.model_validate(values)
 
 
 def test_agent_has_repository_tools_by_default() -> None:
@@ -203,6 +234,9 @@ def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -
     assert create_agent_arguments["tools"] == list(REPOSITORY_REVIEW_TOOLS)
     assert create_agent_arguments["response_format"] is FindingBatch
     assert "repository tools" in create_agent_arguments["system_prompt"]
+    assert "prompt_text" in create_agent_arguments["system_prompt"]
+    assert "diff --git" in create_agent_arguments["system_prompt"]
+    assert "files you inspected" in create_agent_arguments["system_prompt"]
     assert create_agent_arguments["context_schema"] is ToolExecutionContext
     assert messages[0].content == (
         "Review target:\n"
@@ -224,7 +258,7 @@ def test_orchestrator_runs_only_supplied_agents(monkeypatch) -> None:
         assert tool_context == _tool_context()
         return FindingBatch(
             findings=[
-                FindingOutput(
+                _remediation_finding(
                     severity="low",
                     title="Example",
                     explanation="Example explanation",
@@ -257,27 +291,66 @@ def test_redaction_removes_common_provider_keys() -> None:
     assert "[REDACTED_SECRET]" in value
 
 
+@pytest.mark.parametrize("field", ["prompt_text", "diff"])
+def test_remediation_finding_output_requires_fix_content(field: str) -> None:
+    values = _remediation_finding().model_dump()
+    values[field] = ""
+
+    with pytest.raises(ValidationError):
+        RemediationFindingOutput.model_validate(values)
+
+
 @pytest.mark.parametrize(
-    ("inserted_ids", "expected_notification_count"),
-    [([uuid4()], 1), ([], 0)],
+    ("finding_inserted", "expected_notification_count"),
+    [(True, 1), (False, 0)],
 )
-def test_first_inserted_finding_creates_one_review_notification(
-    monkeypatch, inserted_ids, expected_notification_count
+def test_new_findings_create_matching_remediations_and_deduplicated_findings_do_not(
+    monkeypatch, finding_inserted, expected_notification_count
 ) -> None:
     service = object.__new__(ReviewExecutionService)
     owner_id = uuid4()
     review_id = uuid4()
+    project_id = uuid4()
+    finding_id = uuid4()
+    remediation_id = uuid4()
     notifications: list[dict[str, object]] = []
+    remediation_statements = []
+
+    generated_ids = iter((finding_id, remediation_id))
+    monkeypatch.setattr(
+        execution_executor_module,
+        "uuid7",
+        lambda: next(generated_ids),
+    )
 
     class InsertResult:
         def scalars(self):
             return self
 
         def all(self):
-            return inserted_ids
+            return [finding_id] if finding_inserted else []
+
+    class PreferenceResult:
+        def scalar_one_or_none(self):
+            return False
+
+    class ProjectResult:
+        def mappings(self):
+            return self
+
+        def one_or_none(self):
+            return None
 
     class Connection:
-        def execute(self, _statement):
+        select_count = 0
+
+        def execute(self, statement):
+            if not hasattr(statement, "table"):
+                self.select_count += 1
+                return PreferenceResult() if self.select_count == 1 else ProjectResult()
+            if statement.table.name == Remediation.__tablename__:
+                remediation_statements.append(statement)
+                return None
             return InsertResult()
 
     @contextmanager
@@ -301,17 +374,15 @@ def test_first_inserted_finding_creates_one_review_notification(
     service._engine = object()
     service._persist_findings(
         owner_id=owner_id,
-        review=SimpleNamespace(id=review_id),
+        review=SimpleNamespace(id=review_id, project_id=project_id),
         review_agent=SimpleNamespace(
             id=uuid4(),
             agent_id=uuid4(),
             agent_specialization=ReviewCategory.SECURITY,
         ),
         finding_outputs=[
-            FindingOutput(
-                severity="high",
-                title="Missing authorization check",
-                explanation="The route does not verify the caller's organization.",
+            _remediation_finding(
+                prompt_text="Use token sk-example_secret_key_123456789012345 safely."
             )
         ],
     )
@@ -326,6 +397,101 @@ def test_first_inserted_finding_creates_one_review_notification(
                 "review_id": review_id,
             }
         ]
+    if finding_inserted:
+        assert len(remediation_statements) == 1
+        remediation_values = remediation_statements[0].compile().params
+        assert project_id in remediation_values.values()
+        assert finding_id in remediation_values.values()
+        assert remediation_id in remediation_values.values()
+        assert RemediationStatus.PROPOSED in remediation_values.values()
+        assert "sk-example_secret_key_123456789012345" not in str(remediation_values)
+        assert "[REDACTED_SECRET]" in str(remediation_values)
+    else:
+        assert remediation_statements == []
+
+
+def test_eligible_new_remediations_create_an_automatic_pr_outbox_record(
+    monkeypatch,
+) -> None:
+    service = object.__new__(ReviewExecutionService)
+    owner_id, review_id, project_id, finding_id, remediation_id, outbox_id = (
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+    )
+    statements = []
+    generated_ids = iter((finding_id, remediation_id, outbox_id))
+    monkeypatch.setattr(execution_executor_module, "uuid7", lambda: next(generated_ids))
+
+    class InsertResult:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [finding_id]
+
+    class PreferenceResult:
+        def scalar_one_or_none(self):
+            return True
+
+    class ProjectResult:
+        def mappings(self):
+            return self
+
+        def one_or_none(self):
+            return {
+                "source": RepositorySource.GITHUB,
+                "external_repository_id": "123",
+                "branch_name": "main",
+            }
+
+    class Connection:
+        select_count = 0
+
+        def execute(self, statement):
+            statements.append(statement)
+            if not hasattr(statement, "table"):
+                self.select_count += 1
+                return PreferenceResult() if self.select_count == 1 else ProjectResult()
+            if statement.table.name == Finding.__tablename__:
+                return InsertResult()
+            return None
+
+    @contextmanager
+    def fake_principal_transaction(_engine, _owner_id):
+        yield Connection()
+
+    monkeypatch.setattr(
+        execution_executor_module,
+        "principal_transaction",
+        fake_principal_transaction,
+    )
+    monkeypatch.setattr(
+        execution_executor_module, "create_notification", lambda *_a, **_k: None
+    )
+    service._engine = object()
+    service._persist_findings(
+        owner_id=owner_id,
+        review=SimpleNamespace(id=review_id, project_id=project_id),
+        review_agent=SimpleNamespace(
+            id=uuid4(), agent_id=uuid4(), agent_specialization=ReviewCategory.SECURITY
+        ),
+        finding_outputs=[_remediation_finding()],
+    )
+
+    assert any(
+        RemediationPullRequestOutboxJob.__tablename__ in str(statement)
+        for statement in statements
+    )
+    outbox_statement = next(
+        statement
+        for statement in statements
+        if RemediationPullRequestOutboxJob.__tablename__ in str(statement)
+    )
+    assert outbox_id in outbox_statement.compile().params.values()
 
 
 @pytest.mark.parametrize(

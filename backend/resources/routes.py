@@ -57,8 +57,7 @@ from resources.schemas import (
     ProjectPage,
     ProjectResponse,
     ProjectUpdate,
-    PullRequestResponse,
-    RemediationCreate,
+    RemediationPromptResponse,
     RemediationResponse,
     ReviewCreate,
     ReviewPage,
@@ -433,26 +432,6 @@ def install_resource_routes(
         )
         return result
 
-    @app.post(
-        "/findings/{finding_id}/remediations",
-        response_model=RemediationResponse,
-        status_code=status.HTTP_201_CREATED,
-    )
-    def create_remediation(
-        request: Request,
-        finding_id: UUID,
-        body: RemediationCreate,
-        principal: CurrentPrincipal,
-    ) -> dict[str, object]:
-        _require_csrf(request, principal, settings)
-        result = artifact_service().create_remediation(
-            owner_id=principal.user_id,
-            finding_id=finding_id,
-            proposed_diff=body.proposed_diff,
-        )
-        _audit(request, audit_hasher, audit_recorder, "remediation", "created")
-        return result
-
     @app.get(
         "/findings/{finding_id}/remediations", response_model=list[RemediationResponse]
     )
@@ -471,19 +450,21 @@ def install_resource_routes(
             owner_id=principal.user_id, remediation_id=remediation_id
         )
 
-    @app.post(
-        "/remediations/{remediation_id}/approve", response_model=RemediationResponse
+    @app.get(
+        "/remediations/{remediation_id}/prompt",
+        response_model=RemediationPromptResponse,
     )
-    def approve_remediation(
-        request: Request, remediation_id: UUID, principal: CurrentPrincipal
-    ) -> dict[str, object]:
+    def get_remediation_prompt(
+        request: Request,
+        remediation_id: UUID,
+        principal: CurrentPrincipal,
+    ) -> dict[str, str]:
         _require_csrf(request, principal, settings)
-        result = artifact_service().set_remediation_status(
+        result = artifact_service().get_remediation_prompt(
             owner_id=principal.user_id,
             remediation_id=remediation_id,
-            status=RemediationStatus.APPROVED,
         )
-        _audit(request, audit_hasher, audit_recorder, "remediation", "approved")
+        _audit(request, audit_hasher, audit_recorder, "remediation", "prompt_read")
         return result
 
     @app.post(
@@ -502,17 +483,6 @@ def install_resource_routes(
         return result
 
     @app.get(
-        "/remediations/{remediation_id}/pull-request",
-        response_model=PullRequestResponse,
-    )
-    def get_remediation_pull_request(
-        remediation_id: UUID, principal: CurrentPrincipal
-    ) -> dict[str, object]:
-        return artifact_service().get_pull_request(
-            owner_id=principal.user_id, remediation_id=remediation_id
-        )
-
-    @app.get(
         "/remediations/{remediation_id}/local-file-backup",
         response_model=LocalFileBackupResponse,
     )
@@ -521,14 +491,6 @@ def install_resource_routes(
     ) -> dict[str, object]:
         return artifact_service().get_local_backup(
             owner_id=principal.user_id, remediation_id=remediation_id
-        )
-
-    @app.get("/pull-requests/{artifact_id}", response_model=PullRequestResponse)
-    def get_pull_request(
-        artifact_id: UUID, principal: CurrentPrincipal
-    ) -> dict[str, object]:
-        return artifact_service().get_pull_request_by_id(
-            owner_id=principal.user_id, artifact_id=artifact_id
         )
 
     @app.get(

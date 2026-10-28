@@ -39,7 +39,7 @@ SECRET_CORPUS = (
     "ghr_test_refresh_91ab42",
     "sk-test_redaction_d84e11",
     "hvs.test_redaction_5aa901",
-    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.signature123",
+    "eyjabcdefghijk.abcdefghijk.abcdefghijk",
     "vault:v7:ciphertext_test_4e91",
     "raw_request_body_secret_77bd",
     "provider_response_secret_33fa",

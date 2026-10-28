@@ -95,3 +95,12 @@ export function ProjectDetailsPageSkeleton() {
     </div>
   )
 }
+
+export function ProjectIssuesSkeleton() {
+  return (
+    <div className="grid gap-6" aria-label="Loading issue-tracker settings">
+      <Skeleton className="h-28 w-full rounded-lg" />
+      <Skeleton className="h-56 w-full rounded-lg" />
+    </div>
+  )
+}

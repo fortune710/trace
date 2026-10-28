@@ -33,6 +33,8 @@ class NotificationEventType(str, Enum):
     OAUTH_SIGNED_IN = "oauth_signed_in"
     LOGGED_OUT = "logged_out"
     GITHUB_CONNECTED = "github_connected"
+    ISSUE_CREATED = "issue_created"
+    ISSUE_CREATION_FAILED = "issue_creation_failed"
 
 
 class Notification(Base):

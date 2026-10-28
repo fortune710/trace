@@ -65,6 +65,7 @@ from notifications.service import create_notification
 _STATE_TTL_SECONDS = 600
 OAUTH_CALLBACK_ROUTE = "/auth/oauth/{provider}/callback"
 GITHUB_CONNECT_START_ROUTE = "/auth/oauth/github/connect/start"
+LINEAR_CONNECT_START_ROUTE = "/auth/oauth/linear/connect/start"
 
 
 class OAuthUnavailable(RuntimeError):
@@ -90,6 +91,7 @@ def _notify_github_connected(owner_id: UUID, credential_id: UUID) -> None:
 class OAuthPurpose(StrEnum):
     LOGIN = "login"
     REPOSITORY_CONNECTION = "repository_connection"
+    ISSUE_TRACKING_CONNECTION = "issue_tracking_connection"
 
 
 class GitHubConnectionStatus(StrEnum):
@@ -138,9 +140,7 @@ class OAuthStateStore:
         user_id: UUID | None = None,
         session_id: UUID | None = None,
     ) -> tuple[str, str, str | None]:
-        if purpose == OAuthPurpose.REPOSITORY_CONNECTION and (
-            user_id is None or session_id is None
-        ):
+        if purpose != OAuthPurpose.LOGIN and (user_id is None or session_id is None):
             raise ValueError("OAuth connection owner and session are required")
         if purpose == OAuthPurpose.LOGIN and (
             user_id is not None or session_id is not None
@@ -199,7 +199,11 @@ class OAuthStateStore:
             )
             if (
                 transaction.provider
-                not in {IdentityProvider.GITHUB.value, IdentityProvider.GOOGLE.value}
+                not in {
+                    IdentityProvider.GITHUB.value,
+                    IdentityProvider.GOOGLE.value,
+                    CredentialProvider.LINEAR.value,
+                }
                 or not transaction.verifier
                 or not transaction.destination
                 or (
@@ -211,11 +215,23 @@ class OAuthStateStore:
                     )
                 )
                 or (
+                    transaction.purpose == OAuthPurpose.ISSUE_TRACKING_CONNECTION
+                    and (
+                        transaction.provider != CredentialProvider.LINEAR.value
+                        or not transaction.user_id
+                        or not transaction.session_id
+                    )
+                )
+                or (
                     transaction.purpose == OAuthPurpose.LOGIN
                     and (
                         transaction.user_id is not None
                         or transaction.session_id is not None
                     )
+                )
+                or (
+                    transaction.purpose == OAuthPurpose.LOGIN
+                    and transaction.provider == CredentialProvider.LINEAR.value
                 )
             ):
                 raise ValueError
@@ -409,6 +425,59 @@ def install_oauth_routes(
             "authorization_url": f"{provider_config.authorize_url}?{urlencode(parameters)}"
         }
 
+    @app.post(LINEAR_CONNECT_START_ROUTE)
+    async def linear_connect_start(
+        request: FastAPIRequest,
+        principal: CurrentPrincipal,
+        return_to: str | None = None,
+    ):
+        _require_connection_csrf(request, principal, settings)
+        provider = CredentialProvider.LINEAR.value
+        provider_config = _provider_configuration(
+            settings,
+            provider,
+            purpose=OAuthPurpose.ISSUE_TRACKING_CONNECTION,
+        )
+        try:
+            await enforce_rate_limit(
+                rate_limiter(),
+                policy=AUTH_RATE_LIMIT_POLICIES["auth.oauth_start.ip"],
+                subject=request.client.host if request.client else "unknown",
+            )
+            destination = _destination(settings, return_to)
+            state, verifier, _nonce = await state_store().create(
+                provider=provider,
+                destination=destination,
+                user_agent=request.headers.get("user-agent"),
+                purpose=OAuthPurpose.ISSUE_TRACKING_CONNECTION,
+                user_id=principal.user_id,
+                session_id=principal.session_id,
+            )
+        except OAuthUnavailable as error:
+            raise _unavailable() from error
+        except ValueError as error:
+            raise _invalid_request() from error
+        parameters = {
+            "client_id": provider_config.client_id,
+            "redirect_uri": provider_config.redirect_uri,
+            "response_type": "code",
+            "scope": provider_config.scope,
+            "state": state,
+            "code_challenge": _pkce_challenge(verifier),
+            "code_challenge_method": "S256",
+        }
+        audit(
+            request,
+            event="oauth",
+            outcome="accepted",
+            reason="issue_tracking_authorization_started",
+            status_code=302,
+            provider=provider,
+        )
+        return {
+            "authorization_url": f"{provider_config.authorize_url}?{urlencode(parameters)}"
+        }
+
     @app.get(
         "/auth/oauth/github/connection",
         response_model=GitHubConnectionStatusResponse,
@@ -479,7 +548,7 @@ def install_oauth_routes(
             identity = await asyncio.to_thread(
                 _provider_identity, configuration, code, transaction
             )
-            if transaction.purpose == OAuthPurpose.REPOSITORY_CONNECTION:
+            if transaction.purpose != OAuthPurpose.LOGIN:
                 if (
                     not transaction.user_id
                     or not transaction.session_id
@@ -494,31 +563,36 @@ def install_oauth_routes(
                 credential_metadata = await asyncio.to_thread(
                     credential_service().create_or_replace,
                     owner_id=UUID(transaction.user_id),
-                    provider=CredentialProvider.GITHUB,
+                    provider=(
+                        CredentialProvider.GITHUB
+                        if transaction.purpose == OAuthPurpose.REPOSITORY_CONNECTION
+                        else CredentialProvider.LINEAR
+                    ),
                     kind=CredentialKind.OAUTH,
                     payload=identity.credential_payload,
                 )
-                await asyncio.to_thread(
-                    provision_external_repository,
-                    engine=get_engine(),
-                    owner_id=UUID(transaction.user_id),
-                    credential_id=credential_metadata.id,
-                    external_user_id=identity.subject,
-                )
-                await invalidate_repository_catalog(
-                    redis_client=get_redis_client(),
-                    owner_id=UUID(transaction.user_id),
-                    source=RepositoryProvider.GITHUB,
-                )
-                try:
+                if transaction.purpose == OAuthPurpose.REPOSITORY_CONNECTION:
                     await asyncio.to_thread(
-                        _notify_github_connected,
-                        UUID(transaction.user_id),
-                        credential_metadata.id,
+                        provision_external_repository,
+                        engine=get_engine(),
+                        owner_id=UUID(transaction.user_id),
+                        credential_id=credential_metadata.id,
+                        external_user_id=identity.subject,
                     )
-                except sa.exc.SQLAlchemyError:
-                    # The GitHub connection is already usable; this alert is best-effort.
-                    pass
+                    await invalidate_repository_catalog(
+                        redis_client=get_redis_client(),
+                        owner_id=UUID(transaction.user_id),
+                        source=RepositoryProvider.GITHUB,
+                    )
+                    try:
+                        await asyncio.to_thread(
+                            _notify_github_connected,
+                            UUID(transaction.user_id),
+                            credential_metadata.id,
+                        )
+                    except sa.exc.SQLAlchemyError:
+                        # The GitHub connection is already usable; this alert is best-effort.
+                        pass
             else:
                 result = await asyncio.to_thread(
                     auth_service().oauth_login,
@@ -563,17 +637,18 @@ def install_oauth_routes(
                 purpose=transaction.purpose if transaction else OAuthPurpose.LOGIN,
             )
 
-        if transaction.purpose == OAuthPurpose.REPOSITORY_CONNECTION:
-            response = _repository_connection_redirect(
+        if transaction.purpose != OAuthPurpose.LOGIN:
+            response = _connection_redirect(
                 transaction.destination,
                 outcome="connected",
                 request_id=request_id,
+                provider=provider,
             )
             audit(
                 request,
                 event="oauth",
                 outcome="accepted",
-                reason="repository_connected",
+                reason="provider_connected",
                 status_code=303,
                 provider=provider,
             )
@@ -613,6 +688,7 @@ class ProviderConfiguration:
     github_user_url: str | None = None
     github_emails_url: str | None = None
     google_jwks_url: str | None = None
+    linear_api_url: str | None = None
 
 
 def _provider_configuration(
@@ -655,6 +731,24 @@ def _provider_configuration(
             settings.google_token_url,
             "openid email profile",
             google_jwks_url=settings.google_jwks_url,
+        )
+    elif provider == CredentialProvider.LINEAR.value:
+        if purpose != OAuthPurpose.ISSUE_TRACKING_CONNECTION:
+            raise _invalid_request()
+        client_id, secret, redirect_uri = (
+            settings.linear_client_id,
+            settings.linear_client_secret,
+            settings.linear_redirect_uri,
+        )
+        config = ProviderConfiguration(
+            provider,
+            client_id or "",
+            secret.get_secret_value() if secret else "",
+            redirect_uri or "",
+            settings.linear_authorize_url,
+            settings.linear_token_url,
+            "read,issues:create",
+            linear_api_url=settings.linear_api_url,
         )
     else:
         raise _invalid_request()
@@ -723,6 +817,17 @@ def _provider_identity(
             if transaction.purpose == OAuthPurpose.REPOSITORY_CONNECTION
             else None,
         )
+    if config.provider == CredentialProvider.LINEAR.value:
+        assert config.linear_api_url is not None
+        viewer = _linear_viewer(config.linear_api_url, access_token)
+        subject = viewer.get("id") if isinstance(viewer, dict) else None
+        if not isinstance(subject, str) or not subject:
+            raise OAuthRejected("Linear identity is invalid")
+        return ProviderIdentity(
+            subject=subject,
+            email="linear-connection",
+            credential_payload=_oauth_credential_payload(token),
+        )
     id_token = token.get("id_token")
     if not isinstance(id_token, str) or not transaction.nonce:
         raise OAuthRejected("Google identity is invalid")
@@ -764,6 +869,10 @@ def _provider_identity(
 
 
 def _github_credential_payload(token: dict[str, object]) -> dict[str, object]:
+    return _oauth_credential_payload(token)
+
+
+def _oauth_credential_payload(token: dict[str, object]) -> dict[str, object]:
     access_token = token.get("access_token")
     if (
         not isinstance(access_token, str)
@@ -792,6 +901,29 @@ def _github_credential_payload(token: dict[str, object]) -> dict[str, object]:
             datetime.now(UTC) + timedelta(seconds=refresh_expires_in)
         ).isoformat()
     return payload
+
+
+def _linear_viewer(api_url: str, access_token: str) -> dict | list:
+    request = Request(
+        api_url,
+        data=b'{"query":"query { viewer { id } }"}',
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    result = _read_json(request)
+    if not isinstance(result, dict):
+        raise OAuthRejected("Linear identity is invalid")
+    data = result.get("data")
+    if not isinstance(data, dict):
+        raise OAuthRejected("Linear identity is invalid")
+    viewer = data.get("viewer")
+    if not isinstance(viewer, dict):
+        raise OAuthRejected("Linear identity is invalid")
+    return viewer
 
 
 def refresh_github_credential(
@@ -1047,11 +1179,16 @@ def _oauth_failure_redirect(
     *,
     purpose: OAuthPurpose = OAuthPurpose.LOGIN,
 ) -> RedirectResponse:
-    if purpose == OAuthPurpose.REPOSITORY_CONNECTION:
-        return _repository_connection_redirect(
+    if purpose != OAuthPurpose.LOGIN:
+        return _connection_redirect(
             destination,
             outcome="failed",
             request_id=request_id,
+            provider=(
+                CredentialProvider.GITHUB.value
+                if purpose == OAuthPurpose.REPOSITORY_CONNECTION
+                else CredentialProvider.LINEAR.value
+            ),
         )
     return RedirectResponse(
         f"{destination.rstrip('/')}/auth/callback?{urlencode({'error': 'oauth_failed', 'request_id': request_id})}",
@@ -1064,6 +1201,25 @@ def _repository_connection_redirect(
 ) -> RedirectResponse:
     return RedirectResponse(
         f"{destination.rstrip('/')}/integrations?{urlencode({'github': outcome, 'request_id': request_id})}",
+        status_code=303,
+    )
+
+
+def _connection_redirect(
+    destination: str,
+    *,
+    outcome: Literal["connected", "failed"],
+    request_id: str,
+    provider: str,
+) -> RedirectResponse:
+    if provider == CredentialProvider.GITHUB.value:
+        return _repository_connection_redirect(
+            destination,
+            outcome=outcome,
+            request_id=request_id,
+        )
+    return RedirectResponse(
+        f"{destination.rstrip('/')}/integrations?{urlencode({'linear': outcome, 'request_id': request_id})}",
         status_code=303,
     )
 

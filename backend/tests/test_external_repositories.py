@@ -40,8 +40,19 @@ from external_repositories.service import (
     RepositoryService,
     ReviewGitHubSourceAccess,
     ReviewSourceFileError,
+    _is_safe_patch,
     invalidate_repository_catalog,
 )
+
+
+def test_remediation_patch_validation_rejects_unsafe_or_malformed_diffs() -> None:
+    assert _is_safe_patch(
+        "diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n@@ -1 +1 @@\n-old\n+new\n"
+    )
+    assert not _is_safe_patch("not a diff")
+    assert not _is_safe_patch("diff --git a/.git/config b/.git/config\n")
+    assert not _is_safe_patch("diff --git a/file b/file\nGIT binary patch\n")
+    assert not _is_safe_patch("diff --git a/file b/file\nnew file mode 120000\n")
 
 
 def _repository_payload() -> dict[str, object]:

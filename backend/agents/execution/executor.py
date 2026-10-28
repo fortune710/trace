@@ -19,7 +19,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from agents.execution.agent import Agent, FindingOutput, ReviewTarget
+from agents.execution.agent import Agent, RemediationFindingOutput, ReviewTarget
 from agents.execution.orchestrator import OrchestratorAgent
 from agents.execution.redaction import redact_text
 from agents.execution.tools import ToolExecutionContext
@@ -33,10 +33,17 @@ from auth.errors import (
 from auth.uuids import uuid7
 from credentials.models import CredentialProvider
 from db.rls import principal_transaction
+from db.types import RepositorySource
 from external_repositories.service import RepositoryService, ReviewGitHubSourceAccess
 from findings.models import Finding
 from notifications.models import NotificationEventType
 from notifications.service import create_notification
+from projects.models import Project
+from remediations.models import (
+    Remediation,
+    RemediationPullRequestOutboxJob,
+    RemediationStatus,
+)
 from reviews.config import AgentExecutionSettings
 from reviews.models import (
     Review,
@@ -47,6 +54,7 @@ from reviews.models import (
     ReviewAgentStatus,
     ReviewStatus,
 )
+from users.models import User
 
 logger = logging.getLogger("trace.agent_execution")
 
@@ -486,11 +494,16 @@ class ReviewExecutionService:
         owner_id: UUID,
         review: Review,
         review_agent: ReviewAgent,
-        finding_outputs: list[FindingOutput],
+        finding_outputs: list[RemediationFindingOutput],
     ) -> None:
-        finding_rows = []
+        finding_rows: list[dict[str, object]] = []
+        remediation_rows_by_finding_id: dict[UUID, dict[str, object]] = {}
         for finding in finding_outputs:
-            normalized = finding.model_dump(mode="json")
+            finding_id = uuid7()
+            normalized = finding.model_dump(
+                mode="json",
+                exclude={"prompt_text", "diff"},
+            )
             redacted_finding = {
                 key: redact_text(value) if isinstance(value, str) else value
                 for key, value in normalized.items()
@@ -504,7 +517,7 @@ class ReviewExecutionService:
             ).digest()
             finding_rows.append(
                 {
-                    "id": uuid7(),
+                    "id": finding_id,
                     "owner_id": owner_id,
                     "review_id": review.id,
                     "agent_id": review_agent.agent_id,
@@ -513,9 +526,34 @@ class ReviewExecutionService:
                     **redacted_finding,
                 }
             )
+            remediation_rows_by_finding_id[finding_id] = {
+                "id": uuid7(),
+                "owner_id": owner_id,
+                "project_id": review.project_id,
+                "finding_id": finding_id,
+                "prompt_text": redact_text(finding.prompt_text),
+                "proposed_diff": redact_text(finding.diff),
+                "status": RemediationStatus.PROPOSED,
+            }
         if not finding_rows:
             return
         with principal_transaction(self._engine, owner_id) as connection:
+            automatic_pr_enabled = connection.execute(
+                sa.select(User.automatic_pull_requests).where(User.id == owner_id)
+            ).scalar_one_or_none()
+            project = (
+                connection.execute(
+                    sa.select(
+                        Project.source,
+                        Project.external_repository_id,
+                        Project.branch_name,
+                    ).where(
+                        Project.id == review.project_id, Project.owner_id == owner_id
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
             inserted_ids = (
                 connection.execute(
                     pg_insert(Finding)
@@ -534,6 +572,38 @@ class ReviewExecutionService:
                 .scalars()
                 .all()
             )
+            remediation_rows = [
+                remediation_rows_by_finding_id[finding_id]
+                for finding_id in inserted_ids
+            ]
+            if remediation_rows:
+                connection.execute(sa.insert(Remediation).values(remediation_rows))
+                automatic_pr_eligible = (
+                    automatic_pr_enabled is True
+                    and project is not None
+                    and project["source"] is RepositorySource.GITHUB
+                    and isinstance(project["external_repository_id"], str)
+                    and bool(project["external_repository_id"])
+                    and isinstance(project["branch_name"], str)
+                    and bool(project["branch_name"])
+                )
+                if automatic_pr_eligible:
+                    connection.execute(
+                        pg_insert(RemediationPullRequestOutboxJob)
+                        .values(
+                            [
+                                {
+                                    "idempotency_id": uuid7(),
+                                    "owner_id": owner_id,
+                                    "remediation_id": remediation["id"],
+                                }
+                                for remediation in remediation_rows
+                            ]
+                        )
+                        .on_conflict_do_nothing(
+                            constraint="remediation_pr_outbox_owner_remediation_key"
+                        )
+                    )
             if inserted_ids:
                 create_notification(
                     connection,
@@ -547,6 +617,7 @@ class ReviewExecutionService:
             review_id=review.id,
             review_agent_id=review_agent.id,
             findings_created=len(inserted_ids),
+            remediations_created=len(remediation_rows),
         )
 
     def _finish_review_agent_attempt(

@@ -1,6 +1,10 @@
 import { Link, useParams } from "react-router-dom"
 
 import { FindingDetailsPageSkeleton } from "@/components/findings/finding-details-page-skeleton"
+import { CodingAgentPrompt } from "@/components/findings/coding-agent-prompt"
+import { FindingIssueActions } from "@/components/findings/finding-issue-actions"
+import { FindingIssueLinks } from "@/components/findings/finding-issue-links"
+import { ProposedDiff } from "@/components/findings/proposed-diff"
 import { AppShell } from "@/components/layout/app-shell"
 import {
   Breadcrumb,
@@ -89,12 +93,20 @@ export function FindingDetailsPage() {
         ) : null}
         {finding.data ? (
           <article className="mt-6 rounded-lg border border-border bg-card p-6">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              {finding.data.severity} · {finding.data.category}
-            </p>
-            <h1 className="mt-2 text-xl font-medium tracking-tight">
-              {finding.data.title}
-            </h1>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {finding.data.severity} · {finding.data.category}
+                </p>
+                <h1 className="mt-2 text-xl font-medium tracking-tight">
+                  {finding.data.title}
+                </h1>
+              </div>
+              <FindingIssueActions
+                findingId={finding.data.id}
+                status={finding.data.status}
+              />
+            </div>
             <p className="mt-5 whitespace-pre-wrap text-sm text-muted-foreground">
               {finding.data.explanation}
             </p>
@@ -135,6 +147,9 @@ export function FindingDetailsPage() {
                 </div>
               ) : null}
             </dl>
+            <ProposedDiff findingId={finding.data.id} />
+            <CodingAgentPrompt findingId={finding.data.id} />
+            <FindingIssueLinks findingId={finding.data.id} />
           </article>
         ) : null}
       </section>

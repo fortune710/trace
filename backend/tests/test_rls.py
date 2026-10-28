@@ -68,6 +68,12 @@ def test_owner_rls_isolation_and_transaction_local_context() -> None:
                 sa.text("SELECT current_setting('trace.current_user_id', true)")
             ).scalar_one_or_none() in {"", None}
             assert connection.execute(sa.select(Project)).scalars().all() == []
+            with pytest.raises(sa.exc.DBAPIError):
+                connection.execute(
+                    sa.text(
+                        "SELECT count(*) FROM private.remediation_pull_request_outbox_jobs"
+                    )
+                )
 
         with principal_transaction(engine, owner_id) as connection:
             visible_ids = set(connection.execute(sa.select(Project.id)).scalars())
@@ -150,12 +156,26 @@ def test_internal_worker_role_has_only_the_access_required_by_internal_workers()
                 ).scalar_one()
                 == 0
             )
+            assert (
+                connection.execute(
+                    sa.text(
+                        "SELECT count(*) FROM private.remediation_pull_request_outbox_jobs"
+                    )
+                ).scalar_one()
+                == 0
+            )
             required_privileges = {
                 "public.reviews": {"SELECT", "UPDATE"},
                 "public.review_agents": {"SELECT", "UPDATE"},
                 "public.findings": {"INSERT"},
+                "public.remediations": {"SELECT", "UPDATE"},
                 "public.external_repositories": {"SELECT"},
                 "private.review_dispatch_jobs": {"SELECT", "UPDATE", "DELETE"},
+                "private.remediation_pull_request_outbox_jobs": {
+                    "SELECT",
+                    "UPDATE",
+                    "DELETE",
+                },
                 "private.credentials": {"SELECT", "UPDATE"},
                 "private.review_agent_attempts": {"SELECT", "INSERT", "UPDATE"},
                 "private.review_agent_execution_configs": {"SELECT"},
@@ -169,7 +189,15 @@ def test_internal_worker_role_has_only_the_access_required_by_internal_workers()
                         ),
                         {"relation": relation, "privilege": privilege},
                     ).scalar_one()
-            for column in ("owner_id", "review_id", "agent_id", "content_digest"):
+            for column in (
+                "id",
+                "owner_id",
+                "review_id",
+                "agent_id",
+                "content_digest",
+                "status",
+                "title",
+            ):
                 assert connection.execute(
                     sa.text(
                         "SELECT has_column_privilege("
@@ -177,7 +205,40 @@ def test_internal_worker_role_has_only_the_access_required_by_internal_workers()
                     ),
                     {"column": column},
                 ).scalar_one()
+            for column in (
+                "id",
+                "owner_id",
+                "source",
+                "external_repository_id",
+                "branch_name",
+            ):
+                assert connection.execute(
+                    sa.text(
+                        "SELECT has_column_privilege("
+                        "current_user, 'public.projects', :column, 'SELECT')"
+                    ),
+                    {"column": column},
+                ).scalar_one()
             with pytest.raises(sa.exc.DBAPIError):
-                connection.execute(sa.text("SELECT count(*) FROM public.projects"))
+                connection.execute(sa.text("SELECT name FROM public.projects"))
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
+def test_internal_worker_can_read_automatic_pull_request_preference() -> None:
+    internal_database_url = os.environ.get("INTERNAL_DATABASE_URL")
+    assert internal_database_url and "postgres-test" in internal_database_url
+    engine = sa.create_engine(internal_database_url)
+    try:
+        with engine.connect() as connection:
+            for column in ("id", "automatic_pull_requests"):
+                assert connection.execute(
+                    sa.text(
+                        "SELECT has_column_privilege("
+                        "current_user, 'public.users', :column, 'SELECT')"
+                    ),
+                    {"column": column},
+                ).scalar_one()
     finally:
         engine.dispose()

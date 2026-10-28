@@ -180,13 +180,17 @@ class AuthService:
         self._dispatch(job_id)
         return user_id
 
-    def account_profile(self, *, user_id: UUID) -> tuple[str | None, str | None]:
+    def account_profile(self, *, user_id: UUID) -> tuple[str | None, str | None, bool]:
         """Return the authenticated user's display metadata without secrets."""
 
         try:
             with principal_transaction(self._engine, user_id) as connection:
                 row = connection.execute(
-                    sa.select(AuthUser.email, User.display_name)
+                    sa.select(
+                        AuthUser.email,
+                        User.display_name,
+                        User.automatic_pull_requests,
+                    )
                     .join(User, User.id == AuthUser.id)
                     .where(AuthUser.id == user_id)
                 ).one_or_none()
@@ -196,7 +200,30 @@ class AuthService:
             ) from error
         if row is None:
             raise AuthenticationUnavailable("Authenticated account is unavailable")
-        return row.email, row.display_name
+        return row.email, row.display_name, row.automatic_pull_requests
+
+    def update_automatic_pull_requests(
+        self, *, user_id: UUID, automatic_pull_requests: bool
+    ) -> bool:
+        """Persist one owner's PR-confirmation preference under RLS."""
+
+        try:
+            with principal_transaction(self._engine, user_id) as connection:
+                result = connection.execute(
+                    sa.update(User)
+                    .where(User.id == user_id)
+                    .values(
+                        automatic_pull_requests=automatic_pull_requests,
+                        updated_at=sa.func.current_timestamp(),
+                    )
+                )
+        except sa.exc.SQLAlchemyError as error:
+            raise AuthenticationUnavailable(
+                "Authentication database is unavailable"
+            ) from error
+        if result.rowcount != 1:
+            raise AuthenticationUnavailable("Authenticated account is unavailable")
+        return automatic_pull_requests
 
     def verify_email(self, *, token: str) -> UUID | None:
         try:

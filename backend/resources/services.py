@@ -14,9 +14,15 @@ from sqlalchemy.orm import Session
 
 from agents.catalog import supports_model
 from agents.models import Agent
-from artifacts.models import LocalFileBackup, PullRequest
+from artifacts.models import LocalFileBackup
 from audit.outbox import AuditRecorder
-from auth.errors import AuthorizationDenied, ResourceConflict, ResourceNotFound
+from auth.errors import (
+    AuthorizationDenied,
+    PromptRenderFailed,
+    ResourceConflict,
+    ResourceNotFound,
+    ResourceUnavailable,
+)
 from auth.uuids import uuid7
 from credentials.models import Credential, CredentialKind
 from db.rls import principal_transaction
@@ -27,6 +33,7 @@ from notifications.models import NotificationEventType
 from notifications.service import create_notification
 from projects.models import Project, ProjectCategory
 from remediations.models import Remediation, RemediationStatus
+from remediations.prompt_template import render_remediation_prompt
 from reviews.models import (
     Review,
     ReviewAgent,
@@ -147,6 +154,7 @@ def _project_response(project: Project) -> dict[str, object]:
         "current_revision": project.current_revision,
         "category": project.category,
         "auto_create_pull_requests": project.auto_create_pull_requests,
+        "issue_tracking_details": project.issue_tracking_details,
         "created_at": project.created_at,
         "updated_at": project.updated_at,
         "archived_at": project.archived_at,
@@ -280,6 +288,17 @@ class ProjectService:
                         raise ValueError("Local project name is required")
 
                 project_id = uuid7()
+                issue_tracking_details: dict[str, object] = {"connected_projects": []}
+                if repository_metadata is not None:
+                    issue_tracking_details = {
+                        "connected_projects": [
+                            {
+                                "provider": source.value,
+                                "owner": repository_metadata.owner_login,
+                                "project": repository_metadata.name,
+                            }
+                        ]
+                    }
                 connection.execute(
                     sa.insert(Project).values(
                         id=project_id,
@@ -327,6 +346,7 @@ class ProjectService:
                         auto_create_pull_requests=bool(
                             values.get("auto_create_pull_requests", False)
                         ),
+                        issue_tracking_details=issue_tracking_details,
                         imported_at=sa.func.current_timestamp()
                         if repository_metadata is not None
                         else None,
@@ -1236,47 +1256,6 @@ class ArtifactService:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 
-    def create_remediation(
-        self, *, owner_id: UUID, finding_id: UUID, proposed_diff: str
-    ) -> dict[str, object]:
-        with principal_transaction(self._engine, owner_id) as connection:
-            row = connection.execute(
-                sa.select(Finding.id, Review.project_id)
-                .join(
-                    Review,
-                    sa.and_(
-                        Review.id == Finding.review_id,
-                        Review.owner_id == Finding.owner_id,
-                    ),
-                )
-                .where(Finding.id == finding_id, Finding.owner_id == owner_id)
-            ).one_or_none()
-            if row is None:
-                _raise_access(connection, "finding", finding_id)
-            assert row is not None
-            remediation_id = uuid7()
-            connection.execute(
-                sa.insert(Remediation).values(
-                    id=remediation_id,
-                    owner_id=owner_id,
-                    project_id=row.project_id,
-                    finding_id=finding_id,
-                    proposed_diff=proposed_diff,
-                    status=RemediationStatus.PROPOSED,
-                )
-            )
-            remediation = (
-                connection.execute(
-                    sa.select(Remediation.__table__).where(
-                        Remediation.id == remediation_id,
-                        Remediation.owner_id == owner_id,
-                    )
-                )
-                .mappings()
-                .one()
-            )
-        return _remediation_response(remediation)
-
     def list_remediations(
         self, *, owner_id: UUID, finding_id: UUID
     ) -> list[dict[str, object]]:
@@ -1309,10 +1288,63 @@ class ArtifactService:
             row = self._owned_remediation(connection, owner_id, remediation_id)
         return _remediation_response(row)
 
+    def get_remediation_prompt(
+        self, *, owner_id: UUID, remediation_id: UUID
+    ) -> dict[str, str]:
+        try:
+            with principal_transaction(self._engine, owner_id) as connection:
+                remediation = self._owned_remediation(
+                    connection, owner_id, remediation_id
+                )
+                prompt_text = remediation["prompt_text"]
+                if not isinstance(prompt_text, str) or not prompt_text:
+                    raise ResourceNotFound()
+                context = (
+                    connection.execute(
+                        sa.select(
+                            Remediation.prompt_text,
+                            Review.source_revision,
+                            Review.status.label("review_status"),
+                        )
+                        .select_from(Remediation)
+                        .join(
+                            Finding,
+                            sa.and_(
+                                Finding.owner_id == Remediation.owner_id,
+                                Finding.id == Remediation.finding_id,
+                            ),
+                        )
+                        .join(
+                            Review,
+                            sa.and_(
+                                Review.owner_id == Finding.owner_id,
+                                Review.id == Finding.review_id,
+                            ),
+                        )
+                        .where(
+                            Remediation.id == remediation_id,
+                            Remediation.owner_id == owner_id,
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+        except sa.exc.OperationalError:
+            raise ResourceUnavailable() from None
+        if context is None:
+            raise ResourceNotFound()
+        if context["review_status"] is not ReviewStatus.COMPLETED:
+            raise ResourceConflict("review_not_completed")
+        try:
+            prompt = render_remediation_prompt(dict(context))
+        except (TypeError, ValueError):
+            raise PromptRenderFailed() from None
+        return {"prompt_text": prompt}
+
     def set_remediation_status(
         self, *, owner_id: UUID, remediation_id: UUID, status: RemediationStatus
     ) -> dict[str, object]:
-        if status not in {RemediationStatus.APPROVED, RemediationStatus.REJECTED}:
+        if status is not RemediationStatus.REJECTED:
             raise ResourceConflict("remediation_state_conflict")
         observed_version = self._read_mutation_version(
             owner_id=owner_id, remediation_id=remediation_id
@@ -1335,9 +1367,6 @@ class ArtifactService:
                 )
                 .values(
                     status=status,
-                    approved_at=sa.func.current_timestamp()
-                    if status is RemediationStatus.APPROVED
-                    else None,
                     mutation_version=Remediation.mutation_version + 1,
                     updated_at=sa.func.current_timestamp(),
                 )
@@ -1368,26 +1397,6 @@ class ArtifactService:
                 _raise_access(connection, "remediation", remediation_id)
             return version
 
-    def get_pull_request(
-        self, *, owner_id: UUID, remediation_id: UUID
-    ) -> dict[str, object]:
-        with principal_transaction(self._engine, owner_id) as connection:
-            self._owned_remediation(connection, owner_id, remediation_id)
-            row = cast(
-                PullRequest | None,
-                _orm_scalar_one_or_none(
-                    connection,
-                    sa.select(PullRequest).where(
-                        PullRequest.owner_id == owner_id,
-                        PullRequest.remediation_id == remediation_id,
-                    ),
-                ),
-            )
-            if row is None:
-                raise ResourceNotFound()
-            assert row is not None
-        return _artifact_response(row)
-
     def get_local_backup(
         self, *, owner_id: UUID, remediation_id: UUID
     ) -> dict[str, object]:
@@ -1406,23 +1415,6 @@ class ArtifactService:
             if row is None:
                 raise ResourceNotFound()
             assert row is not None
-        return _artifact_response(row)
-
-    def get_pull_request_by_id(
-        self, *, owner_id: UUID, artifact_id: UUID
-    ) -> dict[str, object]:
-        with principal_transaction(self._engine, owner_id) as connection:
-            row = cast(
-                PullRequest | None,
-                _orm_scalar_one_or_none(
-                    connection,
-                    sa.select(PullRequest).where(
-                        PullRequest.id == artifact_id, PullRequest.owner_id == owner_id
-                    ),
-                ),
-            )
-            if row is None:
-                _raise_access(connection, "pull_request", artifact_id)
         return _artifact_response(row)
 
     def get_local_backup_by_id(
@@ -1468,6 +1460,7 @@ def _remediation_response(row: sa.RowMapping) -> dict[str, object]:
         "project_id": row["project_id"],
         "finding_id": row["finding_id"],
         "proposed_diff": row["proposed_diff"],
+        "pull_request": row["pull_request"],
         "status": row["status"],
         "approved_at": row["approved_at"],
         "created_at": row["created_at"],
@@ -1475,18 +1468,7 @@ def _remediation_response(row: sa.RowMapping) -> dict[str, object]:
     }
 
 
-def _artifact_response(row: PullRequest | LocalFileBackup) -> dict[str, object]:
-    if isinstance(row, PullRequest):
-        return {
-            "id": row.id,
-            "remediation_id": row.remediation_id,
-            "repository_url": row.repository_url,
-            "pull_request_number": row.pull_request_number,
-            "pull_request_url": row.pull_request_url,
-            "branch_name": row.branch_name,
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
-        }
+def _artifact_response(row: LocalFileBackup) -> dict[str, object]:
     return {
         "id": row.id,
         "remediation_id": row.remediation_id,

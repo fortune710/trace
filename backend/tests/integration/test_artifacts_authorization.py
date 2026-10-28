@@ -110,37 +110,21 @@ def test_owner_can_read_and_mutate_findings_and_remediations(
         "to_status": "accepted",
     }
 
-    created = owner.request(
-        "POST",
-        f"/api/v1/findings/{graph['finding_id']}/remediations",
-        json={"proposed_diff": "diff --git a/a b/a"},
-    )
-    assert created.status_code == 201
-    remediation_id = created.json()["id"]
+    remediation_id = graph["remediation_id"]
     assert (
         owner.request("GET", f"/api/v1/remediations/{remediation_id}").status_code
         == 200
     )
+    remediation = owner.request("GET", f"/api/v1/remediations/{remediation_id}")
+    assert "prompt_text" not in remediation.json()
 
-    approved = owner.request("POST", f"/api/v1/remediations/{remediation_id}/approve")
-    assert approved.status_code == 200
-    assert approved.json()["status"] == "approved"
+    rejected = owner.request("POST", f"/api/v1/remediations/{remediation_id}/reject")
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "rejected"
 
-    assert (
-        owner.request(
-            "GET", f"/api/v1/remediations/{graph['remediation_id']}/pull-request"
-        ).status_code
-        == 200
-    )
     assert (
         owner.request(
             "GET", f"/api/v1/remediations/{graph['remediation_id']}/local-file-backup"
-        ).status_code
-        == 200
-    )
-    assert (
-        owner.request(
-            "GET", f"/api/v1/pull-requests/{graph['pull_request_id']}"
         ).status_code
         == 200
     )
@@ -189,15 +173,8 @@ def test_foreign_findings_remediations_and_artifacts_are_denied(
         ("GET", f"/api/v1/reviews/{graph['review_id']}/findings", None),
         ("GET", f"/api/v1/findings/{graph['finding_id']}", None),
         ("PATCH", f"/api/v1/findings/{graph['finding_id']}", {"status": "accepted"}),
-        (
-            "POST",
-            f"/api/v1/findings/{graph['finding_id']}/remediations",
-            {"proposed_diff": "foreign"},
-        ),
         ("GET", f"/api/v1/remediations/{graph['remediation_id']}", None),
-        ("POST", f"/api/v1/remediations/{graph['remediation_id']}/approve", None),
         ("POST", f"/api/v1/remediations/{graph['remediation_id']}/reject", None),
-        ("GET", f"/api/v1/pull-requests/{graph['pull_request_id']}", None),
         ("GET", f"/api/v1/local-file-backups/{graph['backup_id']}", None),
     )
     for method, path, body in requests:
@@ -217,10 +194,7 @@ def test_nonexistent_artifacts_return_not_found(
     account_pair,
 ) -> None:
     owner, _ = account_pair
-    for path in (
-        f"/api/v1/pull-requests/{uuid4()}",
-        f"/api/v1/local-file-backups/{uuid4()}",
-    ):
+    for path in (f"/api/v1/local-file-backups/{uuid4()}",):
         response = owner.request("GET", path)
         assert response.status_code == 404
         assert response.json()["error"]["code"] == "resource_not_found"

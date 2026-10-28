@@ -43,15 +43,27 @@ def test_auth_routes_bind_the_configured_cookie_names() -> None:
     install_auth_routes(app, settings, audit_hasher=None)
 
     cookie_parameters = {
-        route.path: {field.alias for field in route.dependant.cookie_params}
+        (route.path, next(iter(route.methods), "")): {
+            field.alias for field in route.dependant.cookie_params
+        }
         for route in app.routes
         if hasattr(route, "dependant")
     }
 
-    assert cookie_parameters["/auth/session"] == set()
-    assert cookie_parameters["/auth/csrf"] == {"test_refresh", "test_csrf"}
-    assert cookie_parameters["/auth/refresh"] == {"test_refresh", "test_csrf"}
-    assert cookie_parameters["/auth/logout"] == {"test_refresh", "test_csrf"}
+    assert cookie_parameters["/auth/session", "GET"] == set()
+    assert cookie_parameters["/auth/session", "PATCH"] == {"test_csrf"}
+    assert cookie_parameters["/auth/csrf", "GET"] == {
+        "test_refresh",
+        "test_csrf",
+    }
+    assert cookie_parameters["/auth/refresh", "POST"] == {
+        "test_refresh",
+        "test_csrf",
+    }
+    assert cookie_parameters["/auth/logout", "POST"] == {
+        "test_refresh",
+        "test_csrf",
+    }
 
 
 def test_csrf_endpoint_issues_and_reuses_a_token_for_an_active_refresh_session(

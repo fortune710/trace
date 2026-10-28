@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { ReviewSubmissionDialog } from "@/components/reviews/review-submission-dialog"
 import { clearFindingSearchParams } from "@/components/findings/finding-search-params"
 import { ReviewFindings } from "@/components/findings/review-findings"
+import { ProjectIssueTracking } from "@/components/projects/project-issue-tracking"
 import {
   ProjectActivitySkeleton,
   ProjectDetailsPageSkeleton,
@@ -29,11 +30,12 @@ import { useProject, type Project } from "@/hooks/use-projects"
 import { useProjectReviews } from "@/hooks/use-reviews"
 import type { Review } from "@/lib/api"
 
-type ProjectTab = "reviews" | "findings"
+type ProjectTab = "reviews" | "findings" | "issues"
 
 const projectTabs: Array<{ id: ProjectTab; label: string }> = [
   { id: "reviews", label: "Reviews" },
   { id: "findings", label: "Findings" },
+  { id: "issues", label: "Issues" },
 ]
 
 function categoryLabel(category: Project["category"]) {
@@ -387,7 +389,7 @@ export function ProjectDetailsPage() {
               >
                 <ProjectReviews project={project.data} />
               </section>
-            ) : (
+            ) : activeTab === "findings" ? (
               <section
                 role="tabpanel"
                 id="project-findings-panel"
@@ -395,6 +397,15 @@ export function ProjectDetailsPage() {
                 className="mt-6"
               >
                 <ProjectFindings project={project.data} />
+              </section>
+            ) : (
+              <section
+                role="tabpanel"
+                id="project-issues-panel"
+                aria-labelledby="project-issues-tab"
+                className="mt-6"
+              >
+                <ProjectIssueTracking project={project.data} />
               </section>
             )}
 

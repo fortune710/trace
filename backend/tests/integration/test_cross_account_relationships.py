@@ -81,31 +81,14 @@ def test_cross_account_relationships_are_rejected_without_side_effects(
     graph = artifact_graph_factory(other, foreign_project["id"], foreign_agent["id"])
     before = other.request("GET", "/api/v1/findings/" + str(graph["finding_id"]))
     assert before.status_code == 200
-    remediation_count_before = len(
-        other.request(
-            "GET", f"/api/v1/findings/{graph['finding_id']}/remediations"
-        ).json()
+    remediations = other.request(
+        "GET", f"/api/v1/findings/{graph['finding_id']}/remediations"
     )
-    remediation_attempt = owner.request(
-        "POST",
-        f"/api/v1/findings/{graph['finding_id']}/remediations",
-        json={"proposed_diff": "cross-account"},
-    )
-    assert remediation_attempt.status_code == 403
-    assert (
-        len(
-            other.request(
-                "GET", f"/api/v1/findings/{graph['finding_id']}/remediations"
-            ).json()
-        )
-        == remediation_count_before
-    )
+    assert remediations.status_code == 200
+    assert len(remediations.json()) == 1
 
     owner_graph = artifact_graph_factory(owner, owner_project["id"], owner_agent["id"])
-    for path in (
-        f"/api/v1/pull-requests/{graph['pull_request_id']}",
-        f"/api/v1/local-file-backups/{graph['backup_id']}",
-    ):
+    for path in (f"/api/v1/local-file-backups/{graph['backup_id']}",):
         response = owner.request("GET", path)
         assert response.status_code == 403
         assert str(graph["remediation_id"]) not in response.text
@@ -161,7 +144,6 @@ def test_same_owner_composite_foreign_keys_block_direct_relationship_inserts(
         "/api/v1/findings/00000000-0000-0000-0000-000000000001",
         "/api/v1/remediations/00000000-0000-0000-0000-000000000001",
         "/api/v1/credentials",
-        "/api/v1/pull-requests/00000000-0000-0000-0000-000000000001",
     ],
 )
 def test_protected_collections_reject_missing_and_malformed_access_cookies(
@@ -274,16 +256,6 @@ def test_invalid_access_token_variants_are_generic(
             "PATCH",
             "/api/v1/findings/00000000-0000-0000-0000-000000000001",
             {"status": "accepted"},
-        ),
-        (
-            "POST",
-            "/api/v1/findings/00000000-0000-0000-0000-000000000001/remediations",
-            {"proposed_diff": "csrf"},
-        ),
-        (
-            "POST",
-            "/api/v1/remediations/00000000-0000-0000-0000-000000000001/approve",
-            None,
         ),
         (
             "POST",

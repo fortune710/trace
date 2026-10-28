@@ -73,6 +73,16 @@ _TEMPLATES: dict[NotificationEventType, NotificationTemplate] = {
         "GitHub connected",
         "Your GitHub account is connected.",
     ),
+    NotificationEventType.ISSUE_CREATED: NotificationTemplate(
+        NotificationCategory.INFO,
+        "Issue created",
+        "Your finding has been added to an issue tracker.",
+    ),
+    NotificationEventType.ISSUE_CREATION_FAILED: NotificationTemplate(
+        NotificationCategory.WARNING,
+        "Issue creation needs attention",
+        "Trace could not create an issue for your finding. Open it to review the saved destination and try again.",
+    ),
 }
 
 
@@ -83,13 +93,19 @@ def create_notification(
     event_type: NotificationEventType,
     dedupe_key: str,
     review_id: UUID | None = None,
+    action_path: str | None = None,
+    data: dict[str, object] | None = None,
 ) -> dict[str, object] | None:
     """Insert a templated notification and announce only its safe identifiers."""
     template = _TEMPLATES[event_type]
-    data: dict[str, object] = {"review_id": str(review_id)} if review_id else {}
-    action_path = None
-    if review_id:
-        action_path = (
+    notification_data: dict[str, object] = (
+        {"review_id": str(review_id)} if review_id else {}
+    )
+    if data:
+        notification_data.update(data)
+    notification_action_path = action_path
+    if review_id and notification_action_path is None:
+        notification_action_path = (
             f"/reviews/{review_id}?tab=findings"
             if event_type is NotificationEventType.FINDINGS_AVAILABLE
             else f"/reviews/{review_id}"
@@ -103,8 +119,8 @@ def create_notification(
                 event_type=event_type,
                 title=template.title,
                 body=template.body,
-                action_path=action_path,
-                data=data,
+                action_path=notification_action_path,
+                data=notification_data,
                 dedupe_key=dedupe_key,
             )
             .on_conflict_do_nothing(

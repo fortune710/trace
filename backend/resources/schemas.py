@@ -15,6 +15,7 @@ from pydantic import (
 from credentials.models import CredentialKind, CredentialProvider
 from db.types import ModelProvider, RepositoryProvider, RepositorySource
 from findings.models import FindingSeverity, FindingStatus
+from issue_tracking.schemas import IssueTrackingDetails
 from projects.models import ProjectCategory
 from remediations.models import RemediationStatus
 from reviews.models import ReviewAgentStatus, ReviewCategory, ReviewStatus
@@ -119,6 +120,7 @@ class ProjectResponse(RequestModel):
     current_revision: str | None
     category: ProjectCategory
     auto_create_pull_requests: bool
+    issue_tracking_details: IssueTrackingDetails
     created_at: datetime
     updated_at: datetime
     archived_at: datetime | None
@@ -329,8 +331,10 @@ class FindingPage(RequestModel):
     next_offset: int | None
 
 
-class RemediationCreate(RequestModel):
-    proposed_diff: Annotated[str, StringConstraints(min_length=1, max_length=1_048_576)]
+class PullRequestSummary(RequestModel):
+    url: str
+    number: int
+    is_merged: bool
 
 
 class RemediationResponse(RequestModel):
@@ -338,21 +342,15 @@ class RemediationResponse(RequestModel):
     project_id: UUID
     finding_id: UUID
     proposed_diff: str
+    pull_request: PullRequestSummary | None
     status: RemediationStatus
     approved_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
 
-class PullRequestResponse(RequestModel):
-    id: UUID
-    remediation_id: UUID
-    repository_url: str
-    pull_request_number: int
-    pull_request_url: str
-    branch_name: str
-    created_at: datetime
-    updated_at: datetime
+class RemediationPromptResponse(RequestModel):
+    prompt_text: str
 
 
 class LocalFileBackupResponse(RequestModel):
