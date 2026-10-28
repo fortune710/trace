@@ -21,13 +21,21 @@ pub fn run() {
             sql: include_str!("../migrations/003_local_project_api_identity.sql"),
             kind: tauri_plugin_sql::MigrationKind::Up,
         },
+        tauri_plugin_sql::Migration {
+            version: 4,
+            description: "store local review snapshots and remediation confirmation state",
+            sql: include_str!("../migrations/004_local_review_state.sql"),
+            kind: tauri_plugin_sql::MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             folder_picker::pick_local_folder,
             folder_picker::validate_local_folder,
-            folder_picker::capture_local_source_snapshot
+            folder_picker::capture_local_source_snapshot,
+            folder_picker::create_local_review_snapshot,
+            folder_picker::apply_local_remediation
         ])
         .plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {}))
         .plugin(tauri_plugin_deep_link::init())

@@ -12,7 +12,7 @@ import { projectsApi, reviewsApi, type Project, type Review } from "@/lib/api"
 import type { DesktopProjectRecord } from "@/lib/desktop-projects"
 import { getLocalProjectsDatabase } from "@/lib/local-projects-database"
 import {
-  captureLocalSourceSnapshot,
+  createLocalReviewSnapshot,
   localSourceIdentityHash,
 } from "@/lib/local-source-snapshot"
 
@@ -20,14 +20,14 @@ vi.mock("@/hooks/use-runtime-environment", () => ({ useRuntimeEnvironment: vi.fn
 vi.mock("@/hooks/use-session", () => ({ useSession: vi.fn() }))
 vi.mock("@/lib/local-projects-database", () => ({ getLocalProjectsDatabase: vi.fn() }))
 vi.mock("@/lib/local-source-snapshot", () => ({
-  captureLocalSourceSnapshot: vi.fn(),
+  createLocalReviewSnapshot: vi.fn(),
   localSourceIdentityHash: vi.fn(),
 }))
 
 const mockedRuntime = vi.mocked(useRuntimeEnvironment)
 const mockedSession = vi.mocked(useSession)
 const mockedDatabase = vi.mocked(getLocalProjectsDatabase)
-const mockedCapture = vi.mocked(captureLocalSourceSnapshot)
+const mockedCapture = vi.mocked(createLocalReviewSnapshot)
 const mockedIdentityHash = vi.mocked(localSourceIdentityHash)
 
 const githubProject: Project = {
@@ -144,6 +144,7 @@ describe("useCreateReview", () => {
     mockedDatabase.mockResolvedValue(database as never)
     mockedIdentityHash.mockResolvedValue("b".repeat(64))
     mockedCapture.mockResolvedValue({
+      snapshotId: "snapshot-a",
       integrityAlgorithm: "sha256-directory-manifest-v1",
       digest: "a".repeat(64),
     })

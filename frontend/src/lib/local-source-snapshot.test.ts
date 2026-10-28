@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core"
 import {
   LocalSourceSnapshotError,
   captureLocalSourceSnapshot,
+  createLocalReviewSnapshot,
   localSourceIdentityHash,
 } from "@/lib/local-source-snapshot"
 
@@ -48,5 +49,25 @@ describe("local source snapshots", () => {
     await expect(
       captureLocalSourceSnapshot("/private/local-project"),
     ).rejects.toEqual(expect.any(LocalSourceSnapshotError))
+  })
+
+  it("creates a private snapshot with only opaque metadata", async () => {
+    mockedInvoke.mockResolvedValueOnce({
+      snapshotId: "snapshot-a",
+      integrityAlgorithm: "sha256-directory-manifest-v1",
+      digest: "b".repeat(64),
+    })
+
+    const snapshot = await createLocalReviewSnapshot("/private/local-project")
+
+    expect(snapshot).toEqual({
+      snapshotId: "snapshot-a",
+      integrityAlgorithm: "sha256-directory-manifest-v1",
+      digest: "b".repeat(64),
+    })
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "create_local_review_snapshot",
+      expect.objectContaining({ canonicalPath: "/private/local-project" }),
+    )
   })
 })

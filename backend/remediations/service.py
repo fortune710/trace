@@ -8,6 +8,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
+from artifacts.models import LocalFileBackup
 from audit.outbox import AuditRecorder
 from auth.errors import (
     ProviderRateLimited,
@@ -233,4 +234,138 @@ class RemediationPullRequestService:
         return _remediation_response(row)
 
 
-__all__ = ["RemediationPullRequestService"]
+class LocalRemediationApplyService:
+    """Record an already-completed, desktop-local remediation apply operation.
+
+    The desktop owns filesystem access and only reports path-relative metadata.
+    This service never receives an absolute path or file contents.
+    """
+
+    def __init__(self, engine: Engine, audit_recorder: AuditRecorder | None = None) -> None:
+        self._engine = engine
+        self._audit_recorder = audit_recorder
+
+    def complete(
+        self,
+        *,
+        owner_id: UUID,
+        remediation_id: UUID,
+        file_path: str,
+        backup_reference: str,
+        source_hash: str,
+        applied_hash: str,
+        request_id: str,
+    ) -> dict[str, object]:
+        with principal_transaction(self._engine, owner_id) as connection:
+            connection.execute(
+                sa.text(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:key AS text), 0))"
+                ),
+                {"key": str(remediation_id)},
+            )
+            context = (
+                connection.execute(
+                    sa.select(
+                        Remediation.__table__,
+                        Finding.status.label("finding_status"),
+                        Review.status.label("review_status"),
+                        Project.source.label("project_source"),
+                    )
+                    .select_from(Remediation)
+                    .join(
+                        Finding,
+                        sa.and_(
+                            Finding.owner_id == Remediation.owner_id,
+                            Finding.id == Remediation.finding_id,
+                        ),
+                    )
+                    .join(
+                        Review,
+                        sa.and_(
+                            Review.owner_id == Finding.owner_id,
+                            Review.id == Finding.review_id,
+                        ),
+                    )
+                    .join(
+                        Project,
+                        sa.and_(
+                            Project.owner_id == Remediation.owner_id,
+                            Project.id == Remediation.project_id,
+                        ),
+                    )
+                    .where(
+                        Remediation.id == remediation_id,
+                        Remediation.owner_id == owner_id,
+                    )
+                    .with_for_update()
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if context is None:
+                _raise_access(connection, "remediation", remediation_id)
+            assert context is not None
+            existing = (
+                connection.execute(
+                    sa.select(LocalFileBackup).where(
+                        LocalFileBackup.owner_id == owner_id,
+                        LocalFileBackup.remediation_id == remediation_id,
+                    )
+                )
+                .scalar_one_or_none()
+            )
+            if existing is not None:
+                return _remediation_response(context)
+            if context["project_source"] is not RepositorySource.LOCAL:
+                raise UnsupportedSource()
+            if context["status"] is not RemediationStatus.PROPOSED:
+                raise ResourceConflict("remediation_state_conflict")
+            if context["finding_status"] is not FindingStatus.ACCEPTED:
+                raise ResourceConflict("finding_not_accepted")
+            if context["review_status"] is not ReviewStatus.COMPLETED:
+                raise ResourceConflict("review_not_completed")
+            connection.execute(
+                sa.insert(LocalFileBackup).values(
+                    owner_id=owner_id,
+                    remediation_id=remediation_id,
+                    file_path=file_path,
+                    backup_path=backup_reference,
+                    source_hash=bytes.fromhex(source_hash),
+                    applied_hash=bytes.fromhex(applied_hash),
+                )
+            )
+            connection.execute(
+                sa.update(Remediation)
+                .where(
+                    Remediation.id == remediation_id,
+                    Remediation.owner_id == owner_id,
+                    Remediation.status == RemediationStatus.PROPOSED,
+                )
+                .values(
+                    status=RemediationStatus.APPLIED,
+                    approved_at=sa.func.current_timestamp(),
+                    mutation_version=Remediation.mutation_version + 1,
+                    updated_at=sa.func.current_timestamp(),
+                )
+            )
+            if self._audit_recorder is not None:
+                self._audit_recorder.create_event(
+                    event_type="remediation.local_file.applied",
+                    request_id=request_id,
+                    owner_id=owner_id,
+                    fields={"remediation_id": str(remediation_id)},
+                    connection=connection,
+                )
+            row = (
+                connection.execute(
+                    sa.select(Remediation.__table__).where(
+                        Remediation.id == remediation_id,
+                        Remediation.owner_id == owner_id,
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        return _remediation_response(row)
+
+__all__ = ["LocalRemediationApplyService", "RemediationPullRequestService"]

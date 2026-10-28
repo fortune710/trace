@@ -420,6 +420,7 @@ def artifact_graph_factory(integration_engine):
                     file_path="src/example.py",
                     backup_path=".trace-backups/example.py",
                     source_hash=b"source-hash",
+                    applied_hash=b"applied-hash",
                 )
             )
         return {

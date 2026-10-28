@@ -359,8 +359,32 @@ class LocalFileBackupResponse(RequestModel):
     file_path: str
     backup_path: str
     source_hash: str
+    applied_hash: str
     created_at: datetime
     updated_at: datetime
+
+
+class LocalRemediationApply(RequestModel):
+    file_path: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            max_length=2_000,
+            pattern=r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))(?!.*\\).+$",
+        ),
+    ]
+    backup_reference: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            max_length=2_000,
+            pattern=r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))(?!.*\\).+$",
+        ),
+    ]
+    source_hash: HashString
+    applied_hash: HashString
 
 
 class CredentialCreate(RequestModel):

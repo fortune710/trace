@@ -67,6 +67,7 @@ def test_all_auth_and_public_tables_match_the_database_contract() -> None:
             "issue_links",
             "remediations",
             "local_file_backups",
+            "local_project_handles",
             "notifications",
         },
     }

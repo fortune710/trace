@@ -48,6 +48,7 @@ class LocalFileBackup(Base):
     file_path: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     backup_path: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     source_hash: Mapped[bytes] = mapped_column(sa.LargeBinary(), nullable=False)
+    applied_hash: Mapped[bytes] = mapped_column(sa.LargeBinary(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,

@@ -1475,6 +1475,7 @@ def _artifact_response(row: LocalFileBackup) -> dict[str, object]:
         "file_path": row.file_path,
         "backup_path": row.backup_path,
         "source_hash": _hash_text(row.source_hash),
+        "applied_hash": _hash_text(row.applied_hash),
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }

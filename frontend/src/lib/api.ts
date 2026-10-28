@@ -359,6 +359,13 @@ export type RemediationPrompt = {
   prompt_text: string
 }
 
+export type LocalRemediationApply = {
+  file_path: string
+  backup_reference: string
+  source_hash: string
+  applied_hash: string
+}
+
 export type NotificationCategory = "info" | "security" | "warning"
 
 export type Notification = {
@@ -745,6 +752,14 @@ export const remediationsApi = {
     post<Remediation>(
       `/api/v1/remediations/${encodeURIComponent(remediationId)}/pull-request`,
       undefined,
+    ),
+  completeLocalApply: (
+    remediationId: string,
+    operation: LocalRemediationApply,
+  ) =>
+    post<Remediation>(
+      `/api/v1/remediations/${encodeURIComponent(remediationId)}/apply-local`,
+      operation,
     ),
   createIssue: (remediationId: string, provider: IssueProviderName) =>
     post<IssueLink>(

@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::Read,
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -9,6 +9,7 @@ use std::sync::{Mutex, OnceLock};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_fs::FsExt;
 use walkdir::WalkDir;
@@ -23,6 +24,9 @@ pub enum FolderPickerErrorCode {
     Unreadable,
     ValidationFailed,
     SnapshotFailed,
+    InvalidDiff,
+    SourceChanged,
+    ApplyFailed,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +52,23 @@ pub struct NativeFolderValidation {
 pub struct NativeSourceSnapshot {
     pub integrity_algorithm: String,
     pub digest: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeStoredSourceSnapshot {
+    pub snapshot_id: String,
+    pub integrity_algorithm: String,
+    pub digest: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeLocalRemediationResult {
+    pub file_path: String,
+    pub backup_reference: String,
+    pub source_hash: String,
+    pub applied_hash: String,
 }
 
 const SNAPSHOT_ALGORITHM: &str = "sha256-directory-manifest-v1";
@@ -133,6 +154,10 @@ fn snapshot_error() -> FolderPickerError {
     validation_error(FolderPickerErrorCode::SnapshotFailed)
 }
 
+fn apply_error(code: FolderPickerErrorCode) -> FolderPickerError {
+    validation_error(code)
+}
+
 fn encode_record(hasher: &mut Sha256, marker: u8, path: &str, digest: Option<[u8; 32]>) {
     hasher.update([marker]);
     hasher.update((path.len() as u64).to_be_bytes());
@@ -216,6 +241,304 @@ fn capture_snapshot(path: &Path) -> Result<NativeSourceSnapshot, FolderPickerErr
     })
 }
 
+fn copy_source_snapshot(
+    source_root: &Path,
+    destination_root: &Path,
+) -> Result<NativeSourceSnapshot, FolderPickerError> {
+    let expected = capture_snapshot(source_root)?;
+    let source_root = fs::canonicalize(source_root).map_err(|_| snapshot_error())?;
+    if destination_root.exists() {
+        return Err(snapshot_error());
+    }
+    fs::create_dir_all(destination_root).map_err(|_| snapshot_error())?;
+
+    let copy_result = (|| -> Result<(), FolderPickerError> {
+        for entry in WalkDir::new(&source_root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| !EXCLUDED_DIRECTORIES.contains(&name))
+            })
+        {
+            let entry = entry.map_err(|_| snapshot_error())?;
+            if entry.path() == source_root {
+                continue;
+            }
+            let file_type = entry.file_type();
+            if file_type.is_symlink() || (!file_type.is_dir() && !file_type.is_file()) {
+                return Err(snapshot_error());
+            }
+            let relative = entry
+                .path()
+                .strip_prefix(&source_root)
+                .map_err(|_| snapshot_error())?;
+            if relative.to_str().is_none() {
+                return Err(snapshot_error());
+            }
+            let destination = destination_root.join(relative);
+            if file_type.is_dir() {
+                fs::create_dir_all(destination).map_err(|_| snapshot_error())?;
+            } else {
+                let parent = destination.parent().ok_or_else(snapshot_error)?;
+                fs::create_dir_all(parent).map_err(|_| snapshot_error())?;
+                fs::copy(entry.path(), destination).map_err(|_| snapshot_error())?;
+            }
+        }
+        Ok(())
+    })();
+    if copy_result.is_err() {
+        let _ = fs::remove_dir_all(destination_root);
+    }
+    copy_result?;
+    let copied = capture_snapshot(destination_root)?;
+    if copied.digest != expected.digest {
+        let _ = fs::remove_dir_all(destination_root);
+        return Err(snapshot_error());
+    }
+    Ok(copied)
+}
+
+fn is_safe_relative_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\0')
+        && path.split('/').all(|part| !matches!(part, "" | "." | ".."))
+}
+
+#[derive(Debug, Clone)]
+struct PatchHunk {
+    old_start: usize,
+    old_count: usize,
+    new_count: usize,
+    lines: Vec<(char, String)>,
+}
+
+#[derive(Debug, Clone)]
+struct SingleFilePatch {
+    path: String,
+    hunks: Vec<PatchHunk>,
+}
+
+fn parse_hunk_header(value: &str) -> Option<(usize, usize, usize)> {
+    let body = value.strip_prefix("@@ -")?.split_once(" +")?;
+    let old = body.0;
+    let new = body.1.split_once(" @@")?.0;
+
+    fn range(value: &str) -> Option<(usize, usize)> {
+        let (start, count) = value.split_once(',').unwrap_or((value, "1"));
+        Some((start.parse().ok()?, count.parse().ok()?))
+    }
+
+    let (old_start, old_count) = range(old)?;
+    let (_, new_count) = range(new)?;
+    Some((old_start, old_count, new_count))
+}
+
+fn parse_single_file_patch(diff: &str) -> Result<SingleFilePatch, FolderPickerError> {
+    if !diff.starts_with("diff --git ")
+        || diff.contains("GIT binary patch")
+        || diff.contains("rename from ")
+        || diff.contains("rename to ")
+        || diff.contains("new file mode ")
+        || diff.contains("deleted file mode ")
+        || diff.contains("new mode ")
+        || diff.contains("old mode ")
+    {
+        return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+    }
+
+    let mut lines = diff.lines();
+    let header = lines
+        .next()
+        .ok_or_else(|| apply_error(FolderPickerErrorCode::InvalidDiff))?;
+    let paths = header
+        .strip_prefix("diff --git a/")
+        .and_then(|value| value.split_once(" b/"))
+        .ok_or_else(|| apply_error(FolderPickerErrorCode::InvalidDiff))?;
+    if paths.0 != paths.1 || !is_safe_relative_path(paths.0) {
+        return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+    }
+    let path = paths.0.to_owned();
+
+    let old_header = lines
+        .next()
+        .ok_or_else(|| apply_error(FolderPickerErrorCode::InvalidDiff))?;
+    let new_header = lines
+        .next()
+        .ok_or_else(|| apply_error(FolderPickerErrorCode::InvalidDiff))?;
+    if old_header != format!("--- a/{path}") || new_header != format!("+++ b/{path}") {
+        return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+    }
+
+    let mut hunks = Vec::new();
+    let mut current: Option<PatchHunk> = None;
+    for line in lines {
+        if line.starts_with("diff --git ") {
+            return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+        }
+        if line.starts_with("@@ -") {
+            if let Some(hunk) = current.take() {
+                hunks.push(hunk);
+            }
+            let (old_start, old_count, new_count) = parse_hunk_header(line)
+                .ok_or_else(|| apply_error(FolderPickerErrorCode::InvalidDiff))?;
+            current = Some(PatchHunk {
+                old_start,
+                old_count,
+                new_count,
+                lines: Vec::new(),
+            });
+            continue;
+        }
+        let hunk = current
+            .as_mut()
+            .ok_or_else(|| apply_error(FolderPickerErrorCode::InvalidDiff))?;
+        let (kind, value) = line
+            .chars()
+            .next()
+            .filter(|kind| matches!(kind, ' ' | '+' | '-'))
+            .map(|kind| (kind, line[1..].to_owned()))
+            .ok_or_else(|| apply_error(FolderPickerErrorCode::InvalidDiff))?;
+        hunk.lines.push((kind, value));
+    }
+    if let Some(hunk) = current {
+        hunks.push(hunk);
+    }
+    if hunks.is_empty() {
+        return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+    }
+    for hunk in &hunks {
+        let old_count = hunk
+            .lines
+            .iter()
+            .filter(|(kind, _)| *kind != '+')
+            .count();
+        let new_count = hunk
+            .lines
+            .iter()
+            .filter(|(kind, _)| *kind != '-')
+            .count();
+        if old_count != hunk.old_count || new_count != hunk.new_count {
+            return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+        }
+    }
+    Ok(SingleFilePatch { path, hunks })
+}
+
+fn apply_patch_to_text(source: &str, patch: &SingleFilePatch) -> Result<String, FolderPickerError> {
+    let had_trailing_newline = source.ends_with('\n');
+    let source_lines: Vec<&str> = source.lines().collect();
+    let mut output = Vec::new();
+    let mut source_index = 0usize;
+
+    for hunk in &patch.hunks {
+        let hunk_start = hunk
+            .old_start
+            .checked_sub(1)
+            .ok_or_else(|| apply_error(FolderPickerErrorCode::InvalidDiff))?;
+        if hunk_start < source_index || hunk_start > source_lines.len() {
+            return Err(apply_error(FolderPickerErrorCode::SourceChanged));
+        }
+        output.extend_from_slice(&source_lines[source_index..hunk_start]);
+        source_index = hunk_start;
+        for (kind, value) in &hunk.lines {
+            match kind {
+                ' ' => {
+                    if source_lines.get(source_index) != Some(&value.as_str()) {
+                        return Err(apply_error(FolderPickerErrorCode::SourceChanged));
+                    }
+                    output.push(value.as_str());
+                    source_index += 1;
+                }
+                '-' => {
+                    if source_lines.get(source_index) != Some(&value.as_str()) {
+                        return Err(apply_error(FolderPickerErrorCode::SourceChanged));
+                    }
+                    source_index += 1;
+                }
+                '+' => output.push(value.as_str()),
+                _ => return Err(apply_error(FolderPickerErrorCode::InvalidDiff)),
+            }
+        }
+    }
+    output.extend_from_slice(&source_lines[source_index..]);
+    let mut applied = output.join("\n");
+    if had_trailing_newline {
+        applied.push('\n');
+    }
+    Ok(applied)
+}
+
+fn sha256_hex(value: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(value))
+}
+
+fn apply_local_remediation_at(
+    root: &Path,
+    backup_root: &Path,
+    remediation_id: &str,
+    diff: &str,
+) -> Result<NativeLocalRemediationResult, FolderPickerError> {
+    let patch = parse_single_file_patch(diff)?;
+    let root = fs::canonicalize(root).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+    let target = root.join(&patch.path);
+    let target = fs::canonicalize(target).map_err(|_| apply_error(FolderPickerErrorCode::SourceChanged))?;
+    if !target.starts_with(&root)
+        || !fs::metadata(&target)
+            .map_err(|_| apply_error(FolderPickerErrorCode::SourceChanged))?
+            .is_file()
+    {
+        return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+    }
+    let source_bytes = fs::read(&target).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+    let source_text = std::str::from_utf8(&source_bytes)
+        .map_err(|_| apply_error(FolderPickerErrorCode::InvalidDiff))?;
+    let applied = apply_patch_to_text(source_text, &patch)?;
+    let source_hash = sha256_hex(&source_bytes);
+    let applied_hash = sha256_hex(applied.as_bytes());
+
+    let backup_relative = Path::new("local-remediation-backups")
+        .join(remediation_id)
+        .join(&patch.path);
+    let backup_path = backup_root.join(&backup_relative);
+    let backup_parent = backup_path
+        .parent()
+        .ok_or_else(|| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+    fs::create_dir_all(backup_parent).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+    if !backup_path.exists() {
+        fs::copy(&target, &backup_path).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+    }
+
+    let file_name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+    let temporary = target.with_file_name(format!(".{file_name}.trace-{remediation_id}.tmp"));
+    let write_result = (|| -> Result<(), FolderPickerError> {
+        let mut file = fs::File::create(&temporary)
+            .map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+        file.write_all(applied.as_bytes())
+            .map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+        file.sync_all()
+            .map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+        fs::rename(&temporary, &target).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write_result?;
+    Ok(NativeLocalRemediationResult {
+        file_path: patch.path,
+        backup_reference: backup_relative.to_string_lossy().into_owned(),
+        source_hash,
+        applied_hash,
+    })
+}
+
 #[tauri::command]
 pub async fn pick_local_folder(
     app: tauri::AppHandle,
@@ -282,6 +605,62 @@ pub fn capture_local_source_snapshot(
     capture_snapshot(Path::new(&canonical_path))
 }
 
+#[tauri::command]
+pub fn create_local_review_snapshot(
+    app: tauri::AppHandle,
+    canonical_path: String,
+    snapshot_id: String,
+) -> Result<NativeStoredSourceSnapshot, FolderPickerError> {
+    if snapshot_id.is_empty()
+        || snapshot_id.len() > 128
+        || !snapshot_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+    {
+        return Err(snapshot_error());
+    }
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| snapshot_error())?;
+    let snapshot = copy_source_snapshot(
+        Path::new(&canonical_path),
+        &app_data.join("local-review-snapshots").join(&snapshot_id),
+    )?;
+    Ok(NativeStoredSourceSnapshot {
+        snapshot_id,
+        integrity_algorithm: snapshot.integrity_algorithm,
+        digest: snapshot.digest,
+    })
+}
+
+#[tauri::command]
+pub fn apply_local_remediation(
+    app: tauri::AppHandle,
+    canonical_path: String,
+    remediation_id: String,
+    diff: String,
+) -> Result<NativeLocalRemediationResult, FolderPickerError> {
+    if remediation_id.is_empty()
+        || remediation_id.len() > 128
+        || !remediation_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+    {
+        return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+    }
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+    apply_local_remediation_at(
+        Path::new(&canonical_path),
+        &app_data,
+        &remediation_id,
+        &diff,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -293,7 +672,8 @@ mod tests {
     static TEMPORARY_DIRECTORY_ID: AtomicU64 = AtomicU64::new(0);
 
     use super::{
-        EXCLUDED_DIRECTORIES, FolderPickerErrorCode, capture_snapshot, io_error_code,
+        EXCLUDED_DIRECTORIES, FolderPickerErrorCode, apply_local_remediation_at,
+        capture_snapshot, copy_source_snapshot, io_error_code, parse_single_file_patch,
         snapshot_read_hook, validate_folder, validate_selected_path,
     };
 
@@ -705,5 +1085,58 @@ mod tests {
         *snapshot_read_hook().lock().expect("snapshot hook lock") = None;
         assert!(matches!(error.code, FolderPickerErrorCode::SnapshotFailed));
         fs::remove_dir_all(directory).expect("temporary directory cleanup");
+    }
+
+    #[test]
+    fn applies_one_existing_text_file_and_keeps_a_recoverable_backup() {
+        let root = temporary_directory();
+        let backups = temporary_directory();
+        let source = root.join("src").join("example.txt");
+        fs::create_dir_all(source.parent().expect("source parent")).expect("source parent");
+        fs::write(&source, "before\nunchanged\n").expect("source file");
+        let diff = "diff --git a/src/example.txt b/src/example.txt\n--- a/src/example.txt\n+++ b/src/example.txt\n@@ -1,2 +1,2 @@\n-before\n+after\n unchanged\n";
+
+        let result = apply_local_remediation_at(&root, &backups, "remediation-1", diff)
+            .expect("patch should apply");
+
+        assert_eq!(fs::read_to_string(&source).expect("updated source"), "after\nunchanged\n");
+        assert_eq!(result.file_path, "src/example.txt");
+        assert_eq!(
+            fs::read_to_string(backups.join(&result.backup_reference)).expect("backup"),
+            "before\nunchanged\n"
+        );
+        fs::remove_dir_all(root).expect("source cleanup");
+        fs::remove_dir_all(backups).expect("backup cleanup");
+    }
+
+    #[test]
+    fn copies_a_private_review_snapshot_without_dependency_directories() {
+        let source = temporary_directory();
+        let destination_parent = temporary_directory();
+        let snapshot_path = destination_parent.join("review-1");
+        fs::write(source.join("app.txt"), "review source").expect("source file");
+        fs::create_dir_all(source.join("node_modules")).expect("dependencies");
+        fs::write(source.join("node_modules").join("ignored.js"), "ignored")
+            .expect("dependency file");
+
+        let snapshot = copy_source_snapshot(&source, &snapshot_path).expect("snapshot copy");
+
+        assert!(snapshot.digest.len() == 64);
+        assert_eq!(
+            fs::read_to_string(snapshot_path.join("app.txt")).expect("copied source"),
+            "review source"
+        );
+        assert!(!snapshot_path.join("node_modules").exists());
+        fs::remove_dir_all(source).expect("source cleanup");
+        fs::remove_dir_all(destination_parent).expect("destination cleanup");
+    }
+
+    #[test]
+    fn rejects_malformed_or_multi_file_diffs_before_writing() {
+        let malformed = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n+missing hunk\n";
+        let multi_file = "diff --git a/first.txt b/first.txt\n--- a/first.txt\n+++ b/first.txt\n@@ -1 +1 @@\n-before\n+after\ndiff --git a/second.txt b/second.txt\n--- a/second.txt\n+++ b/second.txt\n@@ -1 +1 @@\n-before\n+after\n";
+
+        assert!(parse_single_file_patch(malformed).is_err());
+        assert!(parse_single_file_patch(multi_file).is_err());
     }
 }
