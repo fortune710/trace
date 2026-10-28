@@ -37,11 +37,9 @@ def test_resource_routes_register_the_complete_owner_scoped_surface() -> None:
         "/findings/{finding_id}",
         "/findings/{finding_id}/remediations",
         "/remediations/{remediation_id}",
-        "/remediations/{remediation_id}/approve",
+        "/remediations/{remediation_id}/prompt",
         "/remediations/{remediation_id}/reject",
-        "/remediations/{remediation_id}/pull-request",
         "/remediations/{remediation_id}/local-file-backup",
-        "/pull-requests/{artifact_id}",
         "/local-file-backups/{artifact_id}",
         "/credentials",
         "/credentials/{credential_id}",
@@ -80,6 +78,28 @@ def test_resource_routes_register_the_complete_owner_scoped_surface() -> None:
         and parameter["required"] is True
         for parameter in review_create["parameters"]
     )
+
+    remediation_collection = openapi_paths["/findings/{finding_id}/remediations"]
+    assert set(remediation_collection) == {"get"}
+    assert "/remediations/{remediation_id}/approve" not in openapi_paths
+
+    remediation_get = openapi_paths["/remediations/{remediation_id}"]["get"]
+    remediation_reference = remediation_get["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]["$ref"].rsplit("/", 1)[-1]
+    remediation_properties = app.openapi()["components"]["schemas"][
+        remediation_reference
+    ]["properties"]
+    assert "prompt_text" not in remediation_properties
+
+    prompt_get = openapi_paths["/remediations/{remediation_id}/prompt"]["get"]
+    prompt_reference = prompt_get["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ]["$ref"].rsplit("/", 1)[-1]
+    prompt_properties = app.openapi()["components"]["schemas"][prompt_reference][
+        "properties"
+    ]
+    assert set(prompt_properties) == {"prompt_text"}
 
 
 def test_page_query_uses_one_based_pages_and_derives_internal_offset() -> None:

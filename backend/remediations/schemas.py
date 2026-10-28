@@ -1,5 +1,28 @@
-"""Remediation API schema exports."""
+"""Remediation API schemas."""
 
-from resources.schemas import RemediationCreate, RemediationResponse
+from __future__ import annotations
 
-__all__ = ["RemediationCreate", "RemediationResponse"]
+from issue_tracking.models import IssueProviderName
+from resources.schemas import (
+    RemediationPromptResponse,
+    RemediationResponse,
+    RequestModel,
+)
+
+
+class ProjectIssueDestinationRequest(RequestModel):
+    """Issue-tracking destination resolved from the remediation's project."""
+
+    provider: IssueProviderName
+
+
+class RemediationIssueCreate(RequestModel):
+    destination: ProjectIssueDestinationRequest
+
+
+__all__ = [
+    "ProjectIssueDestinationRequest",
+    "RemediationIssueCreate",
+    "RemediationPromptResponse",
+    "RemediationResponse",
+]

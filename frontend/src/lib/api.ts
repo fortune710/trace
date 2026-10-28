@@ -12,6 +12,7 @@ export type Session = {
   session_id: string
   email?: string | null
   display_name?: string | null
+  automatic_pull_requests: boolean
 }
 
 export type GitHubConnectionStatus =
@@ -68,6 +69,49 @@ export type Project = {
 export type ProjectPage = {
   items: Project[]
   next_offset: number | null
+}
+
+export type IssueProviderName = "github" | "linear"
+
+export type ConnectedIssueProject = {
+  provider: IssueProviderName
+  owner: string
+  project: string
+}
+
+export type IssueTrackingDetails = {
+  connected_projects: ConnectedIssueProject[]
+}
+
+export type LinearTeam = {
+  id: string
+  name: string
+  key: string
+}
+
+export type LinearProject = {
+  id: string
+  name: string
+}
+
+export type IssueLinkState = "pending" | "created" | "failed"
+
+export type IssueLink = {
+  id: string
+  finding_id: string
+  provider: IssueProviderName
+  destination_id: string
+  external_identifier: string | null
+  external_url: string | null
+  state: IssueLinkState
+  failure_code: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type IssuePreview = {
+  title: string
+  body_markdown: string
 }
 
 export type ReviewCategory =
@@ -293,6 +337,28 @@ export type FindingPage = {
   next_offset: number | null
 }
 
+export type Remediation = {
+  id: string
+  project_id: string
+  finding_id: string
+  proposed_diff: string
+  pull_request: PullRequestSummary | null
+  status: "proposed" | "rejected" | "applied"
+  approved_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type PullRequestSummary = {
+  url: string
+  number: number
+  is_merged: boolean
+}
+
+export type RemediationPrompt = {
+  prompt_text: string
+}
+
 export type NotificationCategory = "info" | "security" | "warning"
 
 export type Notification = {
@@ -373,14 +439,25 @@ async function csrfToken(path: string): Promise<string | undefined> {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+type RequestOptions = {
+  requiresCsrf?: boolean
+}
+
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  options: RequestOptions = {},
+): Promise<T> {
   const headers = new Headers(init.headers)
 
   if (init.body) {
     headers.set("Content-Type", "application/json")
   }
 
-  if (init.method && !["GET", "HEAD"].includes(init.method)) {
+  if (
+    options.requiresCsrf ||
+    (init.method && !["GET", "HEAD"].includes(init.method))
+  ) {
     const csrf = await csrfToken(path)
 
     if (csrf) {
@@ -460,6 +537,10 @@ function rememberDesktopCsrf(response: AuthenticatedResponse) {
 
 export const authApi = {
   session: () => request<Session>("/auth/session"),
+  updateAutomaticPullRequests: (automaticPullRequests: boolean) =>
+    patch<{ automatic_pull_requests: boolean }>("/auth/session", {
+      automatic_pull_requests: automaticPullRequests,
+    }),
   refresh: async () =>
     rememberDesktopCsrf(await post<AuthenticatedResponse>("/auth/refresh")),
   login: async (email: string, password: string) =>
@@ -497,6 +578,8 @@ export const authApi = {
     request<GitHubConnection>("/auth/oauth/github/connection"),
   beginGitHubConnection: () =>
     post<{ authorization_url: string }>("/auth/oauth/github/connect/start"),
+  beginLinearConnection: () =>
+    post<{ authorization_url: string }>("/auth/oauth/linear/connect/start"),
   oauthUrl: (provider: "github" | "google") =>
     `${runtimeConfig.apiBaseUrl}/auth/oauth/${provider}/start?return_to=${encodeURIComponent(
       window.location.origin,
@@ -523,6 +606,18 @@ export const projectsApi = {
     request<Project>(`/api/v1/projects/${encodeURIComponent(projectId)}`),
   create: (project: ProjectCreate) =>
     post<Project>("/api/v1/projects", project),
+  issueTracking: (projectId: string) =>
+    request<IssueTrackingDetails>(
+      `/api/v1/projects/${encodeURIComponent(projectId)}/issue-tracking`,
+    ),
+  updateIssueTracking: (
+    projectId: string,
+    details: IssueTrackingDetails,
+  ) =>
+    patch<IssueTrackingDetails>(
+      `/api/v1/projects/${encodeURIComponent(projectId)}/issue-tracking`,
+      details,
+    ),
 }
 
 export const agentsApi = {
@@ -616,6 +711,46 @@ export const findingsApi = {
     patch<Finding>(`/api/v1/findings/${encodeURIComponent(findingId)}`, {
       status,
     }),
+  previewIssue: (findingId: string, provider: IssueProviderName) =>
+    post<IssuePreview>(
+      `/api/v1/findings/${encodeURIComponent(findingId)}/issue-links/preview`,
+      { provider },
+    ),
+  listIssueLinks: (findingId: string) =>
+    request<IssueLink[]>(
+      `/api/v1/findings/${encodeURIComponent(findingId)}/issue-links`,
+    ),
+}
+
+export const issueTrackingApi = {
+  listLinearTeams: () => request<LinearTeam[]>("/api/v1/issue-tracking/linear/teams"),
+  listLinearProjects: (teamId: string) =>
+    request<LinearProject[]>(
+      `/api/v1/issue-tracking/linear/teams/${encodeURIComponent(teamId)}/projects`,
+    ),
+}
+
+export const remediationsApi = {
+  listForFinding: (findingId: string) =>
+    request<Remediation[]>(
+      `/api/v1/findings/${encodeURIComponent(findingId)}/remediations`,
+    ),
+  getPrompt: (remediationId: string) =>
+    request<RemediationPrompt>(
+      `/api/v1/remediations/${encodeURIComponent(remediationId)}/prompt`,
+      { method: "GET" },
+      { requiresCsrf: true },
+    ),
+  createPullRequest: (remediationId: string) =>
+    post<Remediation>(
+      `/api/v1/remediations/${encodeURIComponent(remediationId)}/pull-request`,
+      undefined,
+    ),
+  createIssue: (remediationId: string, provider: IssueProviderName) =>
+    post<IssueLink>(
+      `/api/v1/remediations/${encodeURIComponent(remediationId)}/issue`,
+      { destination: { provider } },
+    ),
 }
 
 export const notificationsApi = {

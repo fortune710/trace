@@ -16,6 +16,9 @@ vi.mock("@/components/findings/review-findings", () => ({
     <p>Findings for {review.id}</p>
   ),
 }))
+vi.mock("@/components/projects/project-issue-tracking", () => ({
+  ProjectIssueTracking: () => <p>Issue tracker settings</p>,
+}))
 vi.mock("@/components/layout/app-shell", () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
@@ -140,6 +143,15 @@ describe("ProjectDetailsPage", () => {
     expect(screen.getByRole("tabpanel", { name: "Findings" })).toBeTruthy()
     expect(screen.getByText("Findings for review-a")).toBeTruthy()
     expect(screen.queryByRole("link", { name: /review review-a/i })).toBeNull()
+  })
+
+  it("shows the project Issues tab", () => {
+    renderPage()
+
+    fireEvent.click(screen.getByRole("tab", { name: "Issues" }))
+
+    expect(screen.getByRole("tabpanel", { name: "Issues" })).toBeTruthy()
+    expect(screen.getByText("Issue tracker settings")).toBeTruthy()
   })
 
   it("shows a findings-shaped skeleton while project reviews load", () => {

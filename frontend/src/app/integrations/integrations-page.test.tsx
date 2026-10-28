@@ -10,6 +10,7 @@ import { toast } from "@/components/ui/toast"
 
 const apiMocks = vi.hoisted(() => ({
   beginGitHubConnection: vi.fn(),
+  beginLinearConnection: vi.fn(),
   githubConnection: vi.fn(),
 }))
 
@@ -28,6 +29,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     authApi: {
       ...actual.authApi,
       beginGitHubConnection: apiMocks.beginGitHubConnection,
+      beginLinearConnection: apiMocks.beginLinearConnection,
       githubConnection: apiMocks.githubConnection,
     },
   }
@@ -57,6 +59,7 @@ describe("IntegrationsPage", () => {
 
   beforeEach(() => {
     apiMocks.beginGitHubConnection.mockReset()
+    apiMocks.beginLinearConnection.mockReset()
     apiMocks.githubConnection.mockReset()
     apiMocks.githubConnection.mockResolvedValue({ provider: "github", status: "never_connected" })
     vi.restoreAllMocks()
@@ -117,6 +120,19 @@ describe("IntegrationsPage", () => {
     })
   })
 
+  it("shows a success toast and clears a Linear OAuth callback", async () => {
+    const addToast = vi.spyOn(toast, "add")
+
+    renderPage("/settings/integrations?linear=connected&request_id=request-123")
+
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "success", title: "Linear connected" }),
+      )
+    })
+    expect(screen.getByTestId("location").textContent).toBe("/settings/integrations")
+  })
+
   it("shows an error toast when starting the connection fails", async () => {
     const addToast = vi.spyOn(toast, "add")
     apiMocks.beginGitHubConnection.mockRejectedValueOnce(new Error("request failed"))
@@ -172,5 +188,22 @@ describe("IntegrationsPage", () => {
       expect(button.textContent).toBe("Connecting…")
     })
     expect(resolveConnection).toBeDefined()
+  })
+
+  it("starts the Linear OAuth connection", async () => {
+    apiMocks.beginLinearConnection.mockImplementationOnce(
+      () => new Promise(() => {}),
+    )
+
+    renderPage()
+
+    const button = await screen.findByRole("button", { name: "Connect Linear" })
+    fireEvent.click(button)
+
+    await waitFor(() => {
+      expect(apiMocks.beginLinearConnection).toHaveBeenCalledOnce()
+      expect(button.hasAttribute("disabled")).toBe(true)
+      expect(button.textContent).toBe("Connecting…")
+    })
   })
 })

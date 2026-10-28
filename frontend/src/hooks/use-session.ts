@@ -62,3 +62,19 @@ export function useLogout() {
     onSettled: () => queryClient.setQueryData(sessionQueryKey, null),
   })
 }
+
+export function useUpdateAutomaticPullRequests() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: authApi.updateAutomaticPullRequests,
+    retry: false,
+    onSuccess: ({ automatic_pull_requests }) => {
+      queryClient.setQueryData<Session | null>(sessionQueryKey, (session) =>
+        session
+          ? { ...session, automatic_pull_requests }
+          : session,
+      )
+    },
+  })
+}

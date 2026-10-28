@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from auth.config import AuthSettings
 from auth.oauth import (
     GITHUB_CONNECT_START_ROUTE,
+    LINEAR_CONNECT_START_ROUTE,
     OAUTH_CALLBACK_ROUTE,
     GitHubConnectionStatus,
     OAuthPurpose,
@@ -18,6 +19,7 @@ from auth.oauth import (
     OAuthStateStore,
     OAuthTransaction,
     ProviderConfiguration,
+    _connection_redirect,
     _provider_configuration,
     _provider_identity,
     _repository_connection_redirect,
@@ -86,6 +88,27 @@ async def test_repository_connection_state_is_bound_to_an_owner() -> None:
     assert transaction.session_id == "00000000-0000-0000-0000-000000000012"
 
 
+@pytest.mark.anyio
+async def test_linear_issue_connection_state_is_bound_to_an_owner() -> None:
+    redis = FakeRedis()
+    store = OAuthStateStore(redis_client=redis, state_key=b"a" * 32)
+    owner_id = UUID("00000000-0000-0000-0000-000000000021")
+
+    state, _, nonce = await store.create(
+        provider="linear",
+        destination="https://traceai.vercel.app",
+        user_agent="test-agent",
+        purpose=OAuthPurpose.ISSUE_TRACKING_CONNECTION,
+        user_id=owner_id,
+        session_id=UUID("00000000-0000-0000-0000-000000000022"),
+    )
+    transaction = await store.consume(state)
+
+    assert nonce is None
+    assert transaction.purpose is OAuthPurpose.ISSUE_TRACKING_CONNECTION
+    assert transaction.user_id == str(owner_id)
+
+
 def test_repository_connection_route_is_explicitly_registered() -> None:
     app = FastAPI()
     install_oauth_routes(app, AuthSettings(), audit_hasher=None)
@@ -93,6 +116,7 @@ def test_repository_connection_route_is_explicitly_registered() -> None:
     paths = {route.path for route in app.routes}
 
     assert GITHUB_CONNECT_START_ROUTE in paths
+    assert LINEAR_CONNECT_START_ROUTE in paths
     assert "/auth/oauth/github/connection" in paths
 
 
@@ -114,6 +138,22 @@ def test_github_repository_connection_requests_the_documented_scope() -> None:
     assert repository_connection.scope == "read:user user:email repo"
 
 
+def test_linear_issue_connection_requests_documented_scopes() -> None:
+    settings = AuthSettings(
+        linear_client_id="linear-client-id",
+        linear_client_secret=SecretStr("linear-client-secret"),
+        linear_redirect_uri="https://trace.example/auth/oauth/linear/callback",
+    )
+
+    configuration = _provider_configuration(
+        settings,
+        "linear",
+        purpose=OAuthPurpose.ISSUE_TRACKING_CONNECTION,
+    )
+
+    assert configuration.scope == "read,issues:create"
+
+
 def test_repository_connection_redirects_always_return_to_integrations() -> None:
     success = _repository_connection_redirect(
         "https://trace.example", outcome="connected", request_id="request-123"
@@ -128,6 +168,19 @@ def test_repository_connection_redirects_always_return_to_integrations() -> None
     )
     assert failure.headers["location"] == (
         "https://trace.example/integrations?github=failed&request_id=request-123"
+    )
+
+
+def test_linear_connection_redirect_uses_the_linear_outcome_key() -> None:
+    response = _connection_redirect(
+        "https://trace.example",
+        outcome="connected",
+        request_id="request-123",
+        provider="linear",
+    )
+
+    assert response.headers["location"] == (
+        "https://trace.example/integrations?linear=connected&request_id=request-123"
     )
 
 
@@ -423,6 +476,51 @@ def test_github_repository_connection_retains_only_provider_token_payload(
     assert identity.credential_payload["refresh_token"] == "github-refresh-token"
     assert identity.credential_payload["expires_in"] == 28_800
     assert isinstance(identity.credential_payload["access_token_expires_at"], str)
+
+
+def test_linear_issue_connection_retains_provider_token_payload(monkeypatch) -> None:
+    configuration = ProviderConfiguration(
+        provider="linear",
+        client_id="client",
+        client_secret="secret",
+        redirect_uri="https://trace.example/auth/oauth/linear/callback",
+        authorize_url="https://linear.example/authorize",
+        token_url="https://linear.example/token",
+        scope="read,issues:create",
+        linear_api_url="https://linear.example/graphql",
+    )
+    monkeypatch.setattr(
+        "auth.oauth._post_form",
+        lambda _url, _values: {
+            "access_token": "linear-access-token",
+            "refresh_token": "linear-refresh-token",
+            "expires_in": 28_800,
+        },
+    )
+    monkeypatch.setattr(
+        "auth.oauth._linear_viewer",
+        lambda _url, _token: {"id": "linear-viewer-id"},
+    )
+
+    identity = _provider_identity(
+        configuration,
+        "authorization-code",
+        OAuthTransaction(
+            provider="linear",
+            verifier="verifier",
+            nonce=None,
+            destination="https://trace.example",
+            user_agent_hash="hash",
+            purpose=OAuthPurpose.ISSUE_TRACKING_CONNECTION,
+            user_id="00000000-0000-0000-0000-000000000011",
+            session_id="00000000-0000-0000-0000-000000000012",
+        ),
+    )
+
+    assert identity.subject == "linear-viewer-id"
+    assert identity.credential_payload is not None
+    assert identity.credential_payload["access_token"] == "linear-access-token"
+    assert identity.credential_payload["refresh_token"] == "linear-refresh-token"
 
 
 def test_github_refresh_replaces_the_encrypted_payload(monkeypatch) -> None:

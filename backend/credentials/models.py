@@ -16,6 +16,7 @@ from db.types import CredentialEncryptionProvider, native_enum
 
 class CredentialProvider(str, Enum):
     GITHUB = "github"
+    LINEAR = "linear"
     GOOGLE = "google"
     OPENAI = "openai"
     ANTHROPIC = "anthropic"

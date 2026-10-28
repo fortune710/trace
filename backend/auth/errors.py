@@ -70,6 +70,19 @@ class ResourceNotFound(AuthError):
         )
 
 
+class PromptRenderFailed(AuthError):
+    """Safe absence response for malformed persisted prompt material."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            code="resource_not_found",
+            message="The requested resource was not found.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            event="remediation_prompt",
+            reason="render_failed",
+        )
+
+
 class ResourceConflict(AuthError):
     """Safe response for a valid request that conflicts with resource state."""
 
@@ -104,6 +117,61 @@ class GithubAuthorizationRequired(AuthError):
             status_code=status.HTTP_403_FORBIDDEN,
             event="provider",
             reason="authorization_required",
+        )
+
+
+class IssueProviderAuthorizationRequired(AuthError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="issue_provider_authorization_required",
+            message="Issue-tracker authorization is required for this operation.",
+            status_code=status.HTTP_403_FORBIDDEN,
+            event="provider",
+            reason="issue_authorization_required",
+        )
+
+
+class IssueDestinationNotConfigured(AuthError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="issue_destination_not_configured",
+            message="Configure an issue-tracking destination for this project first.",
+            status_code=status.HTTP_409_CONFLICT,
+            event="provider",
+            reason="destination_not_configured",
+        )
+
+
+class IssueDestinationAccessDenied(AuthError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="issue_destination_access_denied",
+            message="You do not have access to the configured issue destination.",
+            status_code=status.HTTP_403_FORBIDDEN,
+            event="provider",
+            reason="destination_access_denied",
+        )
+
+
+class IssueDestinationNotFound(AuthError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="issue_destination_not_found",
+            message="The configured issue destination is no longer available.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            event="provider",
+            reason="destination_not_found",
+        )
+
+
+class IssueProviderValidationError(AuthError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="issue_provider_validation_failed",
+            message="The issue destination or content was rejected by the provider.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            event="provider",
+            reason="issue_validation_failed",
         )
 
 

@@ -2,7 +2,14 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { agentsApi, authApi, credentialsApi, projectsApi, repositoriesApi } from "@/lib/api"
+import {
+  agentsApi,
+  authApi,
+  credentialsApi,
+  projectsApi,
+  remediationsApi,
+  repositoriesApi,
+} from "@/lib/api"
 import { runtimeConfig } from "@/lib/runtime-config"
 import { assertPathFree } from "@/test/path-redaction"
 
@@ -37,6 +44,36 @@ describe("repositoriesApi", () => {
       "http://localhost:8000/api/v1/repositories/12345/branches?source=github&page=1&page_size=5",
       expect.objectContaining({ credentials: "include" }),
     )
+  })
+})
+
+describe("authApi", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    document.cookie = "trace_csrf=; Max-Age=0"
+  })
+
+  it("persists the automatic pull-request preference with CSRF protection", async () => {
+    document.cookie = "trace_csrf=session-token"
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ automatic_pull_requests: true }), {
+        status: 200,
+      }),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await authApi.updateAutomaticPullRequests(true)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/auth/session",
+      expect.objectContaining({
+        credentials: "include",
+        method: "PATCH",
+        body: JSON.stringify({ automatic_pull_requests: true }),
+      }),
+    )
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("session-token")
   })
 })
 
@@ -192,5 +229,33 @@ describe("agent and credential APIs", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock.mock.calls[0]?.[0]).toBe("http://localhost:8000/auth/login")
+  })
+})
+
+describe("remediationsApi", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    document.cookie = "trace_csrf=; Max-Age=0"
+  })
+
+  it("requires CSRF for the protected prompt read", async () => {
+    document.cookie = "trace_csrf=prompt-token"
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ prompt_text: "Resolve this finding." }), {
+        status: 200,
+      }),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await remediationsApi.getPrompt("remediation/1")
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/api/v1/remediations/remediation%2F1/prompt",
+      expect.objectContaining({ credentials: "include", method: "GET" }),
+    )
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(new Headers(requestInit.headers).get("X-CSRF-Token")).toBe(
+      "prompt-token",
+    )
   })
 })

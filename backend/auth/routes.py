@@ -56,6 +56,10 @@ class PasswordResetRequest(TokenRequest):
     password: str = Field(min_length=1, max_length=1024)
 
 
+class AutomaticPullRequestsRequest(_RequestModel):
+    automatic_pull_requests: bool
+
+
 def install_auth_routes(
     app: FastAPI,
     settings: AuthSettings,
@@ -310,7 +314,7 @@ def install_auth_routes(
     @app.get("/auth/session")
     async def session(
         request: Request, principal: CurrentPrincipal
-    ) -> dict[str, str | None]:
+    ) -> dict[str, str | bool | None]:
         audit(
             request,
             event="access",
@@ -319,7 +323,7 @@ def install_auth_routes(
             status_code=200,
         )
         try:
-            email, display_name = await asyncio.to_thread(
+            email, display_name, automatic_pull_requests = await asyncio.to_thread(
                 service().account_profile, user_id=principal.user_id
             )
         except AuthenticationUnavailable as error:
@@ -329,7 +333,36 @@ def install_auth_routes(
             "session_id": str(principal.session_id),
             "email": email,
             "display_name": display_name,
+            "automatic_pull_requests": automatic_pull_requests,
         }
+
+    @app.patch("/auth/session")
+    async def update_session_preferences(
+        request: Request,
+        body: AutomaticPullRequestsRequest,
+        principal: CurrentPrincipal,
+        csrf_cookie: str | None = Cookie(
+            default=None,
+            alias=settings.csrf_cookie_name,
+        ),
+    ) -> dict[str, bool]:
+        _require_csrf(request, csrf_cookie, principal.session_id, settings)
+        try:
+            automatic_pull_requests = await asyncio.to_thread(
+                service().update_automatic_pull_requests,
+                user_id=principal.user_id,
+                automatic_pull_requests=body.automatic_pull_requests,
+            )
+        except AuthenticationUnavailable as error:
+            raise _unavailable() from error
+        audit(
+            request,
+            event="session_preferences",
+            outcome="accepted",
+            reason="automatic_pull_requests_updated",
+            status_code=200,
+        )
+        return {"automatic_pull_requests": automatic_pull_requests}
 
     @app.post("/auth/password-recovery", status_code=202)
     async def password_recovery(

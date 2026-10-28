@@ -20,6 +20,11 @@ class User(Base):
         primary_key=True,
     )
     display_name: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+    automatic_pull_requests: Mapped[bool] = mapped_column(
+        sa.Boolean(),
+        nullable=False,
+        server_default=sa.text("false"),
+    )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,

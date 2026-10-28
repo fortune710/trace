@@ -7,6 +7,7 @@ from enum import Enum
 from uuid import UUID
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,6 +39,12 @@ class Project(Base):
             "OR (source = 'local' AND local_path_hash IS NOT NULL "
             "AND external_repository_id IS NULL AND external_repository_connection_id IS NULL)",
             name="projects_source_reference_check",
+        ),
+        sa.CheckConstraint(
+            "jsonb_typeof(issue_tracking_details) = 'object' "
+            "AND issue_tracking_details ? 'connected_projects' "
+            "AND jsonb_typeof(issue_tracking_details -> 'connected_projects') = 'array'",
+            name="projects_issue_tracking_details_shape_check",
         ),
         sa.ForeignKeyConstraint(
             ["owner_id", "external_repository_connection_id"],
@@ -88,6 +95,11 @@ class Project(Base):
     )
     auto_create_pull_requests: Mapped[bool] = mapped_column(
         sa.Boolean(), nullable=False, server_default=sa.text("false")
+    )
+    issue_tracking_details: Mapped[dict[str, object]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=sa.text("'{\"connected_projects\":[]}'::jsonb"),
     )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),

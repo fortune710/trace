@@ -30,6 +30,7 @@ export function IntegrationsPageSkeleton() {
     >
       <IntegrationCardSkeleton />
       <IntegrationCardSkeleton />
+      <IntegrationCardSkeleton />
     </div>
   )
 }
