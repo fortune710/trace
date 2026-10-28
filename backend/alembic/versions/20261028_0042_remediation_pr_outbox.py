@@ -67,8 +67,26 @@ def upgrade() -> None:
         "GRANT SELECT, UPDATE, DELETE ON private.remediation_pull_request_outbox_jobs "
         "TO trace_internal"
     )
+    op.execute(
+        "GRANT SELECT (id, owner_id, source, external_repository_id, branch_name) "
+        "ON public.projects TO trace_internal"
+    )
+    op.execute(
+        "GRANT SELECT (id, owner_id, review_id, status, title) "
+        "ON public.findings TO trace_internal"
+    )
+    op.execute("GRANT SELECT, UPDATE ON public.remediations TO trace_internal")
 
 
 def downgrade() -> None:
+    op.execute("REVOKE SELECT, UPDATE ON public.remediations FROM trace_internal")
+    op.execute(
+        "REVOKE SELECT (id, owner_id, review_id, status, title) "
+        "ON public.findings FROM trace_internal"
+    )
+    op.execute(
+        "REVOKE SELECT (id, owner_id, source, external_repository_id, branch_name) "
+        "ON public.projects FROM trace_internal"
+    )
     op.execute("DROP TABLE private.remediation_pull_request_outbox_jobs")
     op.execute("DROP TYPE private.remediation_pull_request_outbox_status")

@@ -593,6 +593,7 @@ class ReviewExecutionService:
                         .values(
                             [
                                 {
+                                    "idempotency_id": uuid7(),
                                     "owner_id": owner_id,
                                     "remediation_id": remediation["id"],
                                 }

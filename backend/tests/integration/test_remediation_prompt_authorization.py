@@ -45,17 +45,16 @@ def test_owner_scoped_remediation_prompt_requires_csrf_and_redacts_auditing(
         for event in recording_audit_recorder.events
         if event["event_type"] == "resource.remediation.prompt_read"
     ]
-    assert events == [
-        {
-            "event_type": "resource.remediation.prompt_read",
-            "fields": {
-                "resource": "remediation",
-                "operation": "prompt_read",
-                "route": path,
-                "status_code": "200",
-            },
-        }
-    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event["owner_id"] == owner.user_id
+    assert isinstance(event["request_id"], str)
+    assert event["fields"] == {
+        "resource": "remediation",
+        "operation": "prompt_read",
+        "route": path,
+        "status_code": "200",
+    }
     assert stored_prompt not in str(events[0])
 
     with principal_transaction(integration_engine, owner.user_id) as connection:
@@ -84,15 +83,17 @@ def test_owner_scoped_remediation_prompt_requires_csrf_and_redacts_auditing(
     assert render_failed.status_code == 404
     assert render_failed.json()["error"]["code"] == "resource_not_found"
     assert stored_prompt not in render_failed.text
-    assert {
-        "event_type": "remediation_prompt.rejected",
-        "fields": {
+    assert any(
+        event["event_type"] == "remediation_prompt.rejected"
+        and event["fields"]
+        == {
             "outcome": "rejected",
             "reason": "render_failed",
             "route": path,
             "status_code": "404",
-        },
-    } in recording_audit_recorder.events
+        }
+        for event in recording_audit_recorder.events
+    )
 
     missing_csrf = owner.client.get(path)
     assert missing_csrf.status_code == 403

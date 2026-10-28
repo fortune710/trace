@@ -4,6 +4,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Event
+from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
@@ -69,6 +70,7 @@ def _insert_outbox(integration_engine, owner_id, remediation_id) -> None:  # typ
     with principal_transaction(integration_engine, owner_id) as connection:
         connection.execute(
             sa.insert(RemediationPullRequestOutboxJob).values(
+                idempotency_id=uuid4(),
                 owner_id=owner_id,
                 remediation_id=remediation_id,
             )

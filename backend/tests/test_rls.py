@@ -168,6 +168,7 @@ def test_internal_worker_role_has_only_the_access_required_by_internal_workers()
                 "public.reviews": {"SELECT", "UPDATE"},
                 "public.review_agents": {"SELECT", "UPDATE"},
                 "public.findings": {"INSERT"},
+                "public.remediations": {"SELECT", "UPDATE"},
                 "public.external_repositories": {"SELECT"},
                 "private.review_dispatch_jobs": {"SELECT", "UPDATE", "DELETE"},
                 "private.remediation_pull_request_outbox_jobs": {
@@ -188,7 +189,15 @@ def test_internal_worker_role_has_only_the_access_required_by_internal_workers()
                         ),
                         {"relation": relation, "privilege": privilege},
                     ).scalar_one()
-            for column in ("owner_id", "review_id", "agent_id", "content_digest"):
+            for column in (
+                "id",
+                "owner_id",
+                "review_id",
+                "agent_id",
+                "content_digest",
+                "status",
+                "title",
+            ):
                 assert connection.execute(
                     sa.text(
                         "SELECT has_column_privilege("
@@ -196,7 +205,21 @@ def test_internal_worker_role_has_only_the_access_required_by_internal_workers()
                     ),
                     {"column": column},
                 ).scalar_one()
+            for column in (
+                "id",
+                "owner_id",
+                "source",
+                "external_repository_id",
+                "branch_name",
+            ):
+                assert connection.execute(
+                    sa.text(
+                        "SELECT has_column_privilege("
+                        "current_user, 'public.projects', :column, 'SELECT')"
+                    ),
+                    {"column": column},
+                ).scalar_one()
             with pytest.raises(sa.exc.DBAPIError):
-                connection.execute(sa.text("SELECT count(*) FROM public.projects"))
+                connection.execute(sa.text("SELECT name FROM public.projects"))
     finally:
         engine.dispose()

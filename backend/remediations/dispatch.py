@@ -208,7 +208,10 @@ class RemediationPullRequestOutboxWorker:
                         ),
                     )
                     .order_by(RemediationPullRequestOutboxJob.created_at)
-                    .with_for_update(skip_locked=True)
+                    .with_for_update(
+                        of=RemediationPullRequestOutboxJob.__table__,
+                        skip_locked=True,
+                    )
                     .limit(1)
                 )
                 .mappings()
@@ -275,7 +278,10 @@ class RemediationPullRequestOutboxWorker:
                         RemediationPullRequestOutboxJob.created_at,
                         RemediationPullRequestOutboxJob.idempotency_id,
                     )
-                    .with_for_update(skip_locked=True)
+                    .with_for_update(
+                        of=RemediationPullRequestOutboxJob.__table__,
+                        skip_locked=True,
+                    )
                     .limit(1)
                 )
                 .mappings()

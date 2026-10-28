@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
@@ -50,6 +51,7 @@ def _create_job(integration_engine, owner_id, remediation_id) -> None:
     with principal_transaction(integration_engine, owner_id) as connection:
         connection.execute(
             sa.insert(RemediationPullRequestJob).values(
+                id=uuid4(),
                 owner_id=owner_id,
                 remediation_id=remediation_id,
             )
