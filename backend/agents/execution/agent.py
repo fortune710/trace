@@ -29,8 +29,16 @@ class FindingOutput(BaseModel):
     recommendation: str | None = Field(default=None, max_length=10_000)
 
 
+class RemediationFindingOutput(FindingOutput):
+    prompt_text: str = Field(min_length=1, max_length=10_000)
+    diff: str = Field(min_length=1, max_length=1_048_576)
+
+
 class FindingBatch(BaseModel):
-    findings: list[FindingOutput] = Field(default_factory=list, max_length=100)
+    findings: list[RemediationFindingOutput] = Field(
+        default_factory=list,
+        max_length=100,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +75,13 @@ class Agent:
             "finding unless it is supported by evidence you read through a tool. "
             "Return only concrete launch risks. "
             "Each finding must include evidence and a repository-relative source "
-            "location when available. Return no finding when there is no risk."
+            "location when available. For every finding, also return:\n"
+            "- prompt_text: a concise, implementation-ready prompt for a coding "
+            "agent to resolve the finding in this exact repository revision.\n"
+            "- diff: a complete Git unified diff for that fix, including diff --git, "
+            "---, +++, and @@ hunk headers. The diff must modify only repository "
+            "files you inspected through the approved tools.\n"
+            "Return no finding when there is no risk."
         )
         human_message = (
             "Review target:\n"

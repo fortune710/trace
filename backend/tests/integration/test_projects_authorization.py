@@ -17,7 +17,11 @@ def test_project_owner_can_create_update_archive_restore_and_list(
     project_id = project["id"]
 
     assert owner.request("GET", "/api/v1/projects").json()["items"]
-    assert owner.request("GET", f"/api/v1/projects/{project_id}").status_code == 200
+    project_response = owner.request("GET", f"/api/v1/projects/{project_id}")
+    assert project_response.status_code == 200
+    assert project_response.json()["issue_tracking_details"] == {
+        "connected_projects": []
+    }
 
     updated = owner.request(
         "PATCH",
@@ -104,6 +108,22 @@ def test_project_github_binding_is_owner_scoped_and_unique(
 
     created = owner.request("POST", "/api/v1/projects", json=body)
     assert created.status_code == 201, created.text
+    expected_issue_tracking = {
+        "connected_projects": [
+            {"provider": "github", "owner": "octocat", "project": "hello-world"}
+        ]
+    }
+    assert created.json()["issue_tracking_details"] == expected_issue_tracking
+
+    issue_tracking_path = f"/api/v1/projects/{created.json()['id']}/issue-tracking"
+    assert owner.request("GET", issue_tracking_path).json() == expected_issue_tracking
+    updated_issue_tracking = owner.request(
+        "PATCH",
+        issue_tracking_path,
+        json={"connected_projects": []},
+    )
+    assert updated_issue_tracking.status_code == 200
+    assert updated_issue_tracking.json() == expected_issue_tracking
 
     duplicate = owner.request("POST", "/api/v1/projects", json=body)
     assert duplicate.status_code == 409

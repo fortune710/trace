@@ -14,7 +14,7 @@ def test_resource_endpoints_are_composed_under_v1_only():
         "/api/v1/findings/{finding_id}",
         "/api/v1/remediations/{remediation_id}",
         "/api/v1/credentials",
-        "/api/v1/pull-requests/{artifact_id}",
+        "/api/v1/remediations/{remediation_id}/pull-request",
         "/api/v1/repositories",
         "/api/v1/repositories/{repository_identifier}/branches",
     }
@@ -23,6 +23,10 @@ def test_resource_endpoints_are_composed_under_v1_only():
     assert v1_router.prefix == "/api/v1"
 
     openapi = app.openapi()["paths"]
+    pull_request_create = openapi["/api/v1/remediations/{remediation_id}/pull-request"][
+        "post"
+    ]
+    assert "requestBody" not in pull_request_create
     repository_parameters = {
         parameter["name"]
         for parameter in openapi["/api/v1/repositories"]["get"]["parameters"]
@@ -52,7 +56,7 @@ def test_resource_endpoints_are_composed_under_v1_only():
 
 def test_feature_packages_expose_modular_model_imports():
     from agents.models import Agent
-    from artifacts.models import LocalFileBackup, PullRequest
+    from artifacts.models import LocalFileBackup
     from credentials.models import Credential
     from findings.models import Finding
     from projects.models import Project
@@ -66,7 +70,6 @@ def test_feature_packages_expose_modular_model_imports():
             Credential,
             Finding,
             Remediation,
-            PullRequest,
             LocalFileBackup,
             Review,
             ReviewAgent,

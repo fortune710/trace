@@ -6,8 +6,11 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import random
 import re
+import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -96,6 +99,13 @@ class CreatedBranch:
     repository_id: str
     name: str
     commit_sha: str
+
+
+@dataclass(frozen=True)
+class PublishedPullRequest:
+    url: str
+    number: int
+    is_merged: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -470,6 +480,82 @@ class GitHubClient:
             repository_id=repository.repository_id,
             name=branch_name,
             commit_sha=sha,
+        )
+
+    def authenticated_identity(self, *, access_token: str) -> tuple[str, str]:
+        payload, _headers = self._request_json(
+            method="GET", path="/user", access_token=access_token
+        )
+        if not isinstance(payload, dict):
+            raise RepositoryProviderError(kind="malformed_response")
+        login, user_id = payload.get("login"), payload.get("id")
+        email = payload.get("email")
+        if not isinstance(login, str) or not login or not isinstance(user_id, int):
+            raise RepositoryProviderError(kind="malformed_response")
+        if not isinstance(email, str) or not email:
+            email = f"{user_id}+{login}@users.noreply.github.com"
+        return login, email
+
+    def find_pull_request(
+        self, *, access_token: str, repository: RepositoryRecord, branch_name: str
+    ) -> PublishedPullRequest | None:
+        payload, _headers = self._request_json(
+            method="GET",
+            path=(
+                f"/repos/{quote(repository.owner_login, safe='')}/"
+                f"{quote(repository.name, safe='')}/pulls?state=all&head="
+                f"{quote(repository.owner_login + ':' + branch_name, safe='')}"
+            ),
+            access_token=access_token,
+        )
+        if not isinstance(payload, list):
+            raise RepositoryProviderError(kind="malformed_response")
+        if not payload:
+            return None
+        return self._pull_request(payload[0])
+
+    def create_pull_request(
+        self,
+        *,
+        access_token: str,
+        repository: RepositoryRecord,
+        branch_name: str,
+        base_branch: str,
+        title: str,
+        body: str,
+    ) -> PublishedPullRequest:
+        payload, _headers = self._request_json(
+            method="POST",
+            path=(
+                f"/repos/{quote(repository.owner_login, safe='')}/"
+                f"{quote(repository.name, safe='')}/pulls"
+            ),
+            access_token=access_token,
+            body={
+                "head": branch_name,
+                "base": base_branch,
+                "title": title,
+                "body": body,
+            },
+        )
+        return self._pull_request(payload)
+
+    @staticmethod
+    def _pull_request(payload: object) -> PublishedPullRequest:
+        if not isinstance(payload, dict):
+            raise RepositoryProviderError(kind="malformed_response")
+        url, number = payload.get("html_url"), payload.get("number")
+        merged = payload.get("merged")
+        merged_at = payload.get("merged_at")
+        if (
+            not isinstance(url, str)
+            or not url
+            or not isinstance(number, int)
+            or number < 1
+        ):
+            raise RepositoryProviderError(kind="malformed_response")
+        return PublishedPullRequest(
+            url=url, number=number, is_merged=merged is True or merged_at is not None
         )
 
     def _request_json(
@@ -1306,6 +1392,173 @@ class RepositoryService:
             _log_provider_call("create_branch", error.kind)
             raise _provider_error(error, operation="branch_create") from error
 
+    def publish_remediation_pull_request(
+        self,
+        *,
+        owner_id: UUID,
+        repository_identifier: str,
+        source_revision: str,
+        base_branch: str,
+        remediation_id: UUID,
+        diff: str,
+        finding_title: str,
+    ) -> PublishedPullRequest:
+        """Apply a trusted persisted diff in an isolated checkout and open a GitHub PR."""
+        token = self._access_token(
+            owner_id=owner_id, provider=RepositoryProvider.GITHUB
+        )
+        try:
+            repository = self._github_client.get_repository(
+                access_token=token, repository_identifier=repository_identifier
+            )
+            branch_name = f"trace-fix/{remediation_id}"
+            existing = self._github_client.find_pull_request(
+                access_token=token, repository=repository, branch_name=branch_name
+            )
+            if existing is not None:
+                return existing
+            login, email = self._github_client.authenticated_identity(
+                access_token=token
+            )
+            self._apply_and_push_patch(
+                repository=repository,
+                token=token,
+                revision=source_revision,
+                branch_name=branch_name,
+                diff=diff,
+                author_name=login,
+                author_email=email,
+            )
+            return self._github_client.create_pull_request(
+                access_token=token,
+                repository=repository,
+                branch_name=branch_name,
+                base_branch=base_branch,
+                title=f"Trace remediation: {finding_title.strip().replace(chr(10), ' ')[:180]}",
+                body=f"Created by Trace for remediation `{remediation_id}`.",
+            )
+        except RepositoryProviderError as error:
+            _log_provider_call("publish_remediation_pull_request", error.kind)
+            raise _provider_error(error, operation="pull_request") from error
+
+    @staticmethod
+    def _apply_and_push_patch(
+        *,
+        repository: RepositoryRecord,
+        token: str,
+        revision: str,
+        branch_name: str,
+        diff: str,
+        author_name: str,
+        author_email: str,
+    ) -> None:
+        if not _GITHUB_SHA.fullmatch(revision) or not _is_safe_patch(diff):
+            raise RepositoryInvalidRequest()
+        with tempfile.TemporaryDirectory(prefix="trace-remediation-") as directory:
+            patch_path = f"{directory}/change.patch"
+            with open(patch_path, "w", encoding="utf-8", newline="\n") as patch_file:
+                patch_file.write(diff)
+            remote = f"{repository.web_url}.git"
+            environment = {
+                **os.environ,
+                "GIT_TERMINAL_PROMPT": "0",
+                "GIT_CONFIG_COUNT": "2",
+                "GIT_CONFIG_KEY_0": "http.extraHeader",
+                "GIT_CONFIG_VALUE_0": f"Authorization: Bearer {token}",
+                "GIT_CONFIG_KEY_1": "core.hooksPath",
+                "GIT_CONFIG_VALUE_1": "/dev/null",
+            }
+
+            def run(
+                *arguments: str,
+                invalid_patch: bool = False,
+                allow_failure: bool = False,
+            ) -> bool:
+                try:
+                    subprocess.run(
+                        arguments,
+                        cwd=directory,
+                        env=environment,
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=60,
+                    )
+                except subprocess.CalledProcessError:
+                    if allow_failure:
+                        return False
+                    if invalid_patch:
+                        raise RepositoryInvalidRequest() from None
+                    raise RepositoryProviderError(kind="unavailable") from None
+                except OSError:
+                    if allow_failure:
+                        return False
+                    raise RepositoryProviderError(kind="unavailable") from None
+                return True
+
+            run("git", "init", "-q")
+            run("git", "remote", "add", "origin", remote)
+            run("git", "fetch", "--depth=1", "origin", revision)
+            run("git", "checkout", "-q", "-b", branch_name, "FETCH_HEAD")
+            run(
+                "git",
+                "apply",
+                "--check",
+                "--whitespace=error",
+                patch_path,
+                invalid_patch=True,
+            )
+            run(
+                "git",
+                "apply",
+                "--whitespace=error",
+                patch_path,
+                invalid_patch=True,
+            )
+            run("git", "add", "--all")
+            run(
+                "git",
+                "-c",
+                f"user.name={author_name}",
+                "-c",
+                f"user.email={author_email}",
+                "commit",
+                "-m",
+                "Trace remediation",
+            )
+            if run(
+                "git",
+                "push",
+                "origin",
+                f"HEAD:refs/heads/{branch_name}",
+                allow_failure=True,
+            ):
+                return
+
+            # A process can fail after the remote accepts the push but before it
+            # records the pull request. Verify the deterministic branch contains
+            # this exact patch, then let the caller create or recover the PR.
+            if not run(
+                "git",
+                "fetch",
+                "--depth=1",
+                "origin",
+                f"refs/heads/{branch_name}",
+                allow_failure=True,
+            ):
+                raise RepositoryProviderError(kind="unavailable")
+            run("git", "checkout", "-q", "FETCH_HEAD")
+            if not run(
+                "git",
+                "apply",
+                "--reverse",
+                "--check",
+                "--whitespace=error",
+                patch_path,
+                allow_failure=True,
+            ):
+                raise RepositoryProviderError(kind="conflict")
+
     def _repository_catalog_from_provider(
         self, *, token: str
     ) -> list[RepositoryRecord]:
@@ -1519,6 +1772,25 @@ def _is_safe_review_path(path: str) -> bool:
         and "\x00" not in path
         and all(part not in {"", ".", ".."} for part in path.split("/"))
     )
+
+
+def _is_safe_patch(diff: str) -> bool:
+    if not diff.startswith("diff --git ") or "GIT binary patch" in diff:
+        return False
+    for line in diff.splitlines():
+        if line.startswith(
+            ("new file mode 120000", "new file mode 160000", "Submodule ")
+        ):
+            return False
+        if line.startswith(("--- a/", "+++ b/", "diff --git a/")):
+            paths = line.replace("diff --git ", "").split()
+            for path in paths:
+                normalized = path.removeprefix("a/").removeprefix("b/")
+                if not _is_safe_review_path(normalized) or normalized.startswith(
+                    ".git/"
+                ):
+                    return False
+    return True
 
 
 def _validate_repository_identifier(value: str) -> str:

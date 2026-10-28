@@ -1,5 +1,5 @@
 """Artifact API schema exports."""
 
-from resources.schemas import LocalFileBackupResponse, PullRequestResponse
+from resources.schemas import LocalFileBackupResponse
 
-__all__ = ["LocalFileBackupResponse", "PullRequestResponse"]
+__all__ = ["LocalFileBackupResponse"]

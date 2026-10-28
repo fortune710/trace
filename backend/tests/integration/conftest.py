@@ -12,7 +12,7 @@ import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
-from artifacts.models import LocalFileBackup, PullRequest
+from artifacts.models import LocalFileBackup
 from audit.runtime import get_audit_recorder
 from auth.config import AuthSettings
 from auth.csrf import issue_csrf_token
@@ -360,7 +360,6 @@ def artifact_graph_factory(integration_engine):
         review_id = uuid4()
         finding_id = uuid4()
         remediation_id = uuid4()
-        pull_request_id = uuid4()
         backup_id = uuid4()
         with principal_transaction(integration_engine, account.user_id) as connection:
             connection.execute(
@@ -408,19 +407,9 @@ def artifact_graph_factory(integration_engine):
                     owner_id=account.user_id,
                     project_id=project_id,
                     finding_id=finding_id,
+                    prompt_text="Resolve the integration finding without unrelated changes.",
                     proposed_diff="diff --git a/file b/file",
                     status=RemediationStatus.PROPOSED,
-                )
-            )
-            connection.execute(
-                sa.insert(PullRequest).values(
-                    id=pull_request_id,
-                    owner_id=account.user_id,
-                    remediation_id=remediation_id,
-                    repository_url="https://github.example.test/repo",
-                    pull_request_number=7,
-                    pull_request_url="https://github.example.test/repo/pull/7",
-                    branch_name="trace/integration",
                 )
             )
             connection.execute(
@@ -437,7 +426,6 @@ def artifact_graph_factory(integration_engine):
             "review_id": review_id,
             "finding_id": finding_id,
             "remediation_id": remediation_id,
-            "pull_request_id": pull_request_id,
             "backup_id": backup_id,
         }
 

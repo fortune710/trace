@@ -1,10 +1,11 @@
 import { GitHubIntegrationCard } from "@/components/integrations/github-integration-card"
 import { GitLabIntegrationCard } from "@/components/integrations/gitlab-integration-card"
+import { LinearIntegrationCard } from "@/components/integrations/linear-integration-card"
 import { AppShell } from "@/components/layout/app-shell"
-import { useGitHubCallbackToast } from "@/hooks/use-github-callback-toast"
+import { useIntegrationCallbackToast } from "@/hooks/use-integration-callback-toast"
 
 export function IntegrationsPage() {
-  useGitHubCallbackToast()
+  useIntegrationCallbackToast()
 
   return (
     <AppShell>
@@ -15,6 +16,7 @@ export function IntegrationsPage() {
         </p>
         <div className="mt-8 grid gap-4 md:grid-cols-2">
           <GitHubIntegrationCard />
+          <LinearIntegrationCard />
           <GitLabIntegrationCard />
         </div>
       </section>

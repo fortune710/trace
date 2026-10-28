@@ -1,7 +1,7 @@
 import sqlalchemy as sa
 
 from agents.models import Agent
-from artifacts.models import LocalFileBackup, PullRequest
+from artifacts.models import LocalFileBackup
 from audit.models import AuditDeliveryJob
 from auth.models import (
     AuthIdentity,
@@ -16,10 +16,12 @@ from credentials.models import Credential
 from db.base import Base
 from external_repositories.models import ExternalRepository
 from findings.models import Finding
+from issue_tracking.models import IssueLink
 from notifications.models import Notification
 from projects.models import Project
 from remediations.models import Remediation
 from reviews.models import Review, ReviewAgent, ReviewDispatchJob
+from users.models import User
 
 
 def test_string_columns_use_text_and_provider_fields_use_native_enums() -> None:
@@ -42,6 +44,7 @@ def test_string_columns_use_text_and_provider_fields_use_native_enums() -> None:
 
 
 def test_all_auth_and_public_tables_match_the_database_contract() -> None:
+    assert User.__table__.schema == "public"
     expected_tables = {
         "auth": {
             "email_verification_tokens",
@@ -61,8 +64,8 @@ def test_all_auth_and_public_tables_match_the_database_contract() -> None:
             "reviews",
             "review_agents",
             "findings",
+            "issue_links",
             "remediations",
-            "pull_requests",
             "local_file_backups",
             "notifications",
         },
@@ -94,6 +97,17 @@ def test_agents_can_reference_only_owner_scoped_credentials() -> None:
     )
 
 
+def test_each_finding_can_have_only_one_owner_scoped_remediation() -> None:
+    remediation_finding_index = next(
+        index
+        for index in Remediation.__table__.indexes
+        if index.name == "remediations_owner_finding_idx"
+    )
+
+    assert remediation_finding_index.unique is True
+    assert list(remediation_finding_index.columns.keys()) == ["owner_id", "finding_id"]
+
+
 def test_generated_primary_keys_use_the_uuidv7_database_default() -> None:
     generated_models = (
         AuthUser,
@@ -108,8 +122,8 @@ def test_generated_primary_keys_use_the_uuidv7_database_default() -> None:
         Agent,
         Review,
         Finding,
+        IssueLink,
         Remediation,
-        PullRequest,
         LocalFileBackup,
     )
 

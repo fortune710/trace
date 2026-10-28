@@ -5,7 +5,7 @@ this module preserve the existing import surface during the transition.
 """
 
 from agents.models import Agent
-from artifacts.models import LocalFileBackup, PullRequest
+from artifacts.models import LocalFileBackup
 from audit.models import AuditDeliveryJob, AuditDeliveryStatus
 from auth.models import (
     AuthIdentity,
@@ -41,13 +41,21 @@ from db.types import (
 )
 from external_repositories.models import ExternalRepository
 from findings.models import Finding, FindingSeverity, FindingStatus
+from issue_tracking.models import IssueLink, IssueLinkState, IssueProviderName
 from notifications.models import (
     Notification,
     NotificationCategory,
     NotificationEventType,
 )
 from projects.models import Project, ProjectCategory
-from remediations.models import Remediation, RemediationStatus
+from remediations.models import (
+    Remediation,
+    RemediationPullRequestJob,
+    RemediationPullRequestJobStatus,
+    RemediationPullRequestOutboxJob,
+    RemediationPullRequestOutboxStatus,
+    RemediationStatus,
+)
 from reviews.models import (
     Review,
     ReviewAgent,
@@ -82,6 +90,9 @@ __all__ = [
     "FindingSeverity",
     "FindingStatus",
     "IdentityProvider",
+    "IssueLink",
+    "IssueLinkState",
+    "IssueProviderName",
     "LocalFileBackup",
     "ModelProvider",
     "Notification",
@@ -92,9 +103,12 @@ __all__ = [
     "Project",
     "ProjectCategory",
     "ProjectSourceType",
-    "PullRequest",
     "RefreshToken",
     "Remediation",
+    "RemediationPullRequestJob",
+    "RemediationPullRequestJobStatus",
+    "RemediationPullRequestOutboxJob",
+    "RemediationPullRequestOutboxStatus",
     "RemediationStatus",
     "RepositoryProvider",
     "RepositorySource",

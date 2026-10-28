@@ -60,6 +60,31 @@ const finding = {
   updated_at: "2026-10-21T00:00:30Z",
 }
 
+const remediation = {
+  id: "remediation-1",
+  project_id: "project-1",
+  finding_id: finding.id,
+  proposed_diff: "diff --git a/backend/routes.py b/backend/routes.py",
+  status: "proposed",
+  approved_at: null,
+  created_at: "2026-10-21T00:00:30Z",
+  updated_at: "2026-10-21T00:00:30Z",
+}
+
+const codingPrompt = `# Trace coding remediation prompt
+
+## Step 1 — Verify before changing anything
+
+Verify that the reported issue still exists.
+
+## Step 2 — Model-proposed implementation prompt
+
+Fix the ownership check without changing unrelated files.
+
+## Immutable review revision
+
+${commitSha}`
+
 const corsHeaders = {
   "access-control-allow-credentials": "true",
   "access-control-allow-origin": "http://127.0.0.1:5173",
@@ -74,13 +99,17 @@ async function fulfillJson(route: Route, json: unknown, status = 200) {
   })
 }
 
-async function mockFindingsApi(page: Page) {
+async function mockFindingsApi(page: Page, promptStatus = 200) {
   await page.route(`${apiBaseUrl}/**`, async (route) => {
     const request = route.request()
     const url = new URL(request.url())
 
     if (request.method() === "GET" && url.pathname === "/auth/session") {
       await fulfillJson(route, { user_id: "user-1", session_id: "session-1" })
+      return
+    }
+    if (request.method() === "GET" && url.pathname === "/auth/csrf") {
+      await fulfillJson(route, { csrf_token: "csrf-token" })
       return
     }
     if (
@@ -104,6 +133,29 @@ async function mockFindingsApi(page: Page) {
       url.pathname === "/api/v1/findings/finding-1"
     ) {
       await fulfillJson(route, finding)
+      return
+    }
+    if (
+      request.method() === "GET" &&
+      url.pathname === "/api/v1/findings/finding-1/remediations"
+    ) {
+      await fulfillJson(route, [remediation])
+      return
+    }
+    if (
+      request.method() === "GET" &&
+      url.pathname === "/api/v1/remediations/remediation-1/prompt"
+    ) {
+      expect(request.headers()["x-csrf-token"]).toBe("csrf-token")
+      if (promptStatus === 200) {
+        await fulfillJson(route, { prompt_text: codingPrompt })
+      } else {
+        await fulfillJson(
+          route,
+          { error: { code: "authorization_denied" } },
+          promptStatus,
+        )
+      }
       return
     }
 
@@ -130,4 +182,38 @@ test("renders a review finding, preserves the filter URL, and opens its detail",
   await expect(page).toHaveURL(/\/reviews\/review-1\/findings\/finding-1$/)
   await expect(page.getByText(finding.evidence)).toBeVisible()
   await expect(page.getByText(finding.recommendation)).toBeVisible()
+})
+
+test("an owner can copy a rendered coding prompt from finding details", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+    origin: "http://127.0.0.1:5173",
+  })
+  await mockFindingsApi(page)
+
+  await page.goto("/reviews/review-1/findings/finding-1")
+  await expect(page.getByRole("heading", { name: "Coding-agent prompt" })).toBeVisible()
+  await expect(page.getByText(codingPrompt)).toBeVisible()
+
+  const copyButton = page.getByRole("button", { name: "Copy prompt" })
+  await copyButton.focus()
+  await page.keyboard.press("Space")
+
+  await expect(page.getByText("Prompt copied")).toBeVisible()
+  await expect
+    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .toBe(codingPrompt)
+})
+
+test("a forbidden remediation prompt is never rendered", async ({ page }) => {
+  await mockFindingsApi(page, 403)
+
+  await page.goto("/reviews/review-1/findings/finding-1")
+
+  await expect(
+    page.getByText("We could not load the coding-agent prompt."),
+  ).toBeVisible()
+  await expect(page.getByText(codingPrompt)).toHaveCount(0)
 })

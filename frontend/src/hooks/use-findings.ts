@@ -7,6 +7,8 @@ import {
 
 import {
   findingsApi,
+  ApiError,
+  remediationsApi,
   type Finding,
   type FindingPage,
   type FindingSeverity,
@@ -216,6 +218,23 @@ export function useUpdateFindingStatus() {
   })
 }
 
+export function useCreateRemediationPullRequest(
+  remediationId: string | undefined,
+  findingId: string,
+) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: () => remediationsApi.createPullRequest(remediationId!),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: findingsQueryKey })
+      void queryClient.invalidateQueries({
+        queryKey: [...findingsQueryKey, "remediations", findingId],
+      })
+    },
+  })
+}
+
 export function useFinding(findingId: string | undefined) {
   return useQuery({
     queryKey: [...findingsQueryKey, "detail", findingId],
@@ -223,4 +242,45 @@ export function useFinding(findingId: string | undefined) {
     enabled: Boolean(findingId),
     retry: false,
   })
+}
+
+export function useFindingRemediations(findingId: string | undefined) {
+  return useQuery({
+    queryKey: [...findingsQueryKey, "remediation", findingId],
+    queryFn: () => remediationsApi.listForFinding(findingId!),
+    enabled: Boolean(findingId),
+    retry: false,
+  })
+}
+
+export function useFindingRemediationPrompt(findingId: string | undefined) {
+  const remediations = useFindingRemediations(findingId)
+  const remediationId = remediations.data?.[0]?.id
+  const prompt = useQuery({
+    queryKey: [...findingsQueryKey, "remediation", remediationId, "prompt"],
+    queryFn: () => remediationsApi.getPrompt(remediationId!),
+    enabled: Boolean(remediationId),
+    retry: false,
+  })
+  const promptMissing =
+    prompt.isError &&
+    prompt.error instanceof ApiError &&
+    prompt.error.code === "resource_not_found"
+  const noPrompt =
+    remediations.isSuccess && (!remediationId || promptMissing)
+  const isError = remediations.isError || (prompt.isError && !promptMissing)
+
+  return {
+    prompt: prompt.data?.prompt_text ?? null,
+    isLoading:
+      remediations.isLoading || (Boolean(remediationId) && prompt.isLoading),
+    isError,
+    isNoPrompt: noPrompt,
+    refetch: async () => {
+      await remediations.refetch()
+      if (remediationId) {
+        await prompt.refetch()
+      }
+    },
+  }
 }

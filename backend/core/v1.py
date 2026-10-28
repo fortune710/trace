@@ -19,6 +19,7 @@ from auth.config import AuthSettings
 from credentials.routes import build_router as build_credentials_router
 from external_repositories.routes import build_router as build_repositories_router
 from findings.routes import build_router as build_findings_router
+from issue_tracking.routes import build_router as build_issue_tracking_router
 from notifications.routes import build_router as build_notifications_router
 from projects.routes import build_router as build_projects_router
 from remediations.routes import build_router as build_remediations_router
@@ -49,8 +50,12 @@ def build_router(
         (build_agents_router(resource_router), ["agents"]),
         (build_reviews_router(resource_router), ["reviews"]),
         (build_findings_router(resource_router), ["findings"]),
+        (build_issue_tracking_router(settings, audit_recorder), ["issue-tracking"]),
         (build_notifications_router(settings), ["notifications"]),
-        (build_remediations_router(resource_router), ["remediations"]),
+        (
+            build_remediations_router(resource_router, settings, audit_recorder),
+            ["remediations"],
+        ),
         (build_artifacts_router(resource_router), ["artifacts"]),
         (build_credentials_router(resource_router), ["credentials"]),
         (build_repositories_router(settings), ["repositories"]),

@@ -5,14 +5,26 @@ import { MemoryRouter, Route, Routes } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { FindingDetailsPage } from "@/app/findings/finding-details-page"
-import { useFinding } from "@/hooks/use-findings"
+import { useFinding, useFindingRemediationPrompt } from "@/hooks/use-findings"
 import { useProject } from "@/hooks/use-projects"
 import { useReview } from "@/hooks/use-reviews"
 import type { Finding, Project, Review } from "@/lib/api"
 
-vi.mock("@/hooks/use-findings", () => ({ useFinding: vi.fn() }))
+vi.mock("@/hooks/use-findings", () => ({
+  useFinding: vi.fn(),
+  useFindingRemediationPrompt: vi.fn(),
+}))
 vi.mock("@/hooks/use-projects", () => ({ useProject: vi.fn() }))
 vi.mock("@/hooks/use-reviews", () => ({ useReview: vi.fn() }))
+vi.mock("@/components/findings/finding-issue-actions", () => ({
+  FindingIssueActions: () => <button type="button">Create issue</button>,
+}))
+vi.mock("@/components/findings/finding-issue-links", () => ({
+  FindingIssueLinks: () => <p>Linked issues</p>,
+}))
+vi.mock("@/components/findings/proposed-diff", () => ({
+  ProposedDiff: () => <p>Proposed diff</p>,
+}))
 vi.mock("@/components/layout/app-shell", () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
@@ -41,6 +53,7 @@ const finding: Finding = {
 }
 
 const mockedUseFinding = vi.mocked(useFinding)
+const mockedUseFindingRemediationPrompt = vi.mocked(useFindingRemediationPrompt)
 const mockedUseProject = vi.mocked(useProject)
 const mockedUseReview = vi.mocked(useReview)
 
@@ -87,6 +100,13 @@ describe("FindingDetailsPage", () => {
       isError: false,
       refetch: vi.fn(),
     } as unknown as ReturnType<typeof useFinding>)
+    mockedUseFindingRemediationPrompt.mockReturnValue({
+      prompt: "Resolve the finding with a focused authorization check.",
+      isLoading: false,
+      isError: false,
+      isNoPrompt: false,
+      refetch: vi.fn(),
+    })
   })
 
   afterEach(() => {
@@ -115,5 +135,11 @@ describe("FindingDetailsPage", () => {
     expect(breadcrumbPage?.getAttribute("title")).toBe(finding.title)
     expect(screen.getByRole("heading", { name: finding.title })).toBeTruthy()
     expect(screen.getByText(/Security Scout/)).toBeTruthy()
+    expect(screen.getByText("Coding-agent prompt")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Create issue" })).toBeTruthy()
+    expect(screen.getByText("Linked issues")).toBeTruthy()
+    expect(
+      screen.getByText("Resolve the finding with a focused authorization check."),
+    ).toBeTruthy()
   })
 })

@@ -496,12 +496,12 @@ def test_remediation_decision_allows_one_concurrent_mutation() -> None:
                 lambda: service.set_remediation_status(
                     owner_id=owner_id,
                     remediation_id=remediation_id,
-                    status=RemediationStatus.APPROVED,
+                    status=RemediationStatus.REJECTED,
                 ),
                 lambda: service.set_remediation_status(
                     owner_id=owner_id,
                     remediation_id=remediation_id,
-                    status=RemediationStatus.APPROVED,
+                    status=RemediationStatus.REJECTED,
                 ),
             ]
         )
