@@ -60,35 +60,23 @@ function isDismissedFindingPage(queryKey: readonly unknown[]) {
   )
 }
 
-function isPrimaryFindingPage(queryKey: readonly unknown[]) {
+function getPageStatusFilter(queryKey: readonly unknown[]) {
   const filters = queryKey[4]
-  return (
-    typeof filters === "object" &&
-    filters !== null &&
-    "excludeStatus" in filters &&
-    filters.excludeStatus === "dismissed"
-  )
+  if (
+    typeof filters !== "object" ||
+    filters === null ||
+    !("status" in filters)
+  ) {
+    return undefined
+  }
+  return filters.status
 }
 
-function statusMatchesFindingPage(
+function isFindingPageForReview(
   queryKey: readonly unknown[],
-  status: FindingStatus,
+  reviewId: string,
 ) {
-  const filters = queryKey[4]
-  return (
-    typeof filters === "object" &&
-    filters !== null &&
-    "status" in filters &&
-    filters.status === status
-  )
-}
-
-function insertByCreatedAt(items: Finding[], finding: Finding) {
-  return [...items.filter((item) => item.id !== finding.id), finding].toSorted(
-    (left, right) =>
-      new Date(right.created_at).getTime() -
-      new Date(left.created_at).getTime(),
-  )
+  return queryKey[1] === "review" && queryKey[2] === reviewId
 }
 
 export function useUpdateFindingStatus() {
@@ -138,19 +126,22 @@ export function useUpdateFindingStatus() {
           return
         }
         if (!("items" in value)) return
+        if (!isFindingPageForReview(queryKey, currentFinding.review_id)) return
         const page = value as FindingPage
         const containsFinding = page.items.some((item) => item.id === findingId)
         const dismissedPage = isDismissedFindingPage(queryKey)
-        const primaryPage = isPrimaryFindingPage(queryKey)
-        const targetStatusPage = statusMatchesFindingPage(queryKey, status)
+        const pageStatus = getPageStatusFilter(queryKey)
 
         if (status === "dismissed") {
+          if (!containsFinding) return
           queryClient.setQueryData(
             queryKey,
             dismissedPage
               ? {
                   ...page,
-                  items: insertByCreatedAt(page.items, optimisticFinding),
+                  items: page.items.map((item) =>
+                    item.id === findingId ? optimisticFinding : item,
+                  ),
                 }
               : {
                   ...page,
@@ -166,17 +157,17 @@ export function useUpdateFindingStatus() {
           })
           return
         }
-        if (containsFinding) {
+        if (containsFinding && pageStatus && pageStatus !== status) {
+          queryClient.setQueryData(queryKey, {
+            ...page,
+            items: page.items.filter((item) => item.id !== findingId),
+          })
+        } else if (containsFinding) {
           queryClient.setQueryData(queryKey, {
             ...page,
             items: page.items.map((item) =>
               item.id === findingId ? optimisticFinding : item,
             ),
-          })
-        } else if (primaryPage || targetStatusPage) {
-          queryClient.setQueryData(queryKey, {
-            ...page,
-            items: insertByCreatedAt(page.items, optimisticFinding),
           })
         }
       })
@@ -197,6 +188,7 @@ export function useUpdateFindingStatus() {
             return
           }
           if ("items" in value) {
+            if (!isFindingPageForReview(queryKey, finding.review_id)) return
             const page = value as FindingPage
             queryClient.setQueryData(queryKey, {
               ...page,
