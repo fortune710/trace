@@ -21,6 +21,7 @@ from credentials.models import (
 from external_repositories.models import ExternalRepository
 from findings.models import Finding
 from issue_tracking.models import IssueLink
+from local_projects.models import LocalProjectHandle
 from notifications.models import Notification
 from projects.models import Project
 from remediations.models import (
@@ -52,6 +53,7 @@ __all__ = [
     "Finding",
     "IssueLink",
     "LocalFileBackup",
+    "LocalProjectHandle",
     "Notification",
     "PasswordCredential",
     "PasswordRecoveryToken",

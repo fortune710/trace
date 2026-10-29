@@ -35,6 +35,8 @@ class NotificationEventType(str, Enum):
     GITHUB_CONNECTED = "github_connected"
     ISSUE_CREATED = "issue_created"
     ISSUE_CREATION_FAILED = "issue_creation_failed"
+    PULL_REQUEST_CREATED = "pull_request_created"
+    PULL_REQUEST_CREATION_FAILED = "pull_request_creation_failed"
 
 
 class Notification(Base):
@@ -50,7 +52,9 @@ class Notification(Base):
             "length(body) BETWEEN 1 AND 2000", name="notifications_body_length"
         ),
         sa.CheckConstraint(
-            "action_path IS NULL OR action_path ~ '^/[^/].*'",
+            "action_path IS NULL OR action_path ~ '^/[^/].*' OR "
+            "(event_type = 'pull_request_created'::public.notification_event_type "
+            "AND action_path ~ '^https://[^/?#]+/[^?#]+$')",
             name="notifications_action_path_relative",
         ),
         {"schema": "public"},

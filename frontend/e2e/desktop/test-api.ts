@@ -8,6 +8,8 @@ type DesktopTestApi = {
   baseUrl: string
   requests: RecordedRequest[]
   projectCreateRequests: RecordedRequest[]
+  localApplyRequests: RecordedRequest[]
+  failNextLocalApply: () => void
   expireSession: () => void
   close: () => void
 }
@@ -34,6 +36,31 @@ export function startDesktopTestApi(): DesktopTestApi {
   let sessionExpired = false
   const requests: RecordedRequest[] = []
   const projectCreateRequests: RecordedRequest[] = []
+  const localApplyRequests: RecordedRequest[] = []
+  let failNextLocalApply = false
+  const createdAt = "2026-10-29T00:00:00.000Z"
+  const projectId = "project-desktop-e2e"
+  const reviewId = "review-desktop-e2e"
+  const findingId = "finding-desktop-e2e"
+  const remediationId = "remediation-desktop-e2e"
+  const review = {
+    id: reviewId,
+    project_id: projectId,
+    source_revision: "a".repeat(64),
+    source_snapshot: {
+      source_kind: "local",
+      source_identifier: "source-desktop-e2e",
+      integrity_algorithm: "sha256-directory-manifest-v1",
+      revision: "a".repeat(64),
+      captured_at: createdAt,
+    },
+    status: "completed",
+    started_at: createdAt,
+    completed_at: createdAt,
+    created_at: createdAt,
+    updated_at: createdAt,
+    agents: [],
+  }
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -74,7 +101,123 @@ export function startDesktopTestApi(): DesktopTestApi {
 
       if (url.pathname === "/api/v1/projects" && request.method === "POST") {
         projectCreateRequests.push(recorded)
-        return response(request, { error: { code: "unexpected_project_api_request" } }, 500)
+        return response(request, {
+          id: projectId,
+          name: "Desktop E2E project",
+          source: "local",
+          external_repository_id: null,
+          external_repository_connection_id: null,
+          repository_owner: null,
+          repository_name: null,
+          branch_name: null,
+          repository_visibility: null,
+          imported_at: createdAt,
+          source_hash: null,
+          current_revision: null,
+          category: "productivity",
+          auto_create_pull_requests: false,
+          created_at: createdAt,
+          updated_at: createdAt,
+          archived_at: null,
+        })
+      }
+
+      if (url.pathname === "/api/v1/agents" && request.method === "GET") {
+        return response(request, {
+          items: [{
+            id: "agent-desktop-e2e",
+            name: "Desktop reviewer",
+            personality: null,
+            review_category: "engineering",
+            model_provider: "openai",
+            model_name: "gpt-5",
+            avatar: null,
+            skills: [],
+            credential_id: null,
+            configuration_version: 1,
+            created_at: createdAt,
+            updated_at: createdAt,
+            disabled_at: null,
+          }],
+          next_offset: null,
+        })
+      }
+
+      if (url.pathname === "/api/v1/reviews" && request.method === "POST") {
+        return response(request, review)
+      }
+
+      if (url.pathname === `/api/v1/reviews/${reviewId}` && request.method === "GET") {
+        return response(request, review)
+      }
+
+      if (url.pathname === `/api/v1/findings/${findingId}` && request.method === "GET") {
+        return response(request, {
+          id: findingId,
+          review_id: reviewId,
+          agent_id: "agent-desktop-e2e",
+          reviewing_agent: {
+            assignment_id: "assignment-desktop-e2e",
+            agent_id: "agent-desktop-e2e",
+            display_name: "Desktop reviewer",
+            specialization: "engineering",
+          },
+          category: "engineering",
+          severity: "high",
+          title: "Desktop remediation",
+          explanation: "Apply a two-file local remediation.",
+          evidence: null,
+          source_location: null,
+          recommendation: null,
+          status: "accepted",
+          created_at: createdAt,
+          updated_at: createdAt,
+        })
+      }
+
+      if (
+        url.pathname === `/api/v1/findings/${findingId}/remediations` &&
+        request.method === "GET"
+      ) {
+        return response(request, [{
+          id: remediationId,
+          project_id: projectId,
+          finding_id: findingId,
+          proposed_diff: "diff --git a/first.txt b/first.txt\n--- a/first.txt\n+++ b/first.txt\n@@ -1 +1 @@\n-before-one\n+after-one\ndiff --git a/second.txt b/second.txt\n--- a/second.txt\n+++ b/second.txt\n@@ -1 +1 @@\n-before-two\n+after-two\n",
+          pull_request: null,
+          status: "proposed",
+          approved_at: null,
+          created_at: createdAt,
+          updated_at: createdAt,
+        }])
+      }
+
+      if (
+        url.pathname === `/api/v1/remediations/${remediationId}/apply-local` &&
+        request.method === "POST"
+      ) {
+        localApplyRequests.push(recorded)
+        if (failNextLocalApply) {
+          failNextLocalApply = false
+          return response(request, {
+            error: {
+              code: "request_failed",
+              message: "The remediation could not be recorded.",
+              request_id: "desktop-e2e-request-failure",
+            },
+          }, 503)
+        }
+        return response(request, {
+          id: remediationId,
+          project_id: projectId,
+          finding_id: findingId,
+          proposed_diff: "",
+          pull_request: null,
+          status: "applied",
+          approved_at: createdAt,
+          created_at: createdAt,
+          updated_at: createdAt,
+        })
       }
 
       return response(request, { error: { code: "not_found" } }, 404)
@@ -85,6 +228,10 @@ export function startDesktopTestApi(): DesktopTestApi {
     baseUrl: `http://127.0.0.1:${server.port}`,
     requests,
     projectCreateRequests,
+    localApplyRequests,
+    failNextLocalApply: () => {
+      failNextLocalApply = true
+    },
     expireSession: () => {
       sessionExpired = true
     },

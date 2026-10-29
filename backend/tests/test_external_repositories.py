@@ -4,6 +4,7 @@ import asyncio
 import base64
 import io
 import json
+import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -154,6 +155,50 @@ def test_review_source_access_caches_repository_metadata_and_reuses_client() -> 
 
     assert requested_paths.count("/repositories/12345") == 1
     assert len(requested_paths) == 5
+
+
+def test_review_source_access_validates_a_diff_against_the_pinned_revision(
+    monkeypatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repositories/12345"
+        return httpx.Response(200, json=_repository_payload())
+
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(arguments, **kwargs):
+        calls.append(arguments)
+        assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
+        assert kwargs["env"]["GIT_CONFIG_VALUE_0"].startswith("Authorization: Basic ")
+        return subprocess.CompletedProcess(arguments, returncode=0)
+
+    monkeypatch.setattr("external_repositories.service.subprocess.run", fake_run)
+    access = _review_access(handler)
+
+    assert access.validate_diff(
+        diff=(
+            "diff --git a/app.py b/app.py\n"
+            "--- a/app.py\n"
+            "+++ b/app.py\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        ),
+        log_context=_review_log_context(),
+    )
+    assert calls[:4] == [
+        ("git", "init", "-q"),
+        (
+            "git",
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/octocat/hello-world.git",
+        ),
+        ("git", "fetch", "--depth=1", "origin", "a" * 40),
+        ("git", "checkout", "-q", "--detach", "FETCH_HEAD"),
+    ]
+    assert calls[4][:4] == ("git", "apply", "--check", "--whitespace=error")
 
 
 def test_review_source_access_limits_concurrent_requests_to_two() -> None:

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useRuntimeEnvironment } from "@/hooks/use-runtime-environment"
 import { useSession } from "@/hooks/use-session"
 import {
-  captureLocalSourceSnapshot,
+  createLocalReviewSnapshot,
   localSourceIdentityHash,
 } from "@/lib/local-source-snapshot"
 import { getLocalProjectsDatabase } from "@/lib/local-projects-database"
@@ -113,7 +113,7 @@ export function useCreateReview() {
         }
 
         const localProject = await provisionLocalProject(project, accountId)
-        const snapshot = await captureLocalSourceSnapshot(
+        const snapshot = await createLocalReviewSnapshot(
           localProject.canonicalPath,
         )
 

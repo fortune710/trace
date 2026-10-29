@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { act, cleanup, render, renderHook, waitFor } from "@testing-library/react"
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  waitFor,
+} from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -172,7 +178,9 @@ describe("notification hooks", () => {
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     )
-    const { result } = renderHook(() => useMarkAllNotificationsRead(), { wrapper })
+    const { result } = renderHook(() => useMarkAllNotificationsRead(), {
+      wrapper,
+    })
 
     act(() => result.current.mutate())
     await waitFor(() => {
@@ -253,6 +261,37 @@ describe("notification hooks", () => {
 
     expect(toast.add).toHaveBeenCalledWith(
       expect.not.objectContaining({ actionProps: expect.anything() }),
+    )
+  })
+
+  it("opens a pull-request toast action in a new tab", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null)
+    const queryClient = createQueryClient()
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <NotificationStream />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    act(() => {
+      FakeEventSource.instances[0].emitNotification({
+        ...page.items[0],
+        event_type: "pull_request_created",
+        action_path: "https://github.com/trace/example/pull/42",
+      })
+    })
+
+    const toastAction = vi.mocked(toast.add).mock.calls[0][0].actionProps
+    const onClick = toastAction?.onClick as (() => void) | undefined
+    onClick?.()
+
+    expect(open).toHaveBeenCalledWith(
+      "https://github.com/trace/example/pull/42",
+      "_blank",
+      "noopener,noreferrer",
     )
   })
 })

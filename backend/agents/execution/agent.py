@@ -8,14 +8,19 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, SecretStr
 
-from agents.execution.tools import REPOSITORY_REVIEW_TOOLS, ToolExecutionContext
+from agents.execution.tools import (
+    REPOSITORY_REVIEW_TOOLS,
+    ReviewSource,
+    ToolExecutionContext,
+    validate_diff_for_review,
+)
 
 type ToolDefinition = BaseTool | Callable[..., Any] | dict[str, Any]
 
@@ -81,6 +86,9 @@ class Agent:
             "- diff: a complete Git unified diff for that fix, including diff --git, "
             "---, +++, and @@ hunk headers. The diff must modify only repository "
             "files you inspected through the approved tools.\n"
+            "Before returning each finding, call validate_diff with its exact diff. "
+            "Return a finding only when validation reports valid: true; otherwise "
+            "correct the diff and validate it again.\n"
             "Return no finding when there is no risk."
         )
         human_message = (
@@ -104,7 +112,16 @@ class Agent:
         structured_response = result.get("structured_response")
         if structured_response is None:
             raise ValueError("model_output_invalid")
-        return FindingBatch.model_validate(structured_response)
+        findings = FindingBatch.model_validate(structured_response)
+        for finding in findings.findings:
+            validation = validate_diff_for_review(
+                source=cast(ReviewSource, tool_context.source_kind),
+                diff=finding.diff,
+                context=tool_context,
+            )
+            if validation["valid"] is not True:
+                raise ValueError("model_output_invalid_diff")
+        return findings
 
     def _model(self):
         api_key = self._provider_api_key()

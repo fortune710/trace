@@ -8,3 +8,6 @@ bb7e53f1acff18dd23cc0fd100b505a9ab85c28c:scripts/ci/write-compose-env.sh:generic
 bb7e53f1acff18dd23cc0fd100b505a9ab85c28c:scripts/ci/write-compose-env.sh:generic-api-key:29
 # Synthetic JWT-shaped value in the redaction test corpus; not deployment data.
 8fc007488b1ae856af2702e471d311058ec88a73:backend/tests/test_redaction.py:jwt:42
+# Historical test-only placeholder from ec2b4fb; it has been replaced with a
+# non-secret-shaped fixture in the current source.
+ec2b4fbb26193e6af92f43e251084fb3f9bdb837:backend/tests/test_remediation_prompt_template.py:generic-api-key:75

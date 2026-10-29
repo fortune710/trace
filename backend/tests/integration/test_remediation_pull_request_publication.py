@@ -12,6 +12,7 @@ from db.rls import principal_transaction
 from db.types import RepositorySource
 from external_repositories.service import PublishedPullRequest, RepositoryService
 from findings.models import Finding, FindingStatus
+from notifications.models import Notification, NotificationEventType
 from projects.models import Project
 from remediations.models import Remediation, RemediationStatus
 from remediations.service import RemediationPullRequestService
@@ -120,6 +121,28 @@ def test_accepted_remediation_creates_one_pull_request_and_persists_metadata(
     assert persisted["status"] is RemediationStatus.APPLIED
     assert persisted["approved_at"] is not None
     assert persisted["pull_request"] == response.json()["pull_request"]
+    with principal_transaction(integration_engine, owner.user_id) as connection:
+        notification = (
+            connection.execute(
+                sa.select(Notification.__table__).where(
+                    Notification.owner_id == owner.user_id,
+                    Notification.event_type
+                    == NotificationEventType.PULL_REQUEST_CREATED,
+                )
+            )
+            .mappings()
+            .one()
+        )
+    assert notification["dedupe_key"] == (
+        f"remediation:{graph['remediation_id']}:pull-request-created"
+    )
+    assert notification["action_path"] == (
+        "https://github.example.test/trace-test/remediations/pull/42"
+    )
+    assert notification["data"] == {
+        "remediation_id": str(graph["remediation_id"]),
+        "pull_request_number": 42,
+    }
     event = next(
         event
         for event in recording_audit_recorder.events
@@ -241,6 +264,21 @@ def test_malformed_stored_diff_is_safely_rejected_without_persisting_a_pr(
         )
     assert persisted["status"] is RemediationStatus.PROPOSED
     assert persisted["pull_request"] is None
+    with principal_transaction(integration_engine, owner.user_id) as connection:
+        notification = (
+            connection.execute(
+                sa.select(Notification.__table__).where(
+                    Notification.owner_id == owner.user_id,
+                    Notification.event_type
+                    == NotificationEventType.PULL_REQUEST_CREATION_FAILED,
+                )
+            )
+            .mappings()
+            .one()
+        )
+    assert notification["dedupe_key"] == (
+        f"remediation:{graph['remediation_id']}:pull-request-failed"
+    )
 
 
 def test_concurrent_pr_creation_reuses_the_single_persisted_pr(

@@ -21,7 +21,8 @@ class LocalFileBackup(Base):
         sa.UniqueConstraint(
             "owner_id",
             "remediation_id",
-            name="local_file_backups_owner_remediation_key",
+            "file_path",
+            name="local_file_backups_owner_remediation_path_key",
         ),
         sa.ForeignKeyConstraint(
             ["owner_id", "remediation_id"],
@@ -48,6 +49,7 @@ class LocalFileBackup(Base):
     file_path: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     backup_path: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     source_hash: Mapped[bytes] = mapped_column(sa.LargeBinary(), nullable=False)
+    applied_hash: Mapped[bytes] = mapped_column(sa.LargeBinary(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,

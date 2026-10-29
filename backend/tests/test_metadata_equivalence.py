@@ -1,3 +1,4 @@
+import db.model_registry  # noqa: F401
 from credentials.models import CredentialProvider
 from db.base import Base
 from db.types import RepositorySource, ReviewCategory
@@ -160,6 +161,14 @@ EXPECTED_COLUMNS = {
         "updated_at",
         "archived_at",
     },
+    "public.local_project_handles": {
+        "id",
+        "owner_id",
+        "client_project_id",
+        "issue_tracking_details",
+        "created_at",
+        "updated_at",
+    },
     "private.credentials": {
         "id",
         "owner_id",
@@ -306,6 +315,7 @@ EXPECTED_COLUMNS = {
         "file_path",
         "backup_path",
         "source_hash",
+        "applied_hash",
         "created_at",
         "updated_at",
     },
@@ -442,6 +452,7 @@ def test_indexes_and_enum_contracts_are_stable() -> None:
         "private_remediation_pull_request_jobs_pending_claim_idx",
         "private_remediation_pr_outbox_pending_claim_idx",
         "local_file_backups_owner_created_idx",
+        "local_project_handles_owner_created_idx",
     }
     actual_indexes = {
         index.name for table in Base.metadata.tables.values() for index in table.indexes

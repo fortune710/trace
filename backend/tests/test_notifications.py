@@ -42,6 +42,14 @@ def test_review_notifications_use_expected_presentation() -> None:
         _TEMPLATES[NotificationEventType.ISSUE_CREATION_FAILED].category
         is NotificationCategory.WARNING
     )
+    assert (
+        _TEMPLATES[NotificationEventType.PULL_REQUEST_CREATED].category
+        is NotificationCategory.INFO
+    )
+    assert (
+        _TEMPLATES[NotificationEventType.PULL_REQUEST_CREATION_FAILED].category
+        is NotificationCategory.WARNING
+    )
 
 
 def test_notification_event_frame_uses_the_item_id_and_safe_json_payload() -> None:

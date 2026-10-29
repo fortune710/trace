@@ -17,6 +17,7 @@ from db.base import Base
 from external_repositories.models import ExternalRepository
 from findings.models import Finding
 from issue_tracking.models import IssueLink
+from local_projects.models import LocalProjectHandle  # noqa: F401
 from notifications.models import Notification
 from projects.models import Project
 from remediations.models import Remediation
@@ -67,6 +68,7 @@ def test_all_auth_and_public_tables_match_the_database_contract() -> None:
             "issue_links",
             "remediations",
             "local_file_backups",
+            "local_project_handles",
             "notifications",
         },
     }

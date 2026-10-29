@@ -20,6 +20,7 @@ from credentials.routes import build_router as build_credentials_router
 from external_repositories.routes import build_router as build_repositories_router
 from findings.routes import build_router as build_findings_router
 from issue_tracking.routes import build_router as build_issue_tracking_router
+from local_projects.routes import build_router as build_local_projects_router
 from notifications.routes import build_router as build_notifications_router
 from projects.routes import build_router as build_projects_router
 from remediations.routes import build_router as build_remediations_router
@@ -51,6 +52,7 @@ def build_router(
         (build_reviews_router(resource_router), ["reviews"]),
         (build_findings_router(resource_router), ["findings"]),
         (build_issue_tracking_router(settings, audit_recorder), ["issue-tracking"]),
+        (build_local_projects_router(settings), ["local-project-handles"]),
         (build_notifications_router(settings), ["notifications"]),
         (
             build_remediations_router(resource_router, settings, audit_recorder),

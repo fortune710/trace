@@ -16,9 +16,12 @@ from auth.tokens import decode_base64url_key
 from db.session import get_engine
 from external_repositories.service import RepositoryService
 from issue_tracking.routes import build_remediation_issue_router
-from remediations.service import RemediationPullRequestService
+from remediations.service import (
+    LocalRemediationApplyService,
+    RemediationPullRequestService,
+)
 from resources.router import select_routes
-from resources.schemas import RemediationResponse
+from resources.schemas import LocalRemediationApply, RemediationResponse
 
 router = APIRouter()
 
@@ -51,6 +54,28 @@ def build_router(
         )
         return RemediationPullRequestService(
             get_engine(), repository_service, audit_recorder
+        )
+
+    @lru_cache
+    def local_apply_service() -> LocalRemediationApplyService:
+        return LocalRemediationApplyService(get_engine(), audit_recorder)
+
+    @router.post(
+        "/remediations/{remediation_id}/apply-local",
+        response_model=RemediationResponse,
+    )
+    def complete_local_apply(
+        request: Request,
+        remediation_id: UUID,
+        body: LocalRemediationApply,
+        principal: CurrentPrincipal,
+    ) -> dict[str, object]:
+        _require_csrf(request, principal, settings)
+        return local_apply_service().complete(
+            owner_id=principal.user_id,
+            remediation_id=remediation_id,
+            **body.model_dump(),
+            request_id=request.headers.get("X-Request-ID", "unknown"),
         )
 
     @router.post(

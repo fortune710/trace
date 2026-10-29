@@ -83,6 +83,16 @@ _TEMPLATES: dict[NotificationEventType, NotificationTemplate] = {
         "Issue creation needs attention",
         "Trace could not create an issue for your finding. Open it to review the saved destination and try again.",
     ),
+    NotificationEventType.PULL_REQUEST_CREATED: NotificationTemplate(
+        NotificationCategory.INFO,
+        "Pull request created",
+        "Trace created a pull request for your accepted remediation.",
+    ),
+    NotificationEventType.PULL_REQUEST_CREATION_FAILED: NotificationTemplate(
+        NotificationCategory.WARNING,
+        "Pull request creation needs attention",
+        "Trace could not create a pull request for your remediation. Open it to review the remediation and try again.",
+    ),
 }
 
 

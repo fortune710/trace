@@ -42,6 +42,7 @@ from db.types import (
 from external_repositories.models import ExternalRepository
 from findings.models import Finding, FindingSeverity, FindingStatus
 from issue_tracking.models import IssueLink, IssueLinkState, IssueProviderName
+from local_projects.models import LocalProjectHandle
 from notifications.models import (
     Notification,
     NotificationCategory,
@@ -94,6 +95,7 @@ __all__ = [
     "IssueLinkState",
     "IssueProviderName",
     "LocalFileBackup",
+    "LocalProjectHandle",
     "ModelProvider",
     "Notification",
     "NotificationCategory",

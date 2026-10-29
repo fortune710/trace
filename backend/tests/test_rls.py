@@ -71,7 +71,8 @@ def test_owner_rls_isolation_and_transaction_local_context() -> None:
             with pytest.raises(sa.exc.DBAPIError):
                 connection.execute(
                     sa.text(
-                        "SELECT count(*) FROM private.remediation_pull_request_outbox_jobs"
+                        "SELECT remediation_id "
+                        "FROM private.remediation_pull_request_outbox_jobs"
                     )
                 )
 
@@ -239,6 +240,112 @@ def test_internal_worker_can_read_automatic_pull_request_preference() -> None:
                         "current_user, 'public.users', :column, 'SELECT')"
                     ),
                     {"column": column},
+                ).scalar_one()
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
+def test_app_role_can_return_the_pr_outbox_identifier_after_insert() -> None:
+    database_url = os.environ.get("DATABASE_URL")
+    assert database_url and "postgres-test" in database_url
+    engine = sa.create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(
+                sa.text(
+                    "SELECT has_table_privilege("
+                    "current_user, 'private.remediation_pull_request_outbox_jobs', "
+                    "'INSERT')"
+                )
+            ).scalar_one()
+            assert connection.execute(
+                sa.text(
+                    "SELECT has_column_privilege("
+                    "current_user, 'private.remediation_pull_request_outbox_jobs', "
+                    "'idempotency_id', 'SELECT')"
+                )
+            ).scalar_one()
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
+def test_review_and_remediation_workers_have_persistence_access() -> None:
+    internal_database_url = os.environ.get("INTERNAL_DATABASE_URL")
+    assert internal_database_url and "postgres-test" in internal_database_url
+    engine = sa.create_engine(internal_database_url)
+    try:
+        with engine.connect() as connection:
+            for relation, column, privilege in (
+                ("public.users", "id", "SELECT"),
+                ("public.users", "automatic_pull_requests", "SELECT"),
+                ("public.projects", "id", "SELECT"),
+                ("public.projects", "owner_id", "SELECT"),
+                ("public.projects", "source", "SELECT"),
+                ("public.projects", "external_repository_id", "SELECT"),
+                ("public.projects", "branch_name", "SELECT"),
+                ("public.findings", "id", "SELECT"),
+                ("public.findings", "status", "SELECT"),
+                ("public.findings", "title", "SELECT"),
+                ("public.remediations", "id", "INSERT"),
+                ("public.remediations", "owner_id", "INSERT"),
+                ("public.remediations", "project_id", "INSERT"),
+                ("public.remediations", "finding_id", "INSERT"),
+                ("public.remediations", "prompt_text", "INSERT"),
+                ("public.remediations", "proposed_diff", "INSERT"),
+                ("public.remediations", "status", "INSERT"),
+                (
+                    "private.remediation_pull_request_outbox_jobs",
+                    "idempotency_id",
+                    "INSERT",
+                ),
+                (
+                    "private.remediation_pull_request_outbox_jobs",
+                    "owner_id",
+                    "INSERT",
+                ),
+                (
+                    "private.remediation_pull_request_outbox_jobs",
+                    "remediation_id",
+                    "INSERT",
+                ),
+                (
+                    "private.remediation_pull_request_jobs",
+                    "id",
+                    "INSERT",
+                ),
+                (
+                    "private.remediation_pull_request_jobs",
+                    "id",
+                    "SELECT",
+                ),
+                (
+                    "private.remediation_pull_request_jobs",
+                    "owner_id",
+                    "SELECT",
+                ),
+                (
+                    "private.remediation_pull_request_jobs",
+                    "remediation_id",
+                    "SELECT",
+                ),
+                ("private.audit_delivery_jobs", "event_id", "INSERT"),
+                ("private.audit_delivery_jobs", "owner_id", "INSERT"),
+                ("private.audit_delivery_jobs", "canonical_json", "INSERT"),
+                ("private.audit_delivery_jobs", "event_hash", "INSERT"),
+                ("private.audit_delivery_jobs", "status", "INSERT"),
+            ):
+                assert connection.execute(
+                    sa.text(
+                        "SELECT has_column_privilege("
+                        "current_user, :relation, :column, :privilege)"
+                    ),
+                    {
+                        "relation": relation,
+                        "column": column,
+                        "privilege": privilege,
+                    },
                 ).scalar_one()
     finally:
         engine.dispose()

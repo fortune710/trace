@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
@@ -23,6 +25,7 @@ from external_repositories.service import (
     GitHubRequestLogContext,
     ReviewGitHubSourceAccess,
     ReviewSourceFileError,
+    _is_safe_patch,
 )
 
 ReviewSource = Literal["github", "gitlab", "local"]
@@ -91,6 +94,113 @@ class SearchCodeInput(BaseModel):
     )
 
 
+class ValidateDiffInput(BaseModel):
+    """Arguments for validating an agent-generated remediation diff."""
+
+    source: ReviewSource = Field(
+        description="The review target's source kind. It must match the target source."
+    )
+    diff: str = Field(
+        min_length=1,
+        max_length=1_048_576,
+        description=(
+            "The complete Git unified diff to validate. Call this after composing "
+            "a remediation diff and before returning the finding."
+        ),
+    )
+
+
+_DIFF_HEADER = re.compile(r"^diff --git a/([^\s]+) b/([^\s]+)$")
+_OLD_FILE_HEADER = re.compile(r"^--- (?:a/[^\s]+|/dev/null)$")
+_NEW_FILE_HEADER = re.compile(r"^\+\+\+ (?:b/[^\s]+|/dev/null)$")
+_HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?$")
+
+
+def _structure_error(diff: str) -> str | None:
+    """Return a stable reason when a unified diff is structurally malformed."""
+
+    file_count = 0
+    saw_old_header = False
+    saw_new_header = False
+    saw_hunk = False
+    expected_old: int | None = None
+    expected_new: int | None = None
+    actual_old = 0
+    actual_new = 0
+
+    def finish_hunk() -> str | None:
+        if expected_old is None or expected_new is None:
+            return None
+        if actual_old != expected_old or actual_new != expected_new:
+            return "hunk_line_count_mismatch"
+        return None
+
+    for line in diff.splitlines():
+        if _DIFF_HEADER.fullmatch(line):
+            error = finish_hunk()
+            if error is not None:
+                return error
+            if file_count and (
+                not saw_old_header or not saw_new_header or not saw_hunk
+            ):
+                return "incomplete_file_section"
+            file_count += 1
+            saw_old_header = False
+            saw_new_header = False
+            saw_hunk = False
+            expected_old = None
+            expected_new = None
+            actual_old = 0
+            actual_new = 0
+            continue
+        if file_count == 0:
+            return "missing_diff_header"
+        if expected_old is None and line.startswith("--- "):
+            if saw_old_header or saw_new_header or not _OLD_FILE_HEADER.fullmatch(line):
+                return "invalid_old_file_header"
+            saw_old_header = True
+            continue
+        if expected_old is None and line.startswith("+++ "):
+            if (
+                not saw_old_header
+                or saw_new_header
+                or not _NEW_FILE_HEADER.fullmatch(line)
+            ):
+                return "invalid_new_file_header"
+            saw_new_header = True
+            continue
+        match = _HUNK_HEADER.fullmatch(line)
+        if match is not None:
+            if not saw_old_header or not saw_new_header:
+                return "hunk_before_file_headers"
+            error = finish_hunk()
+            if error is not None:
+                return error
+            expected_old = int(match.group(2) or "1")
+            expected_new = int(match.group(4) or "1")
+            actual_old = 0
+            actual_new = 0
+            saw_hunk = True
+            continue
+        if expected_old is not None:
+            if line == "\\ No newline at end of file":
+                continue
+            if not line or line[0] not in {" ", "+", "-"}:
+                return "invalid_hunk_line"
+            if line[0] in {" ", "-"}:
+                actual_old += 1
+            if line[0] in {" ", "+"}:
+                actual_new += 1
+    error = finish_hunk()
+    if error is not None:
+        return error
+    if file_count == 0:
+        return "missing_diff_header"
+    if not saw_old_header or not saw_new_header or not saw_hunk:
+        return "incomplete_file_section"
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class ToolExecutionContext:
     """Trusted review scope injected into tools, never exposed to the model."""
@@ -135,7 +245,7 @@ def _log_tool_call(
     *,
     context: ToolExecutionContext,
     tool_name: str,
-    arguments: dict[str, object],
+    arguments: Mapping[str, object],
     result: dict[str, object] | None = None,
     error: Exception | None = None,
 ) -> None:
@@ -399,7 +509,74 @@ def search_code(
     raise ToolException("source_execution_unsupported")
 
 
-REPOSITORY_REVIEW_TOOLS = (list_paths, read_file, search_code)
+def validate_diff_for_review(
+    *,
+    source: ReviewSource,
+    diff: str,
+    context: ToolExecutionContext,
+) -> dict[str, object]:
+    """Run structural, safety, and exact-revision Git validation for a diff."""
+
+    if source != context.source_kind:
+        raise ToolException("source_mismatch")
+    structure_error = _structure_error(diff)
+    if structure_error is not None:
+        return {"valid": False, "level": "structure", "reason": structure_error}
+    if not _is_safe_patch(diff):
+        return {"valid": False, "level": "safety", "reason": "unsafe_patch"}
+    if source != "github":
+        raise ToolException("source_execution_unsupported")
+    if not context.github_repository_access().validate_diff(
+        diff=diff,
+        log_context=context.github_log_context(),
+    ):
+        return {"valid": False, "level": "apply", "reason": "does_not_apply"}
+    return {"valid": True, "levels": ["structure", "safety", "apply"]}
+
+
+@tool(args_schema=ValidateDiffInput)
+def validate_diff(
+    source: ReviewSource,
+    diff: str,
+    runtime: ToolRuntime,
+) -> dict[str, object]:
+    """Validate a remediation diff before returning it as a review finding.
+
+    This checks unified-diff structure, rejects unsafe patch forms, then runs
+    ``git apply --check`` against the immutable review revision. A result with
+    ``valid: false`` must be fixed and validated again before returning a finding.
+    """
+
+    context = _review_context(runtime)
+    arguments = {"source": source, "diff_bytes": len(diff.encode("utf-8"))}
+    _log_tool_call(
+        "repository_tool_started",
+        context=context,
+        tool_name="validate_diff",
+        arguments=arguments,
+    )
+    try:
+        result = validate_diff_for_review(source=source, diff=diff, context=context)
+    except Exception as error:
+        _log_tool_call(
+            "repository_tool_failed",
+            context=context,
+            tool_name="validate_diff",
+            arguments=arguments,
+            error=error,
+        )
+        raise
+    _log_tool_call(
+        "repository_tool_completed",
+        context=context,
+        tool_name="validate_diff",
+        arguments=arguments,
+        result=result,
+    )
+    return result
+
+
+REPOSITORY_REVIEW_TOOLS = (list_paths, read_file, search_code, validate_diff)
 
 for _repository_tool in REPOSITORY_REVIEW_TOOLS:
     _repository_tool.handle_tool_error = True
