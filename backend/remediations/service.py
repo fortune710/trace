@@ -18,6 +18,7 @@ from auth.errors import (
     ResourceConflict,
     UnsupportedSource,
 )
+from auth.uuids import uuid7
 from db.rls import principal_transaction
 from db.types import RepositorySource
 from external_repositories.service import RepositoryService
@@ -279,7 +280,11 @@ class RemediationPullRequestService:
                 return _remediation_response(row)
             result = connection.execute(
                 pg_insert(RemediationPullRequestJob)
-                .values(owner_id=owner_id, remediation_id=remediation_id)
+                .values(
+                    id=uuid7(),
+                    owner_id=owner_id,
+                    remediation_id=remediation_id,
+                )
                 .on_conflict_do_nothing(
                     constraint="remediation_pull_request_jobs_owner_remediation_key"
                 )

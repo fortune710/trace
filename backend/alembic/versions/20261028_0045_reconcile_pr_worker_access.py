@@ -7,7 +7,7 @@ Revises: 20261028_0044
 from alembic import op
 
 revision = "20261028_0045"
-down_revision = "20261028_0044"
+down_revision = "20261028_0043"
 branch_labels = None
 depends_on = None
 
