@@ -245,6 +245,31 @@ def test_internal_worker_can_read_automatic_pull_request_preference() -> None:
 
 
 @pytest.mark.integration
+def test_app_role_can_return_the_pr_outbox_identifier_after_insert() -> None:
+    database_url = os.environ.get("DATABASE_URL")
+    assert database_url and "postgres-test" in database_url
+    engine = sa.create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(
+                sa.text(
+                    "SELECT has_table_privilege("
+                    "current_user, 'private.remediation_pull_request_outbox_jobs', "
+                    "'INSERT')"
+                )
+            ).scalar_one()
+            assert connection.execute(
+                sa.text(
+                    "SELECT has_column_privilege("
+                    "current_user, 'private.remediation_pull_request_outbox_jobs', "
+                    "'idempotency_id', 'SELECT')"
+                )
+            ).scalar_one()
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_review_and_remediation_workers_have_persistence_access() -> None:
     internal_database_url = os.environ.get("INTERNAL_DATABASE_URL")
     assert internal_database_url and "postgres-test" in internal_database_url
