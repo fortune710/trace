@@ -90,9 +90,9 @@ describe("NotificationsPage", () => {
     expect(document.querySelector("time")?.getAttribute("dateTime")).toBe(
       notification.created_at,
     )
-    expect(screen.getByRole("link", { name: "View" }).getAttribute("href")).toBe(
-      "/reviews/review-1",
-    )
+    expect(
+      screen.getByRole("link", { name: "View" }).getAttribute("href"),
+    ).toBe("/reviews/review-1")
   })
 
   it("shows loading, retry, and empty states without conflating them", () => {
@@ -162,7 +162,44 @@ describe("NotificationsPage", () => {
   it("does not render an unsafe action path", () => {
     mockedUseNotifications.mockReturnValue(
       notificationQuery({
-        notifications: [{ ...notification, action_path: "https://untrusted.example" }],
+        notifications: [
+          { ...notification, action_path: "https://untrusted.example" },
+        ],
+      }),
+    )
+
+    renderPage()
+
+    expect(screen.queryByRole("link", { name: "View" })).toBeNull()
+  })
+
+  it("opens a pull-request notification action in a new tab", () => {
+    mockedUseNotifications.mockReturnValue(
+      notificationQuery({
+        notifications: [
+          {
+            ...notification,
+            event_type: "pull_request_created",
+            action_path: "https://github.com/trace/example/pull/42",
+          },
+        ],
+      }),
+    )
+
+    renderPage()
+
+    const view = screen.getByRole("link", { name: "View" })
+    expect(view.getAttribute("href")).toBe(
+      "https://github.com/trace/example/pull/42",
+    )
+    expect(view.getAttribute("target")).toBe("_blank")
+    expect(view.getAttribute("rel")).toBe("noopener noreferrer")
+  })
+
+  it("does not render View when no action path is provided", () => {
+    mockedUseNotifications.mockReturnValue(
+      notificationQuery({
+        notifications: [{ ...notification, action_path: null }],
       }),
     )
 

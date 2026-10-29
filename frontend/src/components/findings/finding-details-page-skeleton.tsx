@@ -2,11 +2,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 
 export function FindingDetailsPageSkeleton() {
   return (
-    <article
-      aria-busy="true"
-      aria-label="Loading finding"
-      className="mt-6 rounded-lg border border-border bg-card p-6"
-    >
+    <article aria-busy="true" aria-label="Loading finding" className="mt-6">
       <Skeleton className="h-3 w-28" />
       <Skeleton className="mt-3 h-6 w-2/3 max-w-full" />
       <div className="mt-5 space-y-2">

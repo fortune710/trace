@@ -44,7 +44,7 @@ const finding: Finding = {
   title:
     "Unsafe redirect destination allows attackers to take over user sessions",
   explanation: "The redirect destination is not validated.",
-  evidence: "next=https://untrusted.example",
+  evidence: "**Unsafe input**\n\n- `next` can target an untrusted domain",
   source_location: "src/auth/redirect.ts:24",
   recommendation: "Allow only trusted relative destinations.",
   status: "open",
@@ -134,12 +134,19 @@ describe("FindingDetailsPage", () => {
     expect(breadcrumbPage?.textContent).toHaveLength(50)
     expect(breadcrumbPage?.getAttribute("title")).toBe(finding.title)
     expect(screen.getByRole("heading", { name: finding.title })).toBeTruthy()
+    const severityBadge = screen.getByText("high")
+    expect(severityBadge.getAttribute("data-slot")).toBe("badge")
+    expect(severityBadge.className).toContain("bg-red-500/15")
+    expect(screen.getByText("Unsafe input").tagName).toBe("STRONG")
+    expect(screen.getByText("next", { selector: "code" })).toBeTruthy()
     expect(screen.getByText(/Security Scout/)).toBeTruthy()
     expect(screen.getByText("Coding-agent prompt")).toBeTruthy()
     expect(screen.getByRole("button", { name: "Create issue" })).toBeTruthy()
     expect(screen.getByText("Linked issues")).toBeTruthy()
     expect(
-      screen.getByText("Resolve the finding with a focused authorization check."),
+      screen.getByText(
+        "Resolve the finding with a focused authorization check.",
+      ),
     ).toBeTruthy()
   })
 })

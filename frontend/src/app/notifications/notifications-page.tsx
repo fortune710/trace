@@ -16,6 +16,27 @@ function isSafeActionPath(actionPath: string | null): actionPath is string {
   return Boolean(actionPath && /^\/[^/]/.test(actionPath))
 }
 
+function isSafePullRequestUrl(notification: {
+  action_path: string | null
+  event_type: string
+}): notification is {
+  action_path: string
+  event_type: "pull_request_created"
+} {
+  if (
+    notification.event_type !== "pull_request_created" ||
+    !notification.action_path
+  ) {
+    return false
+  }
+  try {
+    const url = new URL(notification.action_path)
+    return url.protocol === "https:" && Boolean(url.hostname)
+  } catch {
+    return false
+  }
+}
+
 function formatCategory(category: "info" | "security" | "warning") {
   return category[0].toUpperCase() + category.slice(1)
 }
@@ -38,7 +59,9 @@ export function NotificationsPage() {
       <section className="mx-auto w-full max-w-6xl px-6 pt-8 pb-28 md:px-10 md:pt-10">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-xl font-medium tracking-tight">Notifications</h1>
+            <h1 className="text-xl font-medium tracking-tight">
+              Notifications
+            </h1>
             <p className="mt-1 text-sm text-muted-foreground">
               {notifications.unreadCount
                 ? `${notifications.unreadCount} unread`
@@ -55,9 +78,7 @@ export function NotificationsPage() {
           </Button>
         </div>
         <div className="mt-8 space-y-3">
-          {notifications.isLoading ? (
-            <NotificationsPageSkeleton />
-          ) : null}
+          {notifications.isLoading ? <NotificationsPageSkeleton /> : null}
           {notifications.isError ? (
             <Button
               type="button"
@@ -119,6 +140,15 @@ export function NotificationsPage() {
                 >
                   View
                 </Link>
+              ) : isSafePullRequestUrl(notification) ? (
+                <a
+                  href={notification.action_path}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 inline-block text-sm text-primary hover:underline"
+                >
+                  View
+                </a>
               ) : null}
             </article>
           ))}

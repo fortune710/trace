@@ -1,4 +1,6 @@
 import { useRef, useState } from "react"
+import { Copy01Icon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -8,7 +10,14 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { toast } from "@/components/ui/toast"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useFindingRemediationPrompt } from "@/hooks/use-findings"
 
 function PromptSkeleton() {
@@ -110,21 +119,38 @@ export function CodingAgentPrompt({ findingId }: { findingId: string }) {
         >
           Coding-agent prompt
         </h2>
-        <Button type="button" variant="outline" onClick={() => void copyPrompt()}>
-          Copy prompt
-        </Button>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger render={<span className="inline-flex" />}>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                aria-label="Copy prompt"
+                onClick={() => void copyPrompt()}
+              >
+                <HugeiconsIcon icon={Copy01Icon} strokeWidth={2} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Copy prompt</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
-      <pre
-        ref={promptPanel}
-        tabIndex={-1}
-        className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/20 p-4 font-mono text-xs leading-6 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-      >
-        {prompt.prompt}
-      </pre>
+      <div className="mt-3 h-96 rounded-lg border border-border bg-muted/20 p-3">
+        <ScrollArea className="h-full rounded-md bg-muted/50">
+          <pre
+            ref={promptPanel}
+            tabIndex={-1}
+            className="min-h-full whitespace-pre-wrap p-4 font-mono text-xs leading-6 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            {prompt.prompt}
+          </pre>
+        </ScrollArea>
+      </div>
       {manualCopyRequired ? (
         <p className="mt-3 text-sm text-muted-foreground" role="status">
-          Clipboard access is unavailable. The prompt is selected so you can copy it
-          manually.
+          Clipboard access is unavailable. The prompt is selected so you can
+          copy it manually.
         </p>
       ) : null}
     </section>

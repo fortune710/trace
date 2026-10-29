@@ -144,6 +144,21 @@ function isSafeActionPath(actionPath: string | null): actionPath is string {
   return Boolean(actionPath && /^\/[^/]/.test(actionPath))
 }
 
+function isSafePullRequestUrl(notification: Notification): boolean {
+  if (
+    notification.event_type !== "pull_request_created" ||
+    !notification.action_path
+  ) {
+    return false
+  }
+  try {
+    const url = new URL(notification.action_path)
+    return url.protocol === "https:" && Boolean(url.hostname)
+  } catch {
+    return false
+  }
+}
+
 export function NotificationStream() {
   const session = useSession()
   const queryClient = useQueryClient()
@@ -231,15 +246,24 @@ export function NotificationStream() {
       const actionPath = isSafeActionPath(notification.action_path)
         ? notification.action_path
         : null
+      const pullRequestUrl = isSafePullRequestUrl(notification)
+        ? notification.action_path
+        : null
       toast.add({
         type: notification.category === "warning" ? "warning" : "info",
         title: notification.title,
         description: notification.body,
-        ...(actionPath
+        ...(actionPath || pullRequestUrl
           ? {
               actionProps: {
                 children: "View",
-                onClick: () => navigate(actionPath),
+                onClick: () => {
+                  if (pullRequestUrl) {
+                    window.open(pullRequestUrl, "_blank", "noopener,noreferrer")
+                    return
+                  }
+                  navigate(actionPath!)
+                },
               },
             }
           : {}),
@@ -255,11 +279,7 @@ export function NotificationStream() {
   }, [isLeader, navigate, queryClient, session.data])
 
   useEffect(() => {
-    if (
-      !session.data ||
-      isLeader ||
-      typeof BroadcastChannel === "undefined"
-    ) {
+    if (!session.data || isLeader || typeof BroadcastChannel === "undefined") {
       return
     }
     const channel = new BroadcastChannel("trace.notifications")
