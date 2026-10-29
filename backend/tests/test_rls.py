@@ -71,7 +71,8 @@ def test_owner_rls_isolation_and_transaction_local_context() -> None:
             with pytest.raises(sa.exc.DBAPIError):
                 connection.execute(
                     sa.text(
-                        "SELECT count(*) FROM private.remediation_pull_request_outbox_jobs"
+                        "SELECT remediation_id "
+                        "FROM private.remediation_pull_request_outbox_jobs"
                     )
                 )
 

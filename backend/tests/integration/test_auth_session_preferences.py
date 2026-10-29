@@ -55,4 +55,5 @@ def test_automatic_pull_request_preference_rejects_unexpected_fields(
         json={"automatic_pull_requests": True, "unexpected": True},
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"

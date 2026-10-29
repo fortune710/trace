@@ -27,7 +27,8 @@ def test_remediation_issue_creation_validates_the_destination_and_owner(
         headers=owner.headers(),
         json={"destination": {"provider": "github", "owner": "acme"}},
     )
-    assert invalid_destination.status_code == 422
+    assert invalid_destination.status_code == 400
+    assert invalid_destination.json()["error"]["code"] == "invalid_request"
 
     foreign = other.client.post(path, headers=other.headers(), json=body)
     assert foreign.status_code == 403
