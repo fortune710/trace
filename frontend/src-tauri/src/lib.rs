@@ -34,6 +34,12 @@ pub fn run() {
             sql: include_str!("../migrations/005_local_desktop_telemetry.sql"),
             kind: tauri_plugin_sql::MigrationKind::Up,
         },
+        tauri_plugin_sql::Migration {
+            version: 6,
+            description: "retain the newest desktop telemetry entries",
+            sql: include_str!("../migrations/006_desktop_telemetry_retention.sql"),
+            kind: tauri_plugin_sql::MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

@@ -13,6 +13,17 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Commit the values added by 0046 before this migration casts one of them.
+    # PostgreSQL rejects use of an enum value added in the current transaction.
+    with op.get_context().autocommit_block():
+        op.execute(
+            "ALTER TYPE public.notification_event_type "
+            "ADD VALUE IF NOT EXISTS 'pull_request_created'"
+        )
+        op.execute(
+            "ALTER TYPE public.notification_event_type "
+            "ADD VALUE IF NOT EXISTS 'pull_request_creation_failed'"
+        )
     op.execute(
         "ALTER TABLE public.notifications "
         "DROP CONSTRAINT notifications_action_path_relative"

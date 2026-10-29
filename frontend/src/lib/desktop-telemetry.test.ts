@@ -47,17 +47,12 @@ describe("desktop telemetry", () => {
       http_status: 500,
     })
     expect(JSON.stringify(payload)).not.toContain("canonical_path")
-    expect(values.execute).toHaveBeenNthCalledWith(1, "BEGIN IMMEDIATE")
+    expect(values.execute).toHaveBeenCalledTimes(1)
     expect(values.execute).toHaveBeenNthCalledWith(
-      2,
+      1,
       "INSERT INTO desktop_telemetry (log_data) VALUES ($1)",
       [expect.stringContaining('"codec":"gzip+base64"')],
     )
-    expect(values.execute).toHaveBeenNthCalledWith(
-      3,
-      expect.stringContaining("MAX(id) - 10000"),
-    )
-    expect(values.execute).toHaveBeenNthCalledWith(4, "COMMIT")
   })
 
   it("does not write telemetry outside the desktop runtime", async () => {

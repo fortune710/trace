@@ -353,6 +353,7 @@ struct PatchHunk {
 struct SingleFilePatch {
     path: String,
     hunks: Vec<PatchHunk>,
+    new_has_trailing_newline: Option<bool>,
 }
 
 fn parse_hunk_header(value: &str) -> Option<(usize, usize, usize)> {
@@ -368,6 +369,34 @@ fn parse_hunk_header(value: &str) -> Option<(usize, usize, usize)> {
     let (old_start, old_count) = range(old)?;
     let (_, new_count) = range(new)?;
     Some((old_start, old_count, new_count))
+}
+
+fn is_git_index_line(line: &str) -> bool {
+    let Some((old_hash, new_and_mode)) = line
+        .strip_prefix("index ")
+        .and_then(|value| value.split_once(".."))
+    else {
+        return false;
+    };
+    let mut new_and_mode = new_and_mode.split_whitespace();
+    let Some(new_hash) = new_and_mode.next() else {
+        return false;
+    };
+    let mode_is_valid = match new_and_mode.next() {
+        Some(mode) => mode.len() == 6 && mode.chars().all(|character| character.is_ascii_digit()),
+        None => true,
+    };
+
+    old_hash
+        .chars()
+        .all(|character| character.is_ascii_hexdigit())
+        && !old_hash.is_empty()
+        && new_hash
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+        && !new_hash.is_empty()
+        && mode_is_valid
+        && new_and_mode.next().is_none()
 }
 
 fn parse_single_file_patch(diff: &str) -> Result<SingleFilePatch, FolderPickerError> {
@@ -396,9 +425,17 @@ fn parse_single_file_patch(diff: &str) -> Result<SingleFilePatch, FolderPickerEr
     }
     let path = paths.0.to_owned();
 
-    let old_header = lines
+    let mut old_header = lines
         .next()
         .ok_or_else(|| apply_error(FolderPickerErrorCode::InvalidDiff))?;
+    if old_header.starts_with("index ") {
+        if !is_git_index_line(old_header) {
+            return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+        }
+        old_header = lines
+            .next()
+            .ok_or_else(|| apply_error(FolderPickerErrorCode::InvalidDiff))?;
+    }
     let new_header = lines
         .next()
         .ok_or_else(|| apply_error(FolderPickerErrorCode::InvalidDiff))?;
@@ -408,6 +445,7 @@ fn parse_single_file_patch(diff: &str) -> Result<SingleFilePatch, FolderPickerEr
 
     let mut hunks = Vec::new();
     let mut current: Option<PatchHunk> = None;
+    let mut new_has_trailing_newline = None;
     for line in lines {
         if line.starts_with("diff --git ") {
             return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
@@ -424,6 +462,15 @@ fn parse_single_file_patch(diff: &str) -> Result<SingleFilePatch, FolderPickerEr
                 new_count,
                 lines: Vec::new(),
             });
+            continue;
+        }
+        if line == "\\ No newline at end of file" {
+            let last_kind = current
+                .as_ref()
+                .and_then(|hunk| hunk.lines.last())
+                .map(|(kind, _)| *kind)
+                .ok_or_else(|| apply_error(FolderPickerErrorCode::InvalidDiff))?;
+            new_has_trailing_newline = Some(last_kind == '-');
             continue;
         }
         let hunk = current
@@ -450,7 +497,11 @@ fn parse_single_file_patch(diff: &str) -> Result<SingleFilePatch, FolderPickerEr
             return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
         }
     }
-    Ok(SingleFilePatch { path, hunks })
+    Ok(SingleFilePatch {
+        path,
+        hunks,
+        new_has_trailing_newline,
+    })
 }
 
 fn parse_patches(diff: &str) -> Result<Vec<SingleFilePatch>, FolderPickerError> {
@@ -485,10 +536,13 @@ fn apply_patch_to_text(source: &str, patch: &SingleFilePatch) -> Result<String, 
     let mut source_index = 0usize;
 
     for hunk in &patch.hunks {
-        let hunk_start = hunk
-            .old_start
-            .checked_sub(1)
-            .ok_or_else(|| apply_error(FolderPickerErrorCode::InvalidDiff))?;
+        let hunk_start = if hunk.old_count == 0 {
+            hunk.old_start
+        } else {
+            hunk.old_start
+                .checked_sub(1)
+                .ok_or_else(|| apply_error(FolderPickerErrorCode::InvalidDiff))?
+        };
         if hunk_start < source_index || hunk_start > source_lines.len() {
             return Err(apply_error(FolderPickerErrorCode::SourceChanged));
         }
@@ -516,7 +570,10 @@ fn apply_patch_to_text(source: &str, patch: &SingleFilePatch) -> Result<String, 
     }
     output.extend_from_slice(&source_lines[source_index..]);
     let mut applied = output.join("\n");
-    if had_trailing_newline {
+    if patch
+        .new_has_trailing_newline
+        .unwrap_or(had_trailing_newline)
+    {
         applied.push('\n');
     }
     Ok(applied)
@@ -863,9 +920,10 @@ mod tests {
     static TEMPORARY_DIRECTORY_ID: AtomicU64 = AtomicU64::new(0);
 
     use super::{
-        EXCLUDED_DIRECTORIES, FolderPickerErrorCode, apply_local_remediation_at, capture_snapshot,
-        copy_source_snapshot, io_error_code, parse_single_file_patch, snapshot_read_hook,
-        validate_folder, validate_selected_path, write_failure_hook,
+        EXCLUDED_DIRECTORIES, FolderPickerErrorCode, apply_local_remediation_at,
+        apply_patch_to_text, capture_snapshot, copy_source_snapshot, io_error_code,
+        parse_single_file_patch, snapshot_read_hook, validate_folder, validate_selected_path,
+        write_failure_hook,
     };
 
     fn temporary_directory() -> std::path::PathBuf {
@@ -1301,6 +1359,40 @@ mod tests {
         );
         fs::remove_dir_all(root).expect("source cleanup");
         fs::remove_dir_all(backups).expect("backup cleanup");
+    }
+
+    #[test]
+    fn applies_pure_insertions_at_the_start_and_after_an_old_line() {
+        let at_start = parse_single_file_patch(
+            "diff --git a/example.txt b/example.txt\n--- a/example.txt\n+++ b/example.txt\n@@ -0,0 +1 @@\n+zero\n",
+        )
+        .expect("start insertion patch");
+        let after_first_line = parse_single_file_patch(
+            "diff --git a/example.txt b/example.txt\n--- a/example.txt\n+++ b/example.txt\n@@ -1,0 +2 @@\n+between\n",
+        )
+        .expect("mid-file insertion patch");
+
+        assert_eq!(
+            apply_patch_to_text("one\ntwo\n", &at_start).expect("start insertion"),
+            "zero\none\ntwo\n"
+        );
+        assert_eq!(
+            apply_patch_to_text("one\ntwo\n", &after_first_line).expect("mid-file insertion"),
+            "one\nbetween\ntwo\n"
+        );
+    }
+
+    #[test]
+    fn accepts_an_index_line_and_preserves_a_removed_trailing_newline() {
+        let patch = parse_single_file_patch(
+            "diff --git a/example.txt b/example.txt\nindex abc1234..def5678 100644\n--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-before\n+after\n\\ No newline at end of file\n",
+        )
+        .expect("patch with index and newline marker");
+
+        assert_eq!(
+            apply_patch_to_text("before\n", &patch).expect("patch application"),
+            "after"
+        );
     }
 
     #[test]

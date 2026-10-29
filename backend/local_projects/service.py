@@ -3,6 +3,7 @@
 from uuid import UUID
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Engine
 
 from auth.uuids import uuid7
@@ -16,36 +17,34 @@ class LocalProjectHandleService:
 
     def ensure(self, *, owner_id: UUID, client_project_id: UUID) -> dict[str, object]:
         with principal_transaction(self._engine, owner_id) as connection:
+            connection.execute(
+                insert(LocalProjectHandle)
+                .values(
+                    id=uuid7(),
+                    owner_id=owner_id,
+                    client_project_id=client_project_id,
+                )
+                .on_conflict_do_nothing(
+                    constraint="local_project_handles_owner_client_key"
+                )
+            )
             handle = (
                 connection.execute(
-                    sa.select(LocalProjectHandle).where(
+                    sa.select(
+                        LocalProjectHandle.id,
+                        LocalProjectHandle.client_project_id,
+                    ).where(
                         LocalProjectHandle.owner_id == owner_id,
                         LocalProjectHandle.client_project_id == client_project_id,
                     )
                 )
-                .scalars()
-                .one_or_none()
+                .mappings()
+                .one()
             )
-            if handle is None:
-                handle_id = uuid7()
-                connection.execute(
-                    sa.insert(LocalProjectHandle).values(
-                        id=handle_id,
-                        owner_id=owner_id,
-                        client_project_id=client_project_id,
-                    )
-                )
-                handle = (
-                    connection.execute(
-                        sa.select(LocalProjectHandle).where(
-                            LocalProjectHandle.id == handle_id,
-                            LocalProjectHandle.owner_id == owner_id,
-                        )
-                    )
-                    .scalars()
-                    .one()
-                )
-        return {"id": handle.id, "client_project_id": handle.client_project_id}
+        return {
+            "id": handle["id"],
+            "client_project_id": handle["client_project_id"],
+        }
 
 
 __all__ = ["LocalProjectHandleService"]

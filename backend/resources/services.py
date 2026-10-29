@@ -1402,15 +1402,17 @@ class ArtifactService:
     ) -> list[dict[str, object]]:
         with principal_transaction(self._engine, owner_id) as connection:
             self._owned_remediation(connection, owner_id, remediation_id)
-            rows = list(
-                connection.execute(
+            rows = cast(
+                list[LocalFileBackup],
+                _orm_scalars_all(
+                    connection,
                     sa.select(LocalFileBackup)
                     .where(
                         LocalFileBackup.owner_id == owner_id,
                         LocalFileBackup.remediation_id == remediation_id,
                     )
-                    .order_by(LocalFileBackup.file_path)
-                ).scalars()
+                    .order_by(LocalFileBackup.file_path),
+                ),
             )
             if not rows:
                 raise ResourceNotFound()

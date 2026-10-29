@@ -37,7 +37,6 @@ export type DesktopTelemetryEntry = {
   httpStatus?: number
 }
 
-const retainedEntryCount = 10_000
 const databasePath = "sqlite:trace.db"
 
 async function loadDatabase(): Promise<SqlDatabase> {
@@ -86,21 +85,10 @@ export function createDesktopTelemetry(
     })
     const logData = await dependencies.compress(payload)
 
-    await database.execute("BEGIN IMMEDIATE")
-    try {
-      await database.execute(
-        "INSERT INTO desktop_telemetry (log_data) VALUES ($1)",
-        [logData],
-      )
-      await database.execute(
-        `DELETE FROM desktop_telemetry
-         WHERE id <= (SELECT MAX(id) - ${retainedEntryCount} FROM desktop_telemetry)`,
-      )
-      await database.execute("COMMIT")
-    } catch (error) {
-      await database.execute("ROLLBACK").catch(() => undefined)
-      throw error
-    }
+    await database.execute(
+      "INSERT INTO desktop_telemetry (log_data) VALUES ($1)",
+      [logData],
+    )
   }
 
   return {
