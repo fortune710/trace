@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
@@ -244,7 +245,7 @@ def _log_tool_call(
     *,
     context: ToolExecutionContext,
     tool_name: str,
-    arguments: dict[str, object],
+    arguments: Mapping[str, object],
     result: dict[str, object] | None = None,
     error: Exception | None = None,
 ) -> None:

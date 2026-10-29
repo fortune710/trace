@@ -1,7 +1,7 @@
+import db.model_registry  # noqa: F401
 from credentials.models import CredentialProvider
 from db.base import Base
 from db.types import RepositorySource, ReviewCategory
-from local_projects.models import LocalProjectHandle  # noqa: F401
 
 EXPECTED_COLUMNS = {
     "auth.users": {
@@ -316,32 +316,6 @@ EXPECTED_COLUMNS = {
         "backup_path",
         "source_hash",
         "applied_hash",
-        "created_at",
-        "updated_at",
-    },
-    "private.remediation_pull_request_jobs": {
-        "id",
-        "owner_id",
-        "remediation_id",
-        "status",
-        "attempt_count",
-        "next_attempt_at",
-        "claimed_at",
-        "succeeded_at",
-        "failure_code",
-        "created_at",
-        "updated_at",
-    },
-    "private.remediation_pull_request_outbox_jobs": {
-        "idempotency_id",
-        "owner_id",
-        "remediation_id",
-        "status",
-        "attempt_count",
-        "next_attempt_at",
-        "claimed_at",
-        "published_at",
-        "failure_code",
         "created_at",
         "updated_at",
     },

@@ -87,8 +87,7 @@ def upgrade() -> None:
         "TO trace_app"
     )
     op.execute(
-        "GRANT SELECT (id, automatic_pull_requests) ON public.users "
-        "TO trace_internal"
+        "GRANT SELECT (id, automatic_pull_requests) ON public.users TO trace_internal"
     )
     op.execute(
         "GRANT SELECT (id, owner_id, source, external_repository_id, branch_name) "

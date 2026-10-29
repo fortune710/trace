@@ -522,7 +522,8 @@ def test_eligible_new_remediations_create_an_automatic_pr_outbox_record(
     monkeypatch,
 ) -> None:
     service = object.__new__(ReviewExecutionService)
-    owner_id, review_id, project_id, finding_id, remediation_id = (
+    owner_id, review_id, project_id, finding_id, remediation_id, outbox_id = (
+        uuid4(),
         uuid4(),
         uuid4(),
         uuid4(),
@@ -530,7 +531,7 @@ def test_eligible_new_remediations_create_an_automatic_pr_outbox_record(
         uuid4(),
     )
     statements = []
-    generated_ids = iter((finding_id, remediation_id))
+    generated_ids = iter((finding_id, remediation_id, outbox_id))
     monkeypatch.setattr(execution_executor_module, "uuid7", lambda: next(generated_ids))
 
     class InsertResult:

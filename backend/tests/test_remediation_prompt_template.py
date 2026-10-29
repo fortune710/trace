@@ -72,7 +72,7 @@ def test_rendered_prompt_rejects_content_above_the_display_limit() -> None:
 
 
 def test_rendered_prompt_never_includes_finding_or_agent_context() -> None:
-    credential = "sk-test-secret-12345678901234567890"
+    credential = "credential-redacted-in-test"
     cross_account_value = "other-account-private-source"
     rendered = render_remediation_prompt(
         _context(

@@ -1952,7 +1952,7 @@ def _log_provider_call(
     operation: str,
     outcome: str,
     *,
-    error: RepositoryProviderError | None = None,
+    error: Exception | None = None,
 ) -> None:
     fields: dict[str, object] = {
         "event": "repository_provider_call",
