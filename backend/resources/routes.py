@@ -484,11 +484,11 @@ def install_resource_routes(
 
     @app.get(
         "/remediations/{remediation_id}/local-file-backup",
-        response_model=LocalFileBackupResponse,
+        response_model=list[LocalFileBackupResponse],
     )
     def get_remediation_local_backup(
         remediation_id: UUID, principal: CurrentPrincipal
-    ) -> dict[str, object]:
+    ) -> list[dict[str, object]]:
         return artifact_service().get_local_backup(
             owner_id=principal.user_id, remediation_id=remediation_id
         )

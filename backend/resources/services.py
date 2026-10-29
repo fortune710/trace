@@ -1399,23 +1399,22 @@ class ArtifactService:
 
     def get_local_backup(
         self, *, owner_id: UUID, remediation_id: UUID
-    ) -> dict[str, object]:
+    ) -> list[dict[str, object]]:
         with principal_transaction(self._engine, owner_id) as connection:
             self._owned_remediation(connection, owner_id, remediation_id)
-            row = cast(
-                LocalFileBackup | None,
-                _orm_scalar_one_or_none(
-                    connection,
-                    sa.select(LocalFileBackup).where(
+            rows = list(
+                connection.execute(
+                    sa.select(LocalFileBackup)
+                    .where(
                         LocalFileBackup.owner_id == owner_id,
                         LocalFileBackup.remediation_id == remediation_id,
-                    ),
-                ),
+                    )
+                    .order_by(LocalFileBackup.file_path)
+                ).scalars()
             )
-            if row is None:
+            if not rows:
                 raise ResourceNotFound()
-            assert row is not None
-        return _artifact_response(row)
+        return [_artifact_response(row) for row in rows]
 
     def get_local_backup_by_id(
         self, *, owner_id: UUID, artifact_id: UUID

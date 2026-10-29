@@ -21,7 +21,8 @@ class LocalFileBackup(Base):
         sa.UniqueConstraint(
             "owner_id",
             "remediation_id",
-            name="local_file_backups_owner_remediation_key",
+            "file_path",
+            name="local_file_backups_owner_remediation_path_key",
         ),
         sa.ForeignKeyConstraint(
             ["owner_id", "remediation_id"],

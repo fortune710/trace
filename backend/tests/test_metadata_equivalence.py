@@ -1,6 +1,7 @@
 from credentials.models import CredentialProvider
 from db.base import Base
 from db.types import RepositorySource, ReviewCategory
+from local_projects.models import LocalProjectHandle  # noqa: F401
 
 EXPECTED_COLUMNS = {
     "auth.users": {

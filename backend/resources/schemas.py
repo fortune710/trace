@@ -9,6 +9,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    field_validator,
     model_validator,
 )
 
@@ -364,14 +365,13 @@ class LocalFileBackupResponse(RequestModel):
     updated_at: datetime
 
 
-class LocalRemediationApply(RequestModel):
+class LocalRemediationApplyFile(RequestModel):
     file_path: Annotated[
         str,
         StringConstraints(
             strip_whitespace=True,
             min_length=1,
             max_length=2_000,
-            pattern=r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))(?!.*\\).+$",
         ),
     ]
     backup_reference: Annotated[
@@ -380,11 +380,35 @@ class LocalRemediationApply(RequestModel):
             strip_whitespace=True,
             min_length=1,
             max_length=2_000,
-            pattern=r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))(?!.*\\).+$",
         ),
     ]
     source_hash: HashString
     applied_hash: HashString
+
+    @field_validator("file_path", "backup_reference")
+    @classmethod
+    def validate_relative_path(cls, value: str) -> str:
+        if (
+            value.startswith("/")
+            or "\\" in value
+            or any(segment == ".." for segment in value.split("/"))
+        ):
+            raise ValueError("must be a relative path without parent traversal")
+        return value
+
+
+class LocalRemediationApply(RequestModel):
+    files: Annotated[
+        list[LocalRemediationApplyFile],
+        Field(min_length=1, max_length=100),
+    ]
+
+    @model_validator(mode="after")
+    def validate_unique_file_paths(self) -> LocalRemediationApply:
+        paths = [file.file_path for file in self.files]
+        if len(paths) != len(set(paths)):
+            raise ValueError("file paths must be unique")
+        return self
 
 
 class CredentialCreate(RequestModel):

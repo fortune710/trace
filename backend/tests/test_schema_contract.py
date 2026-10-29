@@ -17,6 +17,7 @@ from db.base import Base
 from external_repositories.models import ExternalRepository
 from findings.models import Finding
 from issue_tracking.models import IssueLink
+from local_projects.models import LocalProjectHandle  # noqa: F401
 from notifications.models import Notification
 from projects.models import Project
 from remediations.models import Remediation
