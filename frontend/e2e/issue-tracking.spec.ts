@@ -257,8 +257,10 @@ test("creates a Linear issue from a finding and renders the linked issue", async
   await mockIssueTrackingApi(page)
   await page.goto("/reviews/review-1/findings/finding-1")
 
-  await page.getByLabel("Choose issue tracker").click()
-  await page.getByText("Linear issue", { exact: true }).click()
+  const issueTracker = page.getByLabel("Choose issue tracker")
+  await expect(issueTracker).toBeEnabled()
+  await issueTracker.click()
+  await page.getByRole("option", { name: "Linear issue" }).click()
   await expect(page.getByRole("dialog", { name: "Create Linear issue" })).toBeVisible()
   await expect(page.getByText("Verify organization ownership.")).toBeVisible()
   await page.getByRole("button", { name: "Create issue" }).click()
