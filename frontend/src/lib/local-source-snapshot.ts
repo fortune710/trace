@@ -9,11 +9,15 @@ export type NativeStoredSourceSnapshot = NativeSourceSnapshot & {
   snapshotId: string
 }
 
-export type NativeLocalRemediationResult = {
+export type NativeLocalRemediationFile = {
   filePath: string
   backupReference: string
   sourceHash: string
   appliedHash: string
+}
+
+export type NativeLocalRemediationResult = {
+  files: NativeLocalRemediationFile[]
 }
 
 type NativeSnapshotError = {
@@ -73,6 +77,26 @@ export async function applyLocalRemediation(
     if (code === "invalid_diff" || code === "source_changed") {
       throw new LocalSourceSnapshotError()
     }
+    throw new LocalSourceSnapshotError()
+  }
+}
+
+export async function restoreLocalRemediation(
+  canonicalPath: string,
+  remediationId: string,
+  files: NativeLocalRemediationFile[],
+): Promise<void> {
+  try {
+    await invoke("restore_local_remediation", {
+      canonicalPath,
+      remediationId,
+      files: files.map((file) => ({
+        filePath: file.filePath,
+        backupReference: file.backupReference,
+        appliedHash: file.appliedHash,
+      })),
+    })
+  } catch {
     throw new LocalSourceSnapshotError()
   }
 }

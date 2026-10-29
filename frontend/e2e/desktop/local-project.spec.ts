@@ -125,11 +125,15 @@ async function run() {
   const api = startDesktopTestApi()
   const fixtureDirectory = await mkdtemp(path.join(os.tmpdir(), "trace-desktop-e2e-"))
   const projectDirectory = path.join(fixtureDirectory, "Local project")
+  const remediationDirectory = path.join(fixtureDirectory, "Remediation project")
   const missingDirectory = path.join(fixtureDirectory, "Missing project")
   const filePath = path.join(fixtureDirectory, "Not a folder.txt")
   const testResultsDirectory = path.join(frontendDirectory, "test-results")
 
   await mkdir(projectDirectory)
+  await mkdir(remediationDirectory)
+  await writeFile(path.join(remediationDirectory, "first.txt"), "before-one\n")
+  await writeFile(path.join(remediationDirectory, "second.txt"), "before-two\n")
   await writeFile(path.join(fixtureDirectory, "fixture.txt"), "desktop e2e fixture")
   await writeFile(filePath, "not a directory")
   await mkdir(testResultsDirectory, { recursive: true })
@@ -161,6 +165,73 @@ async function run() {
         await driver.type("css selector", "#password", "correct-horse-battery-staple")
         await driver.click("xpath", "//button[@type='submit' and normalize-space(.)='Sign in']")
         await driver.waitForText("css selector", "body", "Projects")
+      },
+    )
+
+    await withDesktopDriver(
+      remediationDirectory,
+      "local-remediation-apply",
+      testResultsDirectory,
+      async (driver) => {
+        await openLocalFolderPicker(driver)
+        await driver.waitForElement("css selector", "#project-name")
+        await driver.type("css selector", "#project-name", "Desktop E2E project")
+        await driver.click("xpath", "//button[@type='submit' and normalize-space(.)='Create project']")
+        await driver.waitForText("css selector", "body", "Start review")
+        await driver.click("xpath", "//button[normalize-space(.)='Start review']")
+        await driver.waitForElement("css selector", "#review-agent-agent-desktop-e2e")
+        await driver.click("css selector", "#review-agent-agent-desktop-e2e")
+        await driver.click("xpath", "//button[@type='submit' and normalize-space(.)='Start review']")
+        await driver.waitFor(async () => driver.currentUrl(), (url) => url.includes("/reviews/review-desktop-e2e"))
+
+        await driver.navigate("http://tauri.localhost/reviews/review-desktop-e2e/findings/finding-desktop-e2e")
+        await driver.waitForElement("xpath", "//button[normalize-space(.)='Apply change']")
+        api.failNextLocalApply()
+        await driver.click("xpath", "//button[normalize-space(.)='Apply change']")
+        await driver.waitFor(
+          () => Promise.resolve(api.localApplyRequests.length),
+          (count) => count === 1,
+        )
+        await driver.waitForText("css selector", "body", "The remediation could not be recorded.")
+        assert.equal(await Bun.file(path.join(remediationDirectory, "first.txt")).text(), "before-one\n")
+        assert.equal(await Bun.file(path.join(remediationDirectory, "second.txt")).text(), "before-two\n")
+
+        await driver.click("xpath", "//button[normalize-space(.)='Apply change']")
+        await driver.waitFor(
+          () => Promise.resolve(api.localApplyRequests.length),
+          (count) => count === 2,
+        )
+
+        assert.equal(await Bun.file(path.join(remediationDirectory, "first.txt")).text(), "after-one\n")
+        assert.equal(await Bun.file(path.join(remediationDirectory, "second.txt")).text(), "after-two\n")
+        const body = api.localApplyRequests[1]?.body as {
+          files: Array<{
+            file_path: string
+            backup_reference: string
+            source_hash: string
+            applied_hash: string
+          }>
+        }
+        assert.deepEqual(
+          body.files.map((file) => ({
+            file_path: file.file_path,
+            backup_reference: file.backup_reference,
+          })),
+          [
+            {
+              file_path: "first.txt",
+              backup_reference: "local-remediation-backups/remediation-desktop-e2e/first.txt",
+            },
+            {
+              file_path: "second.txt",
+              backup_reference: "local-remediation-backups/remediation-desktop-e2e/second.txt",
+            },
+          ],
+        )
+        for (const file of body.files) {
+          assert.match(file.source_hash, /^[a-f0-9]{64}$/)
+          assert.match(file.applied_hash, /^[a-f0-9]{64}$/)
+        }
       },
     )
 
@@ -200,7 +271,7 @@ async function run() {
       },
     )
 
-    assert.equal(api.projectCreateRequests.length, 0)
+    assert.equal(api.projectCreateRequests.length, 1)
     assertPathFree(api.requests)
   } finally {
     api.close()

@@ -1,4 +1,5 @@
 mod folder_picker;
+mod telemetry;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -27,6 +28,12 @@ pub fn run() {
             sql: include_str!("../migrations/004_local_review_state.sql"),
             kind: tauri_plugin_sql::MigrationKind::Up,
         },
+        tauri_plugin_sql::Migration {
+            version: 5,
+            description: "store compressed desktop-only telemetry",
+            sql: include_str!("../migrations/005_local_desktop_telemetry.sql"),
+            kind: tauri_plugin_sql::MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -35,7 +42,10 @@ pub fn run() {
             folder_picker::validate_local_folder,
             folder_picker::capture_local_source_snapshot,
             folder_picker::create_local_review_snapshot,
-            folder_picker::apply_local_remediation
+            folder_picker::apply_local_remediation,
+            folder_picker::restore_local_remediation,
+            telemetry::desktop_telemetry_platform,
+            telemetry::compress_desktop_telemetry
         ])
         .plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {}))
         .plugin(tauri_plugin_deep_link::init())

@@ -13,8 +13,17 @@ import {
   type FindingPage,
   type FindingSeverity,
   type FindingStatus,
+  type Remediation,
   type ReviewCategory,
 } from "@/lib/api"
+import {
+  applyLocalRemediation,
+  restoreLocalRemediation,
+} from "@/lib/local-source-snapshot"
+import { getLocalProjectsDatabase } from "@/lib/local-projects-database"
+import { desktopTelemetry } from "@/lib/desktop-telemetry"
+import { useRuntimeEnvironment } from "@/hooks/use-runtime-environment"
+import { useSession } from "@/hooks/use-session"
 
 export type FindingFilters = {
   category?: ReviewCategory
@@ -218,6 +227,110 @@ export function useCreateRemediationPullRequest(
 
   return useMutation({
     mutationFn: () => remediationsApi.createPullRequest(remediationId!),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: findingsQueryKey })
+      void queryClient.invalidateQueries({
+        queryKey: [...findingsQueryKey, "remediations", findingId],
+      })
+    },
+  })
+}
+
+export function useApplyLocalRemediation(findingId: string) {
+  const queryClient = useQueryClient()
+  const runtime = useRuntimeEnvironment()
+  const session = useSession()
+
+  return useMutation({
+    mutationFn: async (remediation: Remediation) => {
+      if (!runtime.isTauri) {
+        throw new Error("Local remediation is available in the desktop app only.")
+      }
+      const accountId = session.data?.user_id
+      if (!accountId) {
+        throw new Error("Sign in before applying a local remediation.")
+      }
+      const database = await getLocalProjectsDatabase()
+      const project = await database.getByApiProjectId(
+        accountId,
+        remediation.project_id,
+      )
+      if (
+        !project ||
+        project.source.kind !== "local" ||
+        project.source.availability !== "available"
+      ) {
+        throw new Error("Reconnect the reviewed local folder before applying this change.")
+      }
+
+      await desktopTelemetry.record({
+        event: "local_remediation.apply.started",
+        userId: accountId,
+      })
+      let operation
+      try {
+        operation = await applyLocalRemediation(
+          project.source.canonicalPath,
+          remediation.id,
+          remediation.proposed_diff,
+        )
+        await desktopTelemetry.record({
+          event: "local_remediation.apply.succeeded",
+          userId: accountId,
+        })
+      } catch (error) {
+        await desktopTelemetry.record({
+          event: "local_remediation.apply.failed",
+          userId: accountId,
+          errorCode: "local_apply_failed",
+        })
+        throw error
+      }
+      try {
+        const recorded = await remediationsApi.completeLocalApply(remediation.id, {
+          files: operation.files.map((file) => ({
+            file_path: file.filePath,
+            backup_reference: file.backupReference,
+            source_hash: file.sourceHash,
+            applied_hash: file.appliedHash,
+          })),
+        })
+        await desktopTelemetry.record({
+          event: "local_remediation.record.succeeded",
+          userId: accountId,
+        })
+        return recorded
+      } catch (error) {
+        await desktopTelemetry.record({
+          event: "local_remediation.record.failed",
+          userId: accountId,
+          errorCode: error instanceof ApiError ? error.code : "local_record_failed",
+          httpStatus: error instanceof ApiError ? error.status : undefined,
+          serverRequestId: error instanceof ApiError ? error.requestId : undefined,
+        })
+        try {
+          await restoreLocalRemediation(
+            project.source.canonicalPath,
+            remediation.id,
+            operation.files,
+          )
+          await desktopTelemetry.record({
+            event: "local_remediation.restore.succeeded",
+            userId: accountId,
+          })
+        } catch {
+          await desktopTelemetry.record({
+            event: "local_remediation.restore.failed",
+            userId: accountId,
+            errorCode: "local_restore_failed",
+          })
+          throw new Error(
+            "Trace could not record or restore the local change. Check the affected files before continuing.",
+          )
+        }
+        throw error
+      }
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: findingsQueryKey })
       void queryClient.invalidateQueries({

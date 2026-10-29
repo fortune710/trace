@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -7,7 +8,7 @@ use std::{
 #[cfg(test)]
 use std::sync::{Mutex, OnceLock};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
@@ -64,10 +65,24 @@ pub struct NativeStoredSourceSnapshot {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NativeLocalRemediationResult {
+pub struct NativeLocalRemediationFile {
     pub file_path: String,
     pub backup_reference: String,
     pub source_hash: String,
+    pub applied_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeLocalRemediationResult {
+    pub files: Vec<NativeLocalRemediationFile>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeLocalRemediationRestoreFile {
+    pub file_path: String,
+    pub backup_reference: String,
     pub applied_hash: String,
 }
 
@@ -94,6 +109,9 @@ const EXCLUDED_DIRECTORIES: &[&str] = &[
 type SnapshotReadHook = Box<dyn Fn(&Path) + Send + Sync>;
 
 #[cfg(test)]
+type WriteFailureHook = Box<dyn Fn(&Path) -> bool + Send + Sync>;
+
+#[cfg(test)]
 fn snapshot_read_hook() -> &'static Mutex<Option<SnapshotReadHook>> {
     static HOOK: OnceLock<Mutex<Option<SnapshotReadHook>>> = OnceLock::new();
     HOOK.get_or_init(|| Mutex::new(None))
@@ -105,6 +123,21 @@ fn run_snapshot_read_hook(path: &Path) {
     if let Some(hook) = hook.as_ref() {
         hook(path);
     }
+}
+
+#[cfg(test)]
+fn write_failure_hook() -> &'static Mutex<Option<WriteFailureHook>> {
+    static HOOK: OnceLock<Mutex<Option<WriteFailureHook>>> = OnceLock::new();
+    HOOK.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+fn should_fail_write(path: &Path) -> bool {
+    write_failure_hook()
+        .lock()
+        .expect("write failure hook lock")
+        .as_ref()
+        .is_some_and(|hook| hook(path))
 }
 
 fn io_error_code(error: &std::io::Error) -> FolderPickerErrorCode {
@@ -411,21 +444,38 @@ fn parse_single_file_patch(diff: &str) -> Result<SingleFilePatch, FolderPickerEr
         return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
     }
     for hunk in &hunks {
-        let old_count = hunk
-            .lines
-            .iter()
-            .filter(|(kind, _)| *kind != '+')
-            .count();
-        let new_count = hunk
-            .lines
-            .iter()
-            .filter(|(kind, _)| *kind != '-')
-            .count();
+        let old_count = hunk.lines.iter().filter(|(kind, _)| *kind != '+').count();
+        let new_count = hunk.lines.iter().filter(|(kind, _)| *kind != '-').count();
         if old_count != hunk.old_count || new_count != hunk.new_count {
             return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
         }
     }
     Ok(SingleFilePatch { path, hunks })
+}
+
+fn parse_patches(diff: &str) -> Result<Vec<SingleFilePatch>, FolderPickerError> {
+    if !diff.starts_with("diff --git ") {
+        return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+    }
+
+    let mut patches = Vec::new();
+    let mut paths = HashSet::new();
+    for (index, chunk) in diff.split("\ndiff --git ").enumerate() {
+        let file_diff = if index == 0 {
+            chunk.to_owned()
+        } else {
+            format!("diff --git {chunk}")
+        };
+        let patch = parse_single_file_patch(&file_diff)?;
+        if !paths.insert(patch.path.clone()) {
+            return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+        }
+        patches.push(patch);
+    }
+    if patches.is_empty() {
+        return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+    }
+    Ok(patches)
 }
 
 fn apply_patch_to_text(source: &str, patch: &SingleFilePatch) -> Result<String, FolderPickerError> {
@@ -476,42 +526,56 @@ fn sha256_hex(value: &[u8]) -> String {
     format!("{:x}", Sha256::digest(value))
 }
 
-fn apply_local_remediation_at(
+struct PreparedLocalRemediationFile {
+    path: String,
+    target: PathBuf,
+    source_bytes: Vec<u8>,
+    applied_bytes: Vec<u8>,
+    backup_reference: PathBuf,
+}
+
+fn prepare_local_remediation_files(
     root: &Path,
-    backup_root: &Path,
-    remediation_id: &str,
     diff: &str,
-) -> Result<NativeLocalRemediationResult, FolderPickerError> {
-    let patch = parse_single_file_patch(diff)?;
-    let root = fs::canonicalize(root).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
-    let target = root.join(&patch.path);
-    let target = fs::canonicalize(target).map_err(|_| apply_error(FolderPickerErrorCode::SourceChanged))?;
-    if !target.starts_with(&root)
-        || !fs::metadata(&target)
-            .map_err(|_| apply_error(FolderPickerErrorCode::SourceChanged))?
-            .is_file()
-    {
-        return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+) -> Result<Vec<PreparedLocalRemediationFile>, FolderPickerError> {
+    let root =
+        fs::canonicalize(root).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+    let mut files = Vec::new();
+    for patch in parse_patches(diff)? {
+        let target = fs::canonicalize(root.join(&patch.path))
+            .map_err(|_| apply_error(FolderPickerErrorCode::SourceChanged))?;
+        if !target.starts_with(&root)
+            || !fs::metadata(&target)
+                .map_err(|_| apply_error(FolderPickerErrorCode::SourceChanged))?
+                .is_file()
+        {
+            return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+        }
+        let source_bytes =
+            fs::read(&target).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+        let source_text = std::str::from_utf8(&source_bytes)
+            .map_err(|_| apply_error(FolderPickerErrorCode::InvalidDiff))?;
+        let applied_bytes = apply_patch_to_text(source_text, &patch)?.into_bytes();
+        files.push(PreparedLocalRemediationFile {
+            path: patch.path,
+            target,
+            source_bytes,
+            applied_bytes,
+            backup_reference: PathBuf::new(),
+        });
     }
-    let source_bytes = fs::read(&target).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
-    let source_text = std::str::from_utf8(&source_bytes)
-        .map_err(|_| apply_error(FolderPickerErrorCode::InvalidDiff))?;
-    let applied = apply_patch_to_text(source_text, &patch)?;
-    let source_hash = sha256_hex(&source_bytes);
-    let applied_hash = sha256_hex(applied.as_bytes());
+    Ok(files)
+}
 
-    let backup_relative = Path::new("local-remediation-backups")
-        .join(remediation_id)
-        .join(&patch.path);
-    let backup_path = backup_root.join(&backup_relative);
-    let backup_parent = backup_path
-        .parent()
-        .ok_or_else(|| apply_error(FolderPickerErrorCode::ApplyFailed))?;
-    fs::create_dir_all(backup_parent).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
-    if !backup_path.exists() {
-        fs::copy(&target, &backup_path).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+fn write_file_atomically(
+    target: &Path,
+    contents: &[u8],
+    remediation_id: &str,
+) -> Result<(), FolderPickerError> {
+    #[cfg(test)]
+    if should_fail_write(target) {
+        return Err(apply_error(FolderPickerErrorCode::ApplyFailed));
     }
-
     let file_name = target
         .file_name()
         .and_then(|value| value.to_str())
@@ -520,22 +584,97 @@ fn apply_local_remediation_at(
     let write_result = (|| -> Result<(), FolderPickerError> {
         let mut file = fs::File::create(&temporary)
             .map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
-        file.write_all(applied.as_bytes())
+        file.write_all(contents)
             .map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
         file.sync_all()
             .map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
-        fs::rename(&temporary, &target).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+        fs::rename(&temporary, target)
+            .map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
         Ok(())
     })();
     if write_result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     write_result?;
+    Ok(())
+}
+
+fn restore_prepared_files(
+    files: &[PreparedLocalRemediationFile],
+    remediation_id: &str,
+) -> Result<(), FolderPickerError> {
+    for file in files.iter().rev() {
+        let current =
+            fs::read(&file.target).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+        if sha256_hex(&current) != sha256_hex(&file.applied_bytes) {
+            return Err(apply_error(FolderPickerErrorCode::ApplyFailed));
+        }
+        write_file_atomically(&file.target, &file.source_bytes, remediation_id)?;
+    }
+    Ok(())
+}
+
+fn apply_local_remediation_at(
+    root: &Path,
+    backup_root: &Path,
+    remediation_id: &str,
+    diff: &str,
+    is_allowed: impl Fn(&Path) -> bool,
+) -> Result<NativeLocalRemediationResult, FolderPickerError> {
+    let root =
+        fs::canonicalize(root).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+    if !is_allowed(&root) {
+        return Err(apply_error(FolderPickerErrorCode::InvalidSelection));
+    }
+    let mut files = prepare_local_remediation_files(&root, diff)?;
+    if files.iter().any(|file| !is_allowed(&file.target)) {
+        return Err(apply_error(FolderPickerErrorCode::InvalidSelection));
+    }
+
+    let mut created_backups = Vec::new();
+    for file in &mut files {
+        let backup_reference = Path::new("local-remediation-backups")
+            .join(remediation_id)
+            .join(&file.path);
+        let backup_path = backup_root.join(&backup_reference);
+        let backup_parent = backup_path
+            .parent()
+            .ok_or_else(|| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+        if let Err(error) = fs::create_dir_all(backup_parent)
+            .and_then(|_| fs::write(&backup_path, &file.source_bytes))
+        {
+            for path in created_backups {
+                let _ = fs::remove_file(path);
+            }
+            return Err(apply_error(io_error_code(&error)));
+        }
+        file.backup_reference = backup_reference;
+        created_backups.push(backup_path);
+    }
+
+    let mut written_count = 0;
+    for file in &files {
+        let current =
+            fs::read(&file.target).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+        if current != file.source_bytes
+            || write_file_atomically(&file.target, &file.applied_bytes, remediation_id).is_err()
+        {
+            let _ = restore_prepared_files(&files[..written_count], remediation_id);
+            return Err(apply_error(FolderPickerErrorCode::SourceChanged));
+        }
+        written_count += 1;
+    }
+
     Ok(NativeLocalRemediationResult {
-        file_path: patch.path,
-        backup_reference: backup_relative.to_string_lossy().into_owned(),
-        source_hash,
-        applied_hash,
+        files: files
+            .into_iter()
+            .map(|file| NativeLocalRemediationFile {
+                file_path: file.path,
+                backup_reference: file.backup_reference.to_string_lossy().into_owned(),
+                source_hash: sha256_hex(&file.source_bytes),
+                applied_hash: sha256_hex(&file.applied_bytes),
+            })
+            .collect(),
     })
 }
 
@@ -619,10 +758,7 @@ pub fn create_local_review_snapshot(
     {
         return Err(snapshot_error());
     }
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|_| snapshot_error())?;
+    let app_data = app.path().app_data_dir().map_err(|_| snapshot_error())?;
     let snapshot = copy_source_snapshot(
         Path::new(&canonical_path),
         &app_data.join("local-review-snapshots").join(&snapshot_id),
@@ -658,7 +794,62 @@ pub fn apply_local_remediation(
         &app_data,
         &remediation_id,
         &diff,
+        |path| app.fs_scope().is_allowed(path),
     )
+}
+
+#[tauri::command]
+pub fn restore_local_remediation(
+    app: tauri::AppHandle,
+    canonical_path: String,
+    remediation_id: String,
+    files: Vec<NativeLocalRemediationRestoreFile>,
+) -> Result<(), FolderPickerError> {
+    if remediation_id.is_empty()
+        || remediation_id.len() > 128
+        || !remediation_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        || files.is_empty()
+    {
+        return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+    }
+    let root = fs::canonicalize(Path::new(&canonical_path))
+        .map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+    if !app.fs_scope().is_allowed(&root) {
+        return Err(apply_error(FolderPickerErrorCode::InvalidSelection));
+    }
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+    let mut restored = Vec::new();
+    for file in &files {
+        if !is_safe_relative_path(&file.file_path) {
+            return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+        }
+        let expected_backup = Path::new("local-remediation-backups")
+            .join(&remediation_id)
+            .join(&file.file_path);
+        if Path::new(&file.backup_reference) != expected_backup {
+            return Err(apply_error(FolderPickerErrorCode::InvalidDiff));
+        }
+        let target = fs::canonicalize(root.join(&file.file_path))
+            .map_err(|_| apply_error(FolderPickerErrorCode::SourceChanged))?;
+        if !target.starts_with(&root) || !app.fs_scope().is_allowed(&target) {
+            return Err(apply_error(FolderPickerErrorCode::InvalidSelection));
+        }
+        let current =
+            fs::read(&target).map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+        if sha256_hex(&current) != file.applied_hash {
+            return Err(apply_error(FolderPickerErrorCode::SourceChanged));
+        }
+        let backup = fs::read(app_data.join(&expected_backup))
+            .map_err(|_| apply_error(FolderPickerErrorCode::ApplyFailed))?;
+        write_file_atomically(&target, &backup, &remediation_id)?;
+        restored.push((target, backup));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -672,9 +863,9 @@ mod tests {
     static TEMPORARY_DIRECTORY_ID: AtomicU64 = AtomicU64::new(0);
 
     use super::{
-        EXCLUDED_DIRECTORIES, FolderPickerErrorCode, apply_local_remediation_at,
-        capture_snapshot, copy_source_snapshot, io_error_code, parse_single_file_patch,
-        snapshot_read_hook, validate_folder, validate_selected_path,
+        EXCLUDED_DIRECTORIES, FolderPickerErrorCode, apply_local_remediation_at, capture_snapshot,
+        copy_source_snapshot, io_error_code, parse_single_file_patch, snapshot_read_hook,
+        validate_folder, validate_selected_path, write_failure_hook,
     };
 
     fn temporary_directory() -> std::path::PathBuf {
@@ -1096,14 +1287,156 @@ mod tests {
         fs::write(&source, "before\nunchanged\n").expect("source file");
         let diff = "diff --git a/src/example.txt b/src/example.txt\n--- a/src/example.txt\n+++ b/src/example.txt\n@@ -1,2 +1,2 @@\n-before\n+after\n unchanged\n";
 
-        let result = apply_local_remediation_at(&root, &backups, "remediation-1", diff)
+        let result = apply_local_remediation_at(&root, &backups, "remediation-1", diff, |_| true)
             .expect("patch should apply");
 
-        assert_eq!(fs::read_to_string(&source).expect("updated source"), "after\nunchanged\n");
-        assert_eq!(result.file_path, "src/example.txt");
         assert_eq!(
-            fs::read_to_string(backups.join(&result.backup_reference)).expect("backup"),
+            fs::read_to_string(&source).expect("updated source"),
+            "after\nunchanged\n"
+        );
+        assert_eq!(result.files[0].file_path, "src/example.txt");
+        assert_eq!(
+            fs::read_to_string(backups.join(&result.files[0].backup_reference)).expect("backup"),
             "before\nunchanged\n"
+        );
+        fs::remove_dir_all(root).expect("source cleanup");
+        fs::remove_dir_all(backups).expect("backup cleanup");
+    }
+
+    #[test]
+    fn applies_multiple_files_only_after_every_file_passes_preflight() {
+        let root = temporary_directory();
+        let backups = temporary_directory();
+        let first = root.join("src").join("first.txt");
+        let second = root.join("src").join("second.txt");
+        fs::create_dir_all(first.parent().expect("source parent")).expect("source parent");
+        fs::write(&first, "before-one\n").expect("first source");
+        fs::write(&second, "before-two\n").expect("second source");
+        let diff = "diff --git a/src/first.txt b/src/first.txt\n--- a/src/first.txt\n+++ b/src/first.txt\n@@ -1 +1 @@\n-before-one\n+after-one\ndiff --git a/src/second.txt b/src/second.txt\n--- a/src/second.txt\n+++ b/src/second.txt\n@@ -1 +1 @@\n-before-two\n+after-two\n";
+
+        let result = apply_local_remediation_at(&root, &backups, "remediation-2", diff, |_| true)
+            .expect("patches should apply");
+
+        assert_eq!(result.files.len(), 2);
+        assert_eq!(
+            fs::read_to_string(&first).expect("first result"),
+            "after-one\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&second).expect("second result"),
+            "after-two\n"
+        );
+        assert_eq!(
+            fs::read_to_string(backups.join(&result.files[0].backup_reference))
+                .expect("first backup"),
+            "before-one\n"
+        );
+        assert_eq!(
+            fs::read_to_string(backups.join(&result.files[1].backup_reference))
+                .expect("second backup"),
+            "before-two\n"
+        );
+        fs::remove_dir_all(root).expect("source cleanup");
+        fs::remove_dir_all(backups).expect("backup cleanup");
+    }
+
+    #[test]
+    fn missing_file_in_a_multi_file_diff_leaves_every_file_untouched() {
+        let root = temporary_directory();
+        let backups = temporary_directory();
+        let first = root.join("first.txt");
+        fs::write(&first, "before\n").expect("first source");
+        let diff = "diff --git a/first.txt b/first.txt\n--- a/first.txt\n+++ b/first.txt\n@@ -1 +1 @@\n-before\n+after\ndiff --git a/missing.txt b/missing.txt\n--- a/missing.txt\n+++ b/missing.txt\n@@ -1 +1 @@\n-before\n+after\n";
+
+        let error = apply_local_remediation_at(&root, &backups, "remediation-3", diff, |_| true)
+            .expect_err("missing target should reject the whole operation");
+
+        assert!(matches!(error.code, FolderPickerErrorCode::SourceChanged));
+        assert_eq!(
+            fs::read_to_string(&first).expect("first source"),
+            "before\n"
+        );
+        assert!(!backups.join("local-remediation-backups").exists());
+        fs::remove_dir_all(root).expect("source cleanup");
+        fs::remove_dir_all(backups).expect("backup cleanup");
+    }
+
+    #[test]
+    fn rejects_a_target_outside_the_allowed_scope_without_writing() {
+        let root = temporary_directory();
+        let backups = temporary_directory();
+        let source = root.join("source.txt");
+        fs::write(&source, "before\n").expect("source file");
+        let root_for_scope = fs::canonicalize(&root).expect("canonical root");
+        let diff = "diff --git a/source.txt b/source.txt\n--- a/source.txt\n+++ b/source.txt\n@@ -1 +1 @@\n-before\n+after\n";
+
+        let error = apply_local_remediation_at(&root, &backups, "remediation-4", diff, |path| {
+            path == root_for_scope
+        })
+        .expect_err("target outside scope should reject");
+
+        assert!(matches!(
+            error.code,
+            FolderPickerErrorCode::InvalidSelection
+        ));
+        assert_eq!(fs::read_to_string(&source).expect("source"), "before\n");
+        assert!(!backups.join("local-remediation-backups").exists());
+        fs::remove_dir_all(root).expect("source cleanup");
+        fs::remove_dir_all(backups).expect("backup cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_a_symlink_that_escapes_the_selected_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = temporary_directory();
+        let outside = temporary_directory();
+        let backups = temporary_directory();
+        let external = outside.join("external.txt");
+        fs::write(&external, "before\n").expect("external source");
+        symlink(&external, root.join("escape.txt")).expect("symlink");
+        let diff = "diff --git a/escape.txt b/escape.txt\n--- a/escape.txt\n+++ b/escape.txt\n@@ -1 +1 @@\n-before\n+after\n";
+
+        let error = apply_local_remediation_at(&root, &backups, "remediation-5", diff, |_| true)
+            .expect_err("symlink escape should reject");
+
+        assert!(matches!(error.code, FolderPickerErrorCode::InvalidDiff));
+        assert_eq!(
+            fs::read_to_string(&external).expect("external source"),
+            "before\n"
+        );
+        assert!(!backups.join("local-remediation-backups").exists());
+        fs::remove_dir_all(root).expect("root cleanup");
+        fs::remove_dir_all(outside).expect("outside cleanup");
+        fs::remove_dir_all(backups).expect("backup cleanup");
+    }
+
+    #[test]
+    fn restores_already_written_files_when_a_later_write_fails() {
+        let root = temporary_directory();
+        let backups = temporary_directory();
+        let first = root.join("first.txt");
+        let second = root.join("second.txt");
+        fs::write(&first, "before-one\n").expect("first source");
+        fs::write(&second, "before-two\n").expect("second source");
+        let second_for_hook = fs::canonicalize(&second).expect("canonical second source");
+        *write_failure_hook().lock().expect("write hook lock") =
+            Some(Box::new(move |path| path == second_for_hook));
+        let diff = "diff --git a/first.txt b/first.txt\n--- a/first.txt\n+++ b/first.txt\n@@ -1 +1 @@\n-before-one\n+after-one\ndiff --git a/second.txt b/second.txt\n--- a/second.txt\n+++ b/second.txt\n@@ -1 +1 @@\n-before-two\n+after-two\n";
+
+        let error = apply_local_remediation_at(&root, &backups, "remediation-6", diff, |_| true)
+            .expect_err("later write should fail");
+
+        *write_failure_hook().lock().expect("write hook lock") = None;
+        assert!(matches!(error.code, FolderPickerErrorCode::SourceChanged));
+        assert_eq!(
+            fs::read_to_string(&first).expect("first source"),
+            "before-one\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&second).expect("second source"),
+            "before-two\n"
         );
         fs::remove_dir_all(root).expect("source cleanup");
         fs::remove_dir_all(backups).expect("backup cleanup");
@@ -1133,7 +1466,8 @@ mod tests {
 
     #[test]
     fn rejects_malformed_or_multi_file_diffs_before_writing() {
-        let malformed = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n+missing hunk\n";
+        let malformed =
+            "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n+missing hunk\n";
         let multi_file = "diff --git a/first.txt b/first.txt\n--- a/first.txt\n+++ b/first.txt\n@@ -1 +1 @@\n-before\n+after\ndiff --git a/second.txt b/second.txt\n--- a/second.txt\n+++ b/second.txt\n@@ -1 +1 @@\n-before\n+after\n";
 
         assert!(parse_single_file_patch(malformed).is_err());

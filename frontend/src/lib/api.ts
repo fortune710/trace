@@ -5,6 +5,7 @@ import {
   getDesktopCsrfToken,
   setDesktopCsrfToken,
 } from "@/lib/desktop-auth-state"
+import { desktopTelemetry } from "@/lib/desktop-telemetry"
 import { runtimeConfig } from "@/lib/runtime-config"
 
 export type Session = {
@@ -349,6 +350,17 @@ export type Remediation = {
   updated_at: string
 }
 
+export type LocalRemediationApplyFile = {
+  file_path: string
+  backup_reference: string
+  source_hash: string
+  applied_hash: string
+}
+
+export type LocalRemediationApply = {
+  files: LocalRemediationApplyFile[]
+}
+
 export type PullRequestSummary = {
   url: string
   number: number
@@ -357,13 +369,6 @@ export type PullRequestSummary = {
 
 export type RemediationPrompt = {
   prompt_text: string
-}
-
-export type LocalRemediationApply = {
-  file_path: string
-  backup_reference: string
-  source_hash: string
-  applied_hash: string
 }
 
 export type NotificationCategory = "info" | "security" | "warning"
@@ -486,12 +491,18 @@ async function request<T>(
 
   if (!response.ok) {
     const retryAfter = Number(response.headers.get("Retry-After"))
-
-    throw new ApiError(
+    const error = new ApiError(
       response.status,
       payload,
       Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
     )
+    void desktopTelemetry.record({
+      event: "api.request.failed",
+      serverRequestId: error.requestId,
+      errorCode: error.code,
+      httpStatus: error.status,
+    })
+    throw error
   }
 
   return payload as T

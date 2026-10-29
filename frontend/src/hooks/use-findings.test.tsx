@@ -6,9 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   findingsQueryKey,
+  useApplyLocalRemediation,
   useFindingRemediationPrompt,
   useUpdateFindingStatus,
 } from "@/hooks/use-findings"
+import { useRuntimeEnvironment } from "@/hooks/use-runtime-environment"
+import { useSession } from "@/hooks/use-session"
 import {
   findingsApi,
   remediationsApi,
@@ -16,6 +19,34 @@ import {
   type FindingPage,
   type Remediation,
 } from "@/lib/api"
+import {
+  applyLocalRemediation,
+  restoreLocalRemediation,
+} from "@/lib/local-source-snapshot"
+import { getLocalProjectsDatabase } from "@/lib/local-projects-database"
+import { desktopTelemetry } from "@/lib/desktop-telemetry"
+
+vi.mock("@/hooks/use-runtime-environment", () => ({
+  useRuntimeEnvironment: vi.fn(),
+}))
+vi.mock("@/hooks/use-session", () => ({ useSession: vi.fn() }))
+vi.mock("@/lib/local-projects-database", () => ({
+  getLocalProjectsDatabase: vi.fn(),
+}))
+vi.mock("@/lib/local-source-snapshot", () => ({
+  applyLocalRemediation: vi.fn(),
+  restoreLocalRemediation: vi.fn(),
+}))
+vi.mock("@/lib/desktop-telemetry", () => ({
+  desktopTelemetry: { record: vi.fn().mockResolvedValue(undefined) },
+}))
+
+const mockedRuntime = vi.mocked(useRuntimeEnvironment)
+const mockedSession = vi.mocked(useSession)
+const mockedDatabase = vi.mocked(getLocalProjectsDatabase)
+const mockedApply = vi.mocked(applyLocalRemediation)
+const mockedRestore = vi.mocked(restoreLocalRemediation)
+const mockedTelemetry = vi.mocked(desktopTelemetry.record)
 
 function remediation(id: string): Remediation {
   return {
@@ -71,6 +102,7 @@ function findingPage(items: Finding[]): FindingPage {
 describe("useFindingRemediationPrompt", () => {
   afterEach(() => {
     vi.restoreAllMocks()
+    mockedTelemetry.mockClear()
   })
 
   it("loads the finding remediation before loading its prompt", async () => {
@@ -162,5 +194,114 @@ describe("useUpdateFindingStatus", () => {
     expect(
       queryClient.getQueryData<FindingPage>(reviewBAcceptedKey)?.items,
     ).toEqual([reviewBFinding])
+  })
+})
+
+describe("useApplyLocalRemediation", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("applies locally, then records every returned file with the API", async () => {
+    mockedRuntime.mockReturnValue({ kind: "tauri", isTauri: true, isWeb: false })
+    mockedSession.mockReturnValue({
+      data: { user_id: "account-a" },
+    } as ReturnType<typeof useSession>)
+    mockedDatabase.mockResolvedValue({
+      getByApiProjectId: vi.fn().mockResolvedValue({
+        source: {
+          kind: "local",
+          availability: "available",
+          canonicalPath: "/private/project",
+        },
+      }),
+    } as never)
+    const files = [
+      {
+        filePath: "src/example.ts",
+        backupReference: "local-remediation-backups/remediation-a/src/example.ts",
+        sourceHash: "a".repeat(64),
+        appliedHash: "b".repeat(64),
+      },
+    ]
+    mockedApply.mockResolvedValue({ files })
+    const complete = vi
+      .spyOn(remediationsApi, "completeLocalApply")
+      .mockResolvedValue({ ...remediation("remediation-a"), status: "applied" })
+
+    const { result } = renderHook(() => useApplyLocalRemediation("finding-a"), {
+      wrapper,
+    })
+    await result.current.mutateAsync(remediation("remediation-a"))
+
+    expect(mockedApply).toHaveBeenCalledWith(
+      "/private/project",
+      "remediation-a",
+      "diff --git a/file b/file",
+    )
+    expect(complete).toHaveBeenCalledWith("remediation-a", {
+      files: [
+        {
+          file_path: "src/example.ts",
+          backup_reference: "local-remediation-backups/remediation-a/src/example.ts",
+          source_hash: "a".repeat(64),
+          applied_hash: "b".repeat(64),
+        },
+      ],
+    })
+    expect(mockedRestore).not.toHaveBeenCalled()
+    expect(mockedTelemetry).toHaveBeenCalledWith({
+      event: "local_remediation.apply.started",
+      userId: "account-a",
+    })
+    expect(mockedTelemetry).toHaveBeenCalledWith({
+      event: "local_remediation.record.succeeded",
+      userId: "account-a",
+    })
+  })
+
+  it("restores local files when completion cannot be recorded", async () => {
+    mockedRuntime.mockReturnValue({ kind: "tauri", isTauri: true, isWeb: false })
+    mockedSession.mockReturnValue({
+      data: { user_id: "account-a" },
+    } as ReturnType<typeof useSession>)
+    mockedDatabase.mockResolvedValue({
+      getByApiProjectId: vi.fn().mockResolvedValue({
+        source: {
+          kind: "local",
+          availability: "available",
+          canonicalPath: "/private/project",
+        },
+      }),
+    } as never)
+    const files = [
+      {
+        filePath: "src/example.ts",
+        backupReference: "local-remediation-backups/remediation-a/src/example.ts",
+        sourceHash: "a".repeat(64),
+        appliedHash: "b".repeat(64),
+      },
+    ]
+    mockedApply.mockResolvedValue({ files })
+    mockedRestore.mockResolvedValue()
+    vi.spyOn(remediationsApi, "completeLocalApply").mockRejectedValue(
+      new Error("offline"),
+    )
+
+    const { result } = renderHook(() => useApplyLocalRemediation("finding-a"), {
+      wrapper,
+    })
+    await expect(result.current.mutateAsync(remediation("remediation-a"))).rejects.toThrow(
+      "offline",
+    )
+    expect(mockedRestore).toHaveBeenCalledWith(
+      "/private/project",
+      "remediation-a",
+      files,
+    )
+    expect(mockedTelemetry).toHaveBeenCalledWith({
+      event: "local_remediation.restore.succeeded",
+      userId: "account-a",
+    })
   })
 })

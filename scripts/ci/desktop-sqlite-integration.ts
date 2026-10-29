@@ -13,6 +13,8 @@ try {
     "../../frontend/src-tauri/migrations/001_desktop_projects.sql",
     "../../frontend/src-tauri/migrations/002_local_project_uniqueness.sql",
     "../../frontend/src-tauri/migrations/003_local_project_api_identity.sql",
+    "../../frontend/src-tauri/migrations/004_local_review_state.sql",
+    "../../frontend/src-tauri/migrations/005_local_desktop_telemetry.sql",
   ]
 
   for (const migrationFile of migrationFiles) {
@@ -75,6 +77,50 @@ try {
   database.exec("COMMIT")
 
   assert.equal(count("desktop_projects", "account-a"), 2)
+
+  const telemetryColumns = database
+    .query("PRAGMA table_info(desktop_telemetry)")
+    .all() as Array<{ name: string; type: string; pk: number }>
+  assert.deepEqual(
+    telemetryColumns.map((column) => ({
+      name: column.name,
+      type: column.type,
+      pk: column.pk,
+    })),
+    [
+      { name: "id", type: "INTEGER", pk: 1 },
+      { name: "log_data", type: "JSON", pk: 0 },
+    ],
+  )
+  database
+    .query("INSERT INTO desktop_telemetry (log_data) VALUES (?1)")
+    .run('{"v":1,"codec":"gzip+base64","data":"fixture"}')
+  assert.equal(
+    database
+      .query("SELECT json_valid(log_data) AS valid FROM desktop_telemetry")
+      .get()?.valid,
+    1,
+  )
+  assert.throws(
+    () => database.query("INSERT INTO desktop_telemetry (log_data) VALUES (?1)").run("not-json"),
+    /CHECK constraint failed/i,
+  )
+  const telemetryInsert = database.query(
+    "INSERT INTO desktop_telemetry (log_data) VALUES (?1)",
+  )
+  for (let index = 0; index < 10_001; index += 1) {
+    telemetryInsert.run(`{"v":1,"codec":"gzip+base64","data":"fixture-${index}"}`)
+  }
+  database.exec(`
+    DELETE FROM desktop_telemetry
+    WHERE id <= (SELECT MAX(id) - 10000 FROM desktop_telemetry)
+  `)
+  assert.equal(
+    database
+      .query("SELECT COUNT(*) AS count FROM desktop_telemetry")
+      .get()?.count,
+    10_000,
+  )
   assert.equal(
     database
       .query("SELECT COUNT(*) AS count FROM desktop_projects WHERE account_id = 'account-a' AND persistence = 'local'")
