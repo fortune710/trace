@@ -463,6 +463,134 @@ services:
     pids_limit: 128
     stop_grace_period: 30s
 
+  remediation-pull-request-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["./start-remediation-pull-request-worker.sh"]
+    environment:
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD in .env}@postgres:5432/trace
+      AUTH_CREDENTIAL_ENCRYPTION_PROVIDER: ${AUTH_CREDENTIAL_ENCRYPTION_PROVIDER:-vault}
+      AUTH_CREDENTIAL_ENCRYPTION_KEY: ${AUTH_CREDENTIAL_ENCRYPTION_KEY:-}
+      AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION: ${AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION:-local-v1}
+      AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS: ${AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS:-{}}
+      AUTH_VAULT_ADDR: ${AUTH_VAULT_ADDR:-http://vault:8200}
+      AUTH_VAULT_TOKEN_FILE: /run/vault/trace-backend-token
+      AUTH_VAULT_TRANSIT_MOUNT: ${AUTH_VAULT_TRANSIT_MOUNT:-transit}
+      AUTH_VAULT_TRANSIT_KEY: ${AUTH_VAULT_TRANSIT_KEY:-trace-provider-credentials}
+      AUTH_VAULT_REQUEST_TIMEOUT_SECONDS: ${AUTH_VAULT_REQUEST_TIMEOUT_SECONDS:-3}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./backend:/app:ro
+      - vault_runtime:/run/vault:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      vault-bootstrap:
+        condition: service_completed_successfully
+    networks:
+      - edge
+      - data
+      - secrets
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    stop_grace_period: 30s
+
+  remediation-pull-request-outbox-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["./start-remediation-pull-request-outbox-worker.sh"]
+    environment:
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD in .env}@postgres:5432/trace
+      REMEDIATION_PR_RABBITMQ_URL: ${REMEDIATION_PR_RABBITMQ_URL:-${AUTH_RABBITMQ_URL:?Set AUTH_RABBITMQ_URL in .env}}
+      REMEDIATION_PR_MAX_ATTEMPTS: ${REMEDIATION_PR_MAX_ATTEMPTS:-3}
+      REMEDIATION_PR_RETRY_BASE_SECONDS: ${REMEDIATION_PR_RETRY_BASE_SECONDS:-30}
+      REMEDIATION_PR_RETRY_MAX_SECONDS: ${REMEDIATION_PR_RETRY_MAX_SECONDS:-300}
+      REMEDIATION_PR_POLL_SECONDS: ${REMEDIATION_PR_POLL_SECONDS:-1}
+      REMEDIATION_PR_PROCESSING_TIMEOUT_SECONDS: ${REMEDIATION_PR_PROCESSING_TIMEOUT_SECONDS:-300}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./backend:/app:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - data
+      - queue
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    stop_grace_period: 30s
+
+  remediation-pull-request-execution-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["./start-remediation-pull-request-execution-worker.sh"]
+    environment:
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD in .env}@postgres:5432/trace
+      REMEDIATION_PR_RABBITMQ_URL: ${REMEDIATION_PR_RABBITMQ_URL:-${AUTH_RABBITMQ_URL:?Set AUTH_RABBITMQ_URL in .env}}
+      AUTH_CREDENTIAL_ENCRYPTION_PROVIDER: ${AUTH_CREDENTIAL_ENCRYPTION_PROVIDER:-vault}
+      AUTH_CREDENTIAL_ENCRYPTION_KEY: ${AUTH_CREDENTIAL_ENCRYPTION_KEY:-}
+      AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION: ${AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION:-local-v1}
+      AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS: ${AUTH_CREDENTIAL_ENCRYPTION_VERIFICATION_KEYS:-{}}
+      AUTH_VAULT_ADDR: ${AUTH_VAULT_ADDR:-http://vault:8200}
+      AUTH_VAULT_TOKEN_FILE: /run/vault/trace-backend-token
+      AUTH_VAULT_TRANSIT_MOUNT: ${AUTH_VAULT_TRANSIT_MOUNT:-transit}
+      AUTH_VAULT_TRANSIT_KEY: ${AUTH_VAULT_TRANSIT_KEY:-trace-provider-credentials}
+      AUTH_VAULT_REQUEST_TIMEOUT_SECONDS: ${AUTH_VAULT_REQUEST_TIMEOUT_SECONDS:-3}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./backend:/app:ro
+      - vault_runtime:/run/vault:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+      vault-bootstrap:
+        condition: service_completed_successfully
+    networks:
+      - edge
+      - data
+      - queue
+      - secrets
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    stop_grace_period: 30s
+
   postgres:
     image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
     environment:

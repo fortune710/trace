@@ -8,6 +8,7 @@ import sqlalchemy as sa
 
 from auth.errors import ProviderUnavailable
 from db.rls import principal_transaction
+from notifications.models import Notification, NotificationEventType
 from remediations.models import (
     RemediationPullRequestJob,
     RemediationPullRequestJobStatus,
@@ -111,6 +112,21 @@ def test_remediation_pr_worker_uses_exponential_backoff_and_stops_after_three_fa
         else:
             assert row["status"] is RemediationPullRequestJobStatus.DEAD_LETTER
             assert row["next_attempt_at"] is None
+    with principal_transaction(integration_engine, owner.user_id) as connection:
+        notification = (
+            connection.execute(
+                sa.select(Notification.__table__).where(
+                    Notification.owner_id == owner.user_id,
+                    Notification.event_type
+                    == NotificationEventType.PULL_REQUEST_CREATION_FAILED,
+                )
+            )
+            .mappings()
+            .one()
+        )
+    assert notification["dedupe_key"] == (
+        f"remediation:{graph['remediation_id']}:pull-request-failed"
+    )
 
 
 def test_remediation_pr_worker_marks_a_published_retry_succeeded(

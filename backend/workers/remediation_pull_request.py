@@ -20,7 +20,10 @@ def main() -> None:
         engine=engine,
         credential_service=CredentialService(
             engine=engine,
-            cipher=credential_cipher_from_settings(settings),
+            cipher=credential_cipher_from_settings(
+                settings,
+                validate_authentication=False,
+            ),
         ),
         settings=settings,
     )

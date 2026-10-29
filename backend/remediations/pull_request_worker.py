@@ -13,6 +13,8 @@ from sqlalchemy.engine import Engine
 from audit.emit import enqueue_audit
 from audit.outbox import AuditRecorder
 from auth.errors import AuthError, ProviderRateLimited, ProviderUnavailable
+from notifications.models import NotificationEventType
+from notifications.service import create_notification
 from remediations.models import (
     RemediationPullRequestJob,
     RemediationPullRequestJobStatus,
@@ -208,6 +210,16 @@ class RemediationPullRequestWorker:
                     updated_at=now,
                 )
             )
+            if result.rowcount == 1:
+                create_notification(
+                    connection,
+                    owner_id=claim.owner_id,
+                    event_type=NotificationEventType.PULL_REQUEST_CREATION_FAILED,
+                    dedupe_key=(
+                        f"remediation:{claim.remediation_id}:pull-request-failed"
+                    ),
+                    data={"remediation_id": str(claim.remediation_id)},
+                )
         if result.rowcount == 1:
             self._audit(
                 "remediation.pull_request.retry_dead_letter",

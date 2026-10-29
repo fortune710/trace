@@ -24,6 +24,8 @@ from agents.execution.tools import (
     ToolExecutionContext,
     list_paths,
     search_code,
+    validate_diff,
+    validate_diff_for_review,
 )
 from auth.errors import (
     GithubAuthorizationRequired,
@@ -87,6 +89,7 @@ def test_agent_has_repository_tools_by_default() -> None:
         "list_paths",
         "read_file",
         "search_code",
+        "validate_diff",
     ]
 
 
@@ -99,6 +102,7 @@ def test_repository_tools_require_source_without_exposing_runtime_context() -> N
     assert set(schemas["list_paths"]) == {"source", "path_prefix", "max_results"}
     assert set(schemas["read_file"]) == {"source", "path"}
     assert set(schemas["search_code"]) == {"source", "query", "path_prefix"}
+    assert set(schemas["validate_diff"]) == {"source", "diff"}
     assert (
         "must match the target source" in schemas["list_paths"]["source"]["description"]
     )
@@ -112,6 +116,69 @@ def test_repository_tools_require_source_without_exposing_runtime_context() -> N
     )
     assert "returned by list_paths" in schemas["read_file"]["path"]["description"]
     assert "Literal text" in schemas["search_code"]["query"]["description"]
+    assert (
+        "complete Git unified diff" in schemas["validate_diff"]["diff"]["description"]
+    )
+
+
+def test_validate_diff_rejects_structurally_malformed_hunks_before_git() -> None:
+    result = validate_diff_for_review(
+        source="github",
+        diff=(
+            "diff --git a/app.py b/app.py\n"
+            "--- a/app.py\n"
+            "+++ b/app.py\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+            "+unexpected\n"
+        ),
+        context=_tool_context(),
+    )
+
+    assert result == {
+        "valid": False,
+        "level": "structure",
+        "reason": "hunk_line_count_mismatch",
+    }
+
+
+def test_validate_diff_runs_exact_revision_check_without_logging_source(caplog) -> None:
+    class RepositoryAccess:
+        def validate_diff(self, **kwargs):
+            assert kwargs["diff"].startswith("diff --git")
+            assert kwargs["log_context"].review_id
+            return True
+
+    runtime = SimpleNamespace(
+        context=ToolExecutionContext(
+            owner_id=uuid4(),
+            source_kind="github",
+            source_identifier="123",
+            source_revision="a" * 40,
+            repository_access=RepositoryAccess(),  # type: ignore[arg-type]
+            review_id=uuid4(),
+        )
+    )
+    diff = (
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n"
+    )
+
+    with caplog.at_level("INFO", logger="trace.agent_execution.tools"):
+        result = validate_diff.func(  # type: ignore[union-attr]
+            source="github",
+            diff=diff,
+            runtime=runtime,
+        )
+
+    assert result == {"valid": True, "levels": ["structure", "safety", "apply"]}
+    assert '"diff_bytes"' in caplog.text
+    assert diff not in caplog.text
 
 
 def test_list_paths_logs_arguments_and_a_result_summary(caplog) -> None:
@@ -245,6 +312,47 @@ def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -
         f"- immutable revision: {'b' * 40}\n\n"
         "Inspect this target with your repository tools before returning findings."
     )
+
+
+def test_agent_revalidates_every_final_diff_before_returning_it(monkeypatch) -> None:
+    class RepositoryAccess:
+        def validate_diff(self, **kwargs):
+            assert kwargs["diff"].startswith("diff --git")
+            return True
+
+    context = ToolExecutionContext(
+        owner_id=uuid4(),
+        source_kind="github",
+        source_identifier="123",
+        source_revision="a" * 40,
+        repository_access=RepositoryAccess(),  # type: ignore[arg-type]
+        review_id=uuid4(),
+    )
+
+    class LangChainAgent:
+        def invoke(self, _inputs, *, context: ToolExecutionContext):
+            assert context is not None
+            return {
+                "structured_response": FindingBatch(findings=[_remediation_finding()])
+            }
+
+    monkeypatch.setattr(Agent, "_model", lambda _agent: object())
+    monkeypatch.setattr(
+        execution_agent_module,
+        "create_agent",
+        lambda **_kwargs: LangChainAgent(),
+    )
+
+    result = Agent(provider="openai", model="test-model").run(
+        review_target=ReviewTarget(
+            source_kind="github",
+            source_identifier="123",
+            source_revision="a" * 40,
+        ),
+        tool_context=context,
+    )
+
+    assert len(result.findings) == 1
 
 
 def test_orchestrator_runs_only_supplied_agents(monkeypatch) -> None:

@@ -864,6 +864,80 @@ class ReviewGitHubSourceAccess:
             _log_provider_call("read_file", error.kind, error=error)
             raise _provider_error(error, operation="review_source") from error
 
+    def validate_diff(
+        self,
+        *,
+        diff: str,
+        log_context: GitHubRequestLogContext,
+    ) -> bool:
+        """Check that a diff applies cleanly to this reader's immutable revision."""
+
+        try:
+            repository = self._repository_metadata(log_context=log_context)
+            if not _GITHUB_SHA.fullmatch(self._revision):
+                raise RepositoryProviderError(kind="malformed_response")
+            token = self._token()
+            git_authorization = base64.b64encode(
+                f"x-access-token:{token}".encode()
+            ).decode("ascii")
+            environment = {
+                **os.environ,
+                "GIT_TERMINAL_PROMPT": "0",
+                "GIT_CONFIG_COUNT": "2",
+                "GIT_CONFIG_KEY_0": "http.extraHeader",
+                "GIT_CONFIG_VALUE_0": f"Authorization: Basic {git_authorization}",
+                "GIT_CONFIG_KEY_1": "core.hooksPath",
+                "GIT_CONFIG_VALUE_1": "/dev/null",
+            }
+            with tempfile.TemporaryDirectory(
+                prefix="trace-diff-validation-"
+            ) as directory:
+                patch_path = f"{directory}/change.patch"
+                with open(
+                    patch_path, "w", encoding="utf-8", newline="\n"
+                ) as patch_file:
+                    patch_file.write(diff)
+                for arguments in (
+                    ("git", "init", "-q"),
+                    ("git", "remote", "add", "origin", f"{repository.web_url}.git"),
+                    ("git", "fetch", "--depth=1", "origin", self._revision),
+                    ("git", "checkout", "-q", "--detach", "FETCH_HEAD"),
+                ):
+                    try:
+                        subprocess.run(
+                            arguments,
+                            cwd=directory,
+                            env=environment,
+                            check=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=60,
+                        )
+                    except (OSError, subprocess.CalledProcessError) as error:
+                        raise RepositoryProviderError(kind="unavailable") from error
+                result = subprocess.run(
+                    (
+                        "git",
+                        "apply",
+                        "--check",
+                        "--whitespace=error",
+                        patch_path,
+                    ),
+                    cwd=directory,
+                    env=environment,
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=60,
+                )
+                return result.returncode == 0
+        except RepositoryProviderError as error:
+            _log_provider_call("validate_diff", error.kind, error=error)
+            raise _provider_error(error, operation="review_source") from error
+        except OSError as error:
+            _log_provider_call("validate_diff", "unavailable", error=error)
+            raise ProviderUnavailable() from error
+
     def _repository_metadata(
         self, *, log_context: GitHubRequestLogContext
     ) -> RepositoryRecord:
@@ -1459,12 +1533,15 @@ class RepositoryService:
             with open(patch_path, "w", encoding="utf-8", newline="\n") as patch_file:
                 patch_file.write(diff)
             remote = f"{repository.web_url}.git"
+            git_authorization = base64.b64encode(
+                f"x-access-token:{token}".encode()
+            ).decode("ascii")
             environment = {
                 **os.environ,
                 "GIT_TERMINAL_PROMPT": "0",
                 "GIT_CONFIG_COUNT": "2",
                 "GIT_CONFIG_KEY_0": "http.extraHeader",
-                "GIT_CONFIG_VALUE_0": f"Authorization: Bearer {token}",
+                "GIT_CONFIG_VALUE_0": f"Authorization: Basic {git_authorization}",
                 "GIT_CONFIG_KEY_1": "core.hooksPath",
                 "GIT_CONFIG_VALUE_1": "/dev/null",
             }
