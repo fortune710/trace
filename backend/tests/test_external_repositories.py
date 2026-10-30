@@ -41,6 +41,7 @@ from external_repositories.service import (
     RepositoryService,
     ReviewGitHubSourceAccess,
     ReviewSourceFileError,
+    _is_excluded_review_path,
     _is_safe_patch,
     invalidate_repository_catalog,
 )
@@ -145,16 +146,98 @@ def test_review_source_access_caches_repository_metadata_and_reuses_client() -> 
     assert access.list_paths(path_prefix=".", max_results=50, log_context=context) == (
         paths,
         False,
+        0,
     )
     assert access.list_paths(path_prefix="./", max_results=50, log_context=context) == (
         paths,
         False,
+        0,
     )
     assert access.read_file(path=paths[0], log_context=context) == "contents"
     assert access.read_file(path=paths[1], log_context=context) == "contents"
 
     assert requested_paths.count("/repositories/12345") == 1
     assert len(requested_paths) == 5
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".agents/skills/review/SKILL.md",
+        ".claude/skills/animation-vocabulary",
+        ".github/copilot-instructions.md",
+        "node_modules/library/index.js",
+        ".venv/lib/python3.13/site-packages/example.py",
+        "vendor/example/module.go",
+        "target/classes/App.class",
+        "bin/Release/net9.0/App.dll",
+        "dist/app.min.js",
+        "coverage/lcov.info",
+        "logs/application.log",
+        ".env.production",
+        "infrastructure/terraform.tfstate",
+        "assets/logo.png",
+        "package-lock.json",
+        "Cargo.lock",
+        "AGENTS.md",
+    ],
+)
+def test_review_source_excludes_non_reviewable_repository_paths(path: str) -> None:
+    assert _is_excluded_review_path(path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "README.md",
+        "docs/architecture.md",
+        "SECURITY.md",
+        ".github/workflows/check.yml",
+        "Dockerfile",
+        ".env.example",
+        "package.json",
+        "backend/main.py",
+        "tests/test_security.py",
+        "migrations/20261029_add_table.sql",
+    ],
+)
+def test_review_source_keeps_human_authored_and_runtime_paths(path: str) -> None:
+    assert not _is_excluded_review_path(path)
+
+
+def test_review_source_lists_only_reviewable_paths_and_counts_exclusions() -> None:
+    paths = [
+        "README.md",
+        "src/main.py",
+        ".agents/skills/review/SKILL.md",
+        ".claude/skills/animation-vocabulary",
+        "node_modules/library/index.js",
+        "assets/logo.png",
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repositories/12345":
+            return httpx.Response(200, json=_repository_payload())
+        return httpx.Response(200, json=_tree_payload(*paths))
+
+    access = _review_access(handler)
+    assert access.list_paths(
+        path_prefix=None,
+        max_results=50,
+        log_context=_review_log_context(),
+    ) == (["README.md", "src/main.py"], False, 4)
+
+
+def test_review_source_rejects_direct_reads_of_excluded_paths() -> None:
+    access = _review_access(lambda _request: pytest.fail("request must not be made"))
+
+    with pytest.raises(ReviewSourceFileError) as raised:
+        access.read_file(
+            path=".agents/skills/review/SKILL.md",
+            log_context=_review_log_context(),
+        )
+
+    assert raised.value.code == "path_excluded"
 
 
 def test_review_source_access_validates_a_diff_against_the_pinned_revision(
@@ -314,6 +397,21 @@ def test_review_source_access_reports_unsearchable_files_without_provider_failur
         access.read_file(path="src/file", log_context=_review_log_context())
 
     assert raised.value.code == expected_code
+
+
+@pytest.mark.parametrize("payload", [{"type": "symlink"}, []])
+def test_review_source_access_skips_non_file_github_content_responses(payload) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repositories/12345":
+            return httpx.Response(200, json=_repository_payload())
+        return httpx.Response(200, json=payload)
+
+    access = _review_access(handler)
+
+    with pytest.raises(ReviewSourceFileError) as raised:
+        access.read_file(path=".claude-link", log_context=_review_log_context())
+
+    assert raised.value.code == "not_a_file"
 
 
 def test_review_source_access_reports_missing_file_as_tool_level_error() -> None:

@@ -53,6 +53,9 @@ class AgentExecutionSettings(BaseSettings):
     xai_api_key: SecretStr | None = Field(
         default=None, validation_alias="AGENT_XAI_API_KEY"
     )
+    tavily_api_key: SecretStr | None = Field(
+        default=None, validation_alias="TAVILY_API_KEY"
+    )
     github_max_concurrent_requests: int = Field(
         default=2, validation_alias="REVIEW_GITHUB_MAX_CONCURRENT_REQUESTS", ge=1, le=20
     )

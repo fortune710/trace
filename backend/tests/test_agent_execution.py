@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from langchain_core.tools import ToolException
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 import agents.execution.agent as execution_agent_module
 import agents.execution.executor as execution_executor_module
@@ -26,6 +26,7 @@ from agents.execution.tools import (
     search_code,
     validate_diff,
     validate_diff_for_review,
+    web_search,
 )
 from auth.errors import (
     GithubAuthorizationRequired,
@@ -46,7 +47,7 @@ from reviews.config import AgentExecutionSettings
 from reviews.dispatch import _open_connection
 
 
-def _tool_context() -> ToolExecutionContext:
+def _tool_context(tavily_api_key: SecretStr | None = None) -> ToolExecutionContext:
     return ToolExecutionContext(
         owner_id=None,  # type: ignore[arg-type]
         source_kind="github",
@@ -54,6 +55,7 @@ def _tool_context() -> ToolExecutionContext:
         source_revision="a" * 40,
         repository_access=None,  # type: ignore[arg-type]
         review_id=UUID("00000000-0000-0000-0000-000000000001"),
+        tavily_api_key=tavily_api_key,
     )
 
 
@@ -76,7 +78,7 @@ def _remediation_finding(**overrides: str) -> RemediationFindingOutput:
     return RemediationFindingOutput.model_validate(values)
 
 
-def test_agent_has_repository_tools_by_default() -> None:
+def test_agent_has_repository_and_web_tools_by_default() -> None:
     agent = Agent(
         provider="openai",
         model="gpt-6.1-sol",
@@ -90,6 +92,7 @@ def test_agent_has_repository_tools_by_default() -> None:
         "read_file",
         "search_code",
         "validate_diff",
+        "web_search",
     ]
 
 
@@ -103,6 +106,7 @@ def test_repository_tools_require_source_without_exposing_runtime_context() -> N
     assert set(schemas["read_file"]) == {"source", "path"}
     assert set(schemas["search_code"]) == {"source", "query", "path_prefix"}
     assert set(schemas["validate_diff"]) == {"source", "diff"}
+    assert set(schemas["web_search"]) == {"query"}
     assert (
         "must match the target source" in schemas["list_paths"]["source"]["description"]
     )
@@ -119,6 +123,125 @@ def test_repository_tools_require_source_without_exposing_runtime_context() -> N
     assert (
         "complete Git unified diff" in schemas["validate_diff"]["diff"]["description"]
     )
+    assert "public research query" in schemas["web_search"]["query"]["description"]
+
+
+def test_web_search_returns_bounded_cited_results_without_logging_query_or_key(
+    monkeypatch, caplog
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeTavilyClient:
+        def __init__(self, *, api_key: str) -> None:
+            calls.append({"api_key": api_key})
+
+        def search(self, query: str, **kwargs: object) -> dict[str, object]:
+            calls.append({"query": query, **kwargs})
+            return {
+                "answer": "This must not be returned.",
+                "results": [
+                    {
+                        "title": f"Result {index}",
+                        "url": f"https://example.test/{index}",
+                        "content": f"Snippet {index}",
+                    }
+                    for index in range(6)
+                ],
+            }
+
+    monkeypatch.setattr("agents.execution.tools.TavilyClient", FakeTavilyClient)
+    query = "Python dependency vulnerability guidance"
+    key = "tvly-test-secret"
+
+    with caplog.at_level("INFO", logger="trace.agent_execution.tools"):
+        result = web_search.func(  # type: ignore[union-attr]
+            query=query,
+            runtime=SimpleNamespace(context=_tool_context(SecretStr(key))),
+        )
+
+    assert calls == [
+        {"api_key": key},
+        {
+            "query": query,
+            "search_depth": "basic",
+            "topic": "general",
+            "max_results": 5,
+            "include_answer": False,
+            "include_raw_content": False,
+            "include_images": False,
+            "include_favicon": False,
+        },
+    ]
+    assert result == {
+        "results": [
+            {
+                "title": f"Result {index}",
+                "url": f"https://example.test/{index}",
+                "snippet": f"Snippet {index}",
+            }
+            for index in range(5)
+        ]
+    }
+    assert query not in caplog.text
+    assert key not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "```python" + "\n" + "print('private source')" + "\n" + "```",
+        "def private_function(): return secret",
+        "line one" + "\n" + "line two",
+    ],
+)
+def test_web_search_rejects_source_shaped_queries(query: str) -> None:
+    with pytest.raises(ToolException, match="web_search_query_rejected"):
+        web_search.func(  # type: ignore[union-attr]
+            query=query,
+            runtime=SimpleNamespace(
+                context=_tool_context(SecretStr("tvly-test-secret"))
+            ),
+        )
+
+
+def test_web_search_returns_safe_unavailable_errors(monkeypatch) -> None:
+    runtime = SimpleNamespace(context=_tool_context())
+    with pytest.raises(ToolException, match="web_search_unavailable"):
+        web_search.func(query="public package release notes", runtime=runtime)  # type: ignore[union-attr]
+
+    class FailingTavilyClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def search(self, *_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("provider response includes a secret")
+
+    monkeypatch.setattr("agents.execution.tools.TavilyClient", FailingTavilyClient)
+    with pytest.raises(ToolException, match="web_search_unavailable"):
+        web_search.func(  # type: ignore[union-attr]
+            query="public package release notes",
+            runtime=SimpleNamespace(
+                context=_tool_context(SecretStr("tvly-test-secret"))
+            ),
+        )
+
+    class InvalidResponseTavilyClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def search(self, *_args: object, **_kwargs: object) -> object:
+            return {"results": "not-a-list"}
+
+    monkeypatch.setattr(
+        "agents.execution.tools.TavilyClient", InvalidResponseTavilyClient
+    )
+    with pytest.raises(ToolException, match="web_search_unavailable"):
+        web_search.func(  # type: ignore[union-attr]
+            query="public package release notes",
+            runtime=SimpleNamespace(
+                context=_tool_context(SecretStr("tvly-test-secret"))
+            ),
+        )
 
 
 def test_validate_diff_rejects_structurally_malformed_hunks_before_git() -> None:
@@ -186,7 +309,7 @@ def test_list_paths_logs_arguments_and_a_result_summary(caplog) -> None:
         def list_paths(self, **kwargs):
             assert kwargs["path_prefix"] == "backend"
             assert kwargs["log_context"].review_id
-            return ["backend/main.py", "backend/worker.py"], False
+            return ["backend/main.py", "backend/worker.py"], False, 3
 
     runtime = SimpleNamespace(
         context=ToolExecutionContext(
@@ -210,20 +333,24 @@ def test_list_paths_logs_arguments_and_a_result_summary(caplog) -> None:
     assert result == {
         "paths": ["backend/main.py", "backend/worker.py"],
         "truncated": False,
+        "skipped_paths": 3,
     }
     assert '"event": "repository_tool_started"' in caplog.text
     assert '"path_prefix": "backend"' in caplog.text
     assert '"path_count": 2' in caplog.text
+    assert '"skipped_paths": 3' in caplog.text
 
 
 def test_search_code_skips_unsearchable_files() -> None:
     class RepositoryAccess:
         def list_paths(self, **_kwargs):
-            return ["assets/logo.png", "src/app.py"], False
+            return ["assets/logo.png", ".claude-link", "src/app.py"], False, 7
 
         def read_file(self, *, path, **_kwargs):
             if path == "assets/logo.png":
                 raise ReviewSourceFileError("file_not_utf8")
+            if path == ".claude-link":
+                raise ReviewSourceFileError("not_a_file")
             return "launch_enabled = true\n"
 
     runtime = SimpleNamespace(
@@ -253,7 +380,8 @@ def test_search_code_skips_unsearchable_files() -> None:
         ],
         "truncated": False,
         "files_truncated": False,
-        "skipped_files": 1,
+        "skipped_paths": 7,
+        "skipped_files": 2,
     }
 
 
@@ -300,7 +428,26 @@ def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -
     assert create_agent_arguments["model"] is model
     assert create_agent_arguments["tools"] == list(REPOSITORY_REVIEW_TOOLS)
     assert create_agent_arguments["response_format"] is FindingBatch
-    assert "repository tools" in create_agent_arguments["system_prompt"]
+    assert "approved tools" in create_agent_arguments["system_prompt"]
+    assert (
+        "Never include repository source text"
+        in create_agent_arguments["system_prompt"]
+    )
+    assert (
+        "research its plausible public impact"
+        in create_agent_arguments["system_prompt"]
+    )
+    assert (
+        "relevant CVEs, vendor advisories, regulatory fines"
+        in create_agent_arguments["system_prompt"]
+    )
+    assert (
+        "Do not invent or overstate impact" in create_agent_arguments["system_prompt"]
+    )
+    assert (
+        "Format evidence as concise GitHub-Flavored Markdown"
+        in create_agent_arguments["system_prompt"]
+    )
     assert "prompt_text" in create_agent_arguments["system_prompt"]
     assert "diff --git" in create_agent_arguments["system_prompt"]
     assert "files you inspected" in create_agent_arguments["system_prompt"]

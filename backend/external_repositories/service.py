@@ -70,6 +70,145 @@ _GITHUB_API_VERSION = "2022-11-28"
 _CATALOG_CACHE_LIMIT = 100
 _CATALOG_CACHE_TTL_SECONDS = 300
 _CATALOG_VERSION_TTL_SECONDS = 600
+_REVIEW_EXCLUDED_ROOT_DIRECTORIES = frozenset(
+    {
+        ".agents",
+        ".aider",
+        ".cache",
+        ".claude",
+        ".continue",
+        ".cursor",
+        ".git",
+        ".gradle",
+        ".hg",
+        ".idea",
+        ".local",
+        ".mypy_cache",
+        ".next",
+        ".nox",
+        ".npm",
+        ".nuxt",
+        ".pnpm-store",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".svelte-kit",
+        ".svn",
+        ".tox",
+        ".turbo",
+        ".venv",
+        ".vite",
+        ".vs",
+        ".vscode",
+        ".windsurf",
+        ".yarn",
+        "Carthage",
+        "DerivedData",
+        "Pods",
+        "bin",
+        "build",
+        "coverage",
+        "data",
+        "dist",
+        "env",
+        "gen",
+        "generated",
+        "htmlcov",
+        "logs",
+        "node_modules",
+        "obj",
+        "out",
+        "target",
+        "temp",
+        "tmp",
+        "vendor",
+        "venv",
+    }
+)
+_REVIEW_EXCLUDED_FILENAMES = frozenset(
+    {
+        ".DS_Store",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "COPILOT.md",
+        "GEMINI.md",
+        "Thumbs.db",
+        "credentials.json",
+        "package-lock.json",
+        "service-account.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "bun.lock",
+        "bun.lockb",
+        "composer.lock",
+        "Gemfile.lock",
+    }
+)
+_REVIEW_ENVIRONMENT_TEMPLATES = frozenset(
+    {".env.example", ".env.sample", ".env.template"}
+)
+_REVIEW_EXCLUDED_SUFFIXES = frozenset(
+    {
+        ".7z",
+        ".a",
+        ".avi",
+        ".bmp",
+        ".bz2",
+        ".class",
+        ".db",
+        ".db3",
+        ".dll",
+        ".dmg",
+        ".dump",
+        ".eot",
+        ".exe",
+        ".flac",
+        ".flv",
+        ".gif",
+        ".gz",
+        ".ico",
+        ".jar",
+        ".jpeg",
+        ".jpg",
+        ".jks",
+        ".key",
+        ".keystore",
+        ".lock",
+        ".log",
+        ".map",
+        ".mov",
+        ".mp3",
+        ".mp4",
+        ".o",
+        ".ogg",
+        ".otf",
+        ".p12",
+        ".pem",
+        ".pfx",
+        ".pdf",
+        ".png",
+        ".ppt",
+        ".pptx",
+        ".rar",
+        ".so",
+        ".sqlite",
+        ".sqlite3",
+        ".tar",
+        ".tfstate",
+        ".tif",
+        ".tiff",
+        ".ttf",
+        ".wav",
+        ".webm",
+        ".webp",
+        ".woff",
+        ".woff2",
+        ".xls",
+        ".xlsx",
+        ".xz",
+        ".zip",
+    }
+)
+_REVIEW_EXCLUDED_COMPOUND_SUFFIXES = (".min.css", ".min.js", ".min.mjs")
 logger = logging.getLogger("trace.repositories")
 
 
@@ -775,7 +914,7 @@ class ReviewGitHubSourceAccess:
         path_prefix: str | None,
         max_results: int,
         log_context: GitHubRequestLogContext,
-    ) -> tuple[list[str], bool]:
+    ) -> tuple[list[str], bool, int]:
         try:
             repository = self._repository_metadata(log_context=log_context)
             if not _GITHUB_SHA.fullmatch(self._revision) or not 1 <= max_results <= 500:
@@ -797,6 +936,7 @@ class ReviewGitHubSourceAccess:
             normalized_prefix = _review_path_prefix(path_prefix)
             paths: list[str] = []
             has_more = False
+            skipped_paths = 0
             for entry in entries:
                 if not isinstance(entry, dict) or entry.get("type") != "blob":
                     continue
@@ -805,11 +945,14 @@ class ReviewGitHubSourceAccess:
                     raise RepositoryProviderError(kind="malformed_response")
                 if normalized_prefix and not path.startswith(normalized_prefix):
                     continue
+                if _is_excluded_review_path(path):
+                    skipped_paths += 1
+                    continue
                 if len(paths) == max_results:
                     has_more = True
                     break
                 paths.append(path)
-            return paths, has_more
+            return paths, has_more, skipped_paths
         except RepositoryProviderError as error:
             _log_provider_call("list_paths", error.kind, error=error)
             raise _provider_error(error, operation="review_source") from error
@@ -821,11 +964,13 @@ class ReviewGitHubSourceAccess:
         log_context: GitHubRequestLogContext,
     ) -> str:
         try:
-            repository = self._repository_metadata(log_context=log_context)
             if not _GITHUB_SHA.fullmatch(self._revision) or not _is_safe_review_path(
                 path
             ):
                 raise RepositoryProviderError(kind="malformed_response")
+            if _is_excluded_review_path(path):
+                raise ReviewSourceFileError("path_excluded")
+            repository = self._repository_metadata(log_context=log_context)
             try:
                 payload, _headers = self._request_json(
                     method="GET",
@@ -840,7 +985,13 @@ class ReviewGitHubSourceAccess:
                 if error.kind == "not_found":
                     raise ReviewSourceFileError("path_not_found") from error
                 raise
-            if not isinstance(payload, dict) or payload.get("type") != "file":
+            if isinstance(payload, list):
+                raise ReviewSourceFileError("not_a_file")
+            if not isinstance(payload, dict):
+                raise RepositoryProviderError(kind="malformed_response")
+            if payload.get("type") != "file":
+                if isinstance(payload.get("type"), str):
+                    raise ReviewSourceFileError("not_a_file")
                 raise RepositoryProviderError(kind="malformed_response")
             encoded_content = payload.get("content")
             encoding = payload.get("encoding")
@@ -1848,6 +1999,27 @@ def _is_safe_review_path(path: str) -> bool:
         and not path.startswith("/")
         and "\x00" not in path
         and all(part not in {"", ".", ".."} for part in path.split("/"))
+    )
+
+
+def _is_excluded_review_path(path: str) -> bool:
+    """Return whether a safe repository path is outside the review surface."""
+
+    parts = path.split("/")
+    name = parts[-1]
+    if parts[0] in _REVIEW_EXCLUDED_ROOT_DIRECTORIES:
+        return True
+    if name in _REVIEW_EXCLUDED_FILENAMES:
+        return True
+    if path == ".github/copilot-instructions.md":
+        return True
+    if name in _REVIEW_ENVIRONMENT_TEMPLATES:
+        return False
+    if name == ".env" or name.startswith(".env."):
+        return True
+    lowercase_name = name.casefold()
+    return lowercase_name.endswith(
+        tuple(_REVIEW_EXCLUDED_SUFFIXES | set(_REVIEW_EXCLUDED_COMPOUND_SUFFIXES))
     )
 
 
