@@ -19,3 +19,7 @@
 
 - Before committing, run the GitHub Actions merge checks locally with `act` when the required runner support is available. If `act` cannot faithfully run a job (for example, a macOS or Windows job), run that workflow job's equivalent commands locally instead.
 - Do not commit until the applicable merge-check commands pass, or explicitly report the environment-specific blocker and its impact to the user.
+
+## End-to-end regression verification
+
+- When a UI layout, navigation, or interaction flow is significantly redesigned, update and run the affected Playwright end-to-end tests before committing.
