@@ -41,9 +41,7 @@ function notificationQuery(overrides = {}) {
   return {
     notifications: [notification],
     unreadCount: 1,
-    hasNextPage: true,
     isError: false,
-    isFetching: false,
     isLoading: false,
     refetch: vi.fn(),
     ...overrides,
@@ -76,7 +74,7 @@ describe("NotificationsPage", () => {
     } as unknown as ReturnType<typeof useMarkAllNotificationsRead>)
   })
 
-  it("renders unread category, accessible time, action, and body as text", () => {
+  it("renders unread category, accessible time, action, body as text, and a date heading", () => {
     renderPage()
 
     expect(
@@ -85,6 +83,9 @@ describe("NotificationsPage", () => {
       }),
     ).toBeTruthy()
     expect(screen.getByText("Security")).toBeTruthy()
+    expect(
+      screen.getByRole("heading", { level: 2, name: "October 26, 2026" }),
+    ).toBeTruthy()
     expect(screen.getByText(notification.body)).toBeTruthy()
     expect(screen.queryByRole("strong")).toBeNull()
     expect(document.querySelector("time")?.getAttribute("dateTime")).toBe(
@@ -137,7 +138,7 @@ describe("NotificationsPage", () => {
     expect(screen.getByText("No notifications yet.")).toBeTruthy()
   })
 
-  it("marks one notification read, marks all read, and advances pagination", () => {
+  it("marks one notification read and marks all notifications read", () => {
     const markRead = vi.fn()
     const markAllRead = vi.fn()
     mockedMarkRead.mockReturnValue({
@@ -152,11 +153,38 @@ describe("NotificationsPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Mark read" }))
     fireEvent.click(screen.getByRole("button", { name: "Mark all read" }))
-    fireEvent.click(screen.getByRole("button", { name: "Next" }))
 
     expect(markRead).toHaveBeenCalledWith(notification.id)
     expect(markAllRead).toHaveBeenCalledOnce()
-    expect(mockedUseNotifications).toHaveBeenLastCalledWith(2)
+    expect(mockedUseNotifications).toHaveBeenLastCalledWith()
+    expect(
+      screen.queryByRole("navigation", { name: "Notification pagination" }),
+    ).toBeNull()
+  })
+
+  it("groups notifications from different dates under their own headings", () => {
+    mockedUseNotifications.mockReturnValue(
+      notificationQuery({
+        notifications: [
+          notification,
+          {
+            ...notification,
+            id: "notification-2",
+            title: "Review completed",
+            created_at: "2026-10-25T12:00:00.000Z",
+          },
+        ],
+      }),
+    )
+
+    renderPage()
+
+    expect(
+      screen.getByRole("heading", { level: 2, name: "October 26, 2026" }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("heading", { level: 2, name: "October 25, 2026" }),
+    ).toBeTruthy()
   })
 
   it("does not render an unsafe action path", () => {
