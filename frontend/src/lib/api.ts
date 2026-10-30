@@ -197,7 +197,7 @@ export type CredentialPage = {
 export type CredentialCreate = {
   provider: ModelProvider
   kind: "api_key"
-  name: string
+  name?: string | null
   payload: {
     api_key: string
   }
@@ -804,6 +804,11 @@ export const credentialsApi = {
     ),
   create: (credential: CredentialCreate) =>
     post<Credential>("/api/v1/credentials", credential),
+  rotate: (credentialId: string, credential: CredentialCreate) =>
+    post<Credential>(
+      `/api/v1/credentials/${encodeURIComponent(credentialId)}/rotate`,
+      credential,
+    ),
   revoke: (credentialId: string) =>
     remove(`/api/v1/credentials/${encodeURIComponent(credentialId)}`),
 }
