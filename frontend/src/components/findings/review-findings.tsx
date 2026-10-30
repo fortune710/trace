@@ -1,41 +1,42 @@
-import { useState } from "react"
-import { Link, useSearchParams } from "react-router-dom"
+import { useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 
 import {
   findingFilterParameterNames,
   findingPageParameterName,
-} from "@/components/findings/finding-search-params"
-import { ReviewFindingsSkeleton } from "@/components/findings/review-findings-skeleton"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+} from "@/components/findings/finding-search-params";
+import { ReviewFindingsSkeleton } from "@/components/findings/review-findings-skeleton";
+import { sourceFiles } from "@/components/findings/source-files";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyTitle,
-} from "@/components/ui/empty"
-import { Label } from "@/components/ui/label"
-import { Skeleton } from "@/components/ui/skeleton"
+} from "@/components/ui/empty";
+import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"
+} from "@/components/ui/select";
 import {
   useReviewFindings,
   useUpdateFindingStatus,
   type FindingFilters,
-} from "@/hooks/use-findings"
-import { ApiError } from "@/lib/api"
+} from "@/hooks/use-findings";
+import { ApiError } from "@/lib/api";
 import type {
   Finding,
   FindingSeverity,
   FindingStatus,
   Review,
   ReviewCategory,
-} from "@/lib/api"
+} from "@/lib/api";
 
 const categories: ReviewCategory[] = [
   "security",
@@ -44,7 +45,7 @@ const categories: ReviewCategory[] = [
   "legal",
   "accessibility",
   "marketing",
-]
+];
 
 const severities: FindingSeverity[] = [
   "info",
@@ -52,29 +53,29 @@ const severities: FindingSeverity[] = [
   "medium",
   "high",
   "critical",
-]
+];
 
-const filterableStatuses: FindingStatus[] = ["open", "accepted", "resolved"]
+const filterableStatuses: FindingStatus[] = ["open", "accepted", "resolved"];
 
-const allFilterValue = "all"
-const visibleSourceLocationLimit = 3
+const allFilterValue = "all";
+const visibleSourceLocationLimit = 3;
 
 function label(value: string) {
-  return value.replaceAll("_", " ")
+  return value.replaceAll("_", " ");
 }
 
 function validFilterValue<T extends string>(
   value: string | null,
   allowedValues: readonly T[],
 ): T | undefined {
-  return allowedValues.find((allowedValue) => allowedValue === value)
+  return allowedValues.find((allowedValue) => allowedValue === value);
 }
 
 function findingFiltersFromSearchParams(
   searchParams: URLSearchParams,
   review: Review,
 ): FindingFilters {
-  const agentId = searchParams.get(findingFilterParameterNames.agentId)
+  const agentId = searchParams.get(findingFilterParameterNames.agentId);
 
   return {
     category: validFilterValue(
@@ -92,34 +93,16 @@ function findingFiltersFromSearchParams(
     agentId: review.agents.some((agent) => agent.agent_id === agentId)
       ? (agentId ?? undefined)
       : undefined,
-  }
+  };
 }
 
 function pageFromSearchParams(searchParams: URLSearchParams) {
   const requestedPage = Number(
     searchParams.get(findingPageParameterName) ?? "1",
-  )
+  );
   return Number.isInteger(requestedPage) && requestedPage > 0
     ? requestedPage
-    : 1
-}
-
-function sourceFiles(value: string) {
-  const normalized = value.trim().replace(/^\[|\]$/g, "")
-
-  return [
-    ...new Set(
-      normalized
-        .split(/[\n,;|]+/)
-        .map((file) =>
-          file
-            .trim()
-            .replace(/^[-*•]\s+/, "")
-            .replace(/^["']|["']$/g, ""),
-        )
-        .filter(Boolean),
-    ),
-  ]
+    : 1;
 }
 
 function findingActions(status: FindingStatus) {
@@ -128,13 +111,13 @@ function findingActions(status: FindingStatus) {
       return [
         { label: "Accept", status: "accepted" as const },
         { label: "Dismiss", status: "dismissed" as const },
-      ]
+      ];
     case "accepted":
-      return [{ label: "Resolve", status: "resolved" as const }]
+      return [{ label: "Resolve", status: "resolved" as const }];
     case "dismissed":
-      return [{ label: "Reopen", status: "open" as const }]
+      return [{ label: "Reopen", status: "open" as const }];
     case "resolved":
-      return [{ label: "Unresolve", status: "accepted" as const }]
+      return [{ label: "Unresolve", status: "accepted" as const }];
   }
 }
 
@@ -144,20 +127,20 @@ function FindingCard({
   pending,
   error,
 }: {
-  finding: Finding
-  onStatusChange: (status: FindingStatus) => void
-  pending: boolean
-  error: string | null
+  finding: Finding;
+  onStatusChange: (status: FindingStatus) => void;
+  pending: boolean;
+  error: string | null;
 }) {
   const sourceFilesForFinding = finding.source_location
     ? sourceFiles(finding.source_location)
-    : []
+    : [];
   const visibleSourceFiles = sourceFilesForFinding.slice(
     0,
     visibleSourceLocationLimit,
-  )
+  );
   const hiddenSourceFileCount =
-    sourceFilesForFinding.length - visibleSourceFiles.length
+    sourceFilesForFinding.length - visibleSourceFiles.length;
 
   return (
     <article className="rounded-lg border border-border bg-card p-4">
@@ -234,67 +217,67 @@ function FindingCard({
         </p>
       ) : null}
     </article>
-  )
+  );
 }
 
 export function ReviewFindings({ review }: { review: Review }) {
-  const [searchParams, setSearchParams] = useSearchParams()
-  const [dismissedOpen, setDismissedOpen] = useState(false)
-  const [dismissedPage, setDismissedPage] = useState(1)
-  const filters = findingFiltersFromSearchParams(searchParams, review)
-  const page = pageFromSearchParams(searchParams)
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [dismissedOpen, setDismissedOpen] = useState(false);
+  const [dismissedPage, setDismissedPage] = useState(1);
+  const filters = findingFiltersFromSearchParams(searchParams, review);
+  const page = pageFromSearchParams(searchParams);
   const primaryFilters = filters.status
     ? filters
-    : { ...filters, excludeStatus: "dismissed" as const }
-  const findings = useReviewFindings(review.id, page, primaryFilters)
+    : { ...filters, excludeStatus: "dismissed" as const };
+  const findings = useReviewFindings(review.id, page, primaryFilters);
   const dismissedFindings = useReviewFindings(
     review.id,
     dismissedPage,
     { status: "dismissed" },
     dismissedOpen,
-  )
-  const updateStatus = useUpdateFindingStatus()
-  const hasFilters = Object.values(filters).some(Boolean)
-  const hasNextPage = findings.data?.next_offset != null
+  );
+  const updateStatus = useUpdateFindingStatus();
+  const hasFilters = Object.values(filters).some(Boolean);
+  const hasNextPage = findings.data?.next_offset != null;
   const isEmpty =
     !findings.isLoading &&
     !findings.isError &&
-    findings.data?.items.length === 0
+    findings.data?.items.length === 0;
 
   function updateFilters(nextFilters: FindingFilters) {
     setSearchParams((currentSearchParams) => {
-      const nextSearchParams = new URLSearchParams(currentSearchParams)
-      nextSearchParams.delete(findingPageParameterName)
+      const nextSearchParams = new URLSearchParams(currentSearchParams);
+      nextSearchParams.delete(findingPageParameterName);
 
       for (const [filterName, parameterName] of Object.entries(
         findingFilterParameterNames,
       ) as Array<[keyof FindingFilters, string]>) {
-        const value = nextFilters[filterName]
+        const value = nextFilters[filterName];
         if (value) {
-          nextSearchParams.set(parameterName, value)
+          nextSearchParams.set(parameterName, value);
         } else {
-          nextSearchParams.delete(parameterName)
+          nextSearchParams.delete(parameterName);
         }
       }
 
-      return nextSearchParams
-    })
+      return nextSearchParams;
+    });
   }
 
   function updatePage(nextPage: number) {
     setSearchParams((currentSearchParams) => {
-      const nextSearchParams = new URLSearchParams(currentSearchParams)
+      const nextSearchParams = new URLSearchParams(currentSearchParams);
       if (nextPage === 1) {
-        nextSearchParams.delete(findingPageParameterName)
+        nextSearchParams.delete(findingPageParameterName);
       } else {
-        nextSearchParams.set(findingPageParameterName, String(nextPage))
+        nextSearchParams.set(findingPageParameterName, String(nextPage));
       }
-      return nextSearchParams
-    })
+      return nextSearchParams;
+    });
   }
 
   function changeStatus(findingId: string, status: FindingStatus) {
-    updateStatus.mutate({ findingId, status })
+    updateStatus.mutate({ findingId, status });
   }
 
   function findingError(findingId: string) {
@@ -302,21 +285,21 @@ export function ReviewFindings({ review }: { review: Review }) {
       updateStatus.variables?.findingId !== findingId ||
       !updateStatus.isError
     ) {
-      return null
+      return null;
     }
     if (
       updateStatus.error instanceof ApiError &&
       updateStatus.error.status === 409
     ) {
-      return "This finding changed elsewhere. The latest status has been reloaded."
+      return "This finding changed elsewhere. The latest status has been reloaded.";
     }
-    return "We could not save this change. Try again."
+    return "We could not save this change. Try again.";
   }
 
   function isFindingPending(findingId: string) {
     return (
       updateStatus.isPending && updateStatus.variables?.findingId === findingId
-    )
+    );
   }
 
   return (
@@ -530,8 +513,8 @@ export function ReviewFindings({ review }: { review: Review }) {
           size="sm"
           aria-expanded={dismissedOpen}
           onClick={() => {
-            setDismissedOpen((open) => !open)
-            setDismissedPage(1)
+            setDismissedOpen((open) => !open);
+            setDismissedPage(1);
           }}
         >
           {dismissedOpen
@@ -614,5 +597,5 @@ export function ReviewFindings({ review }: { review: Review }) {
         ) : null}
       </section>
     </section>
-  )
+  );
 }

@@ -1,13 +1,14 @@
-import { Link, useParams } from "react-router-dom"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
+import { Link, useParams } from "react-router-dom";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-import { FindingDetailsPageSkeleton } from "@/components/findings/finding-details-page-skeleton"
-import { CodingAgentPrompt } from "@/components/findings/coding-agent-prompt"
-import { FindingIssueActions } from "@/components/findings/finding-issue-actions"
-import { FindingIssueLinks } from "@/components/findings/finding-issue-links"
-import { ProposedDiff } from "@/components/findings/proposed-diff"
-import { AppShell } from "@/components/layout/app-shell"
+import { FindingDetailsPageSkeleton } from "@/components/findings/finding-details-page-skeleton";
+import { CodingAgentPrompt } from "@/components/findings/coding-agent-prompt";
+import { FindingIssueActions } from "@/components/findings/finding-issue-actions";
+import { FindingIssueLinks } from "@/components/findings/finding-issue-links";
+import { ProposedDiff } from "@/components/findings/proposed-diff";
+import { sourceFiles } from "@/components/findings/source-files";
+import { AppShell } from "@/components/layout/app-shell";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -15,48 +16,51 @@ import {
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { useFinding } from "@/hooks/use-findings"
-import { useProject } from "@/hooks/use-projects"
-import { useReview } from "@/hooks/use-reviews"
-import type { FindingSeverity } from "@/lib/api"
+} from "@/components/ui/breadcrumb";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { useFinding } from "@/hooks/use-findings";
+import { useProject } from "@/hooks/use-projects";
+import { useReview } from "@/hooks/use-reviews";
+import type { FindingSeverity } from "@/lib/api";
 
 function truncateBreadcrumbTitle(title: string) {
-  const maximumLength = 50
+  const maximumLength = 50;
 
   return title.length > maximumLength
     ? `${title.slice(0, maximumLength - 1)}…`
-    : title
+    : title;
 }
 
 function severityBadgeClassName(severity: FindingSeverity) {
   switch (severity) {
     case "low":
-      return "bg-green-500/15 text-green-700 dark:text-green-300"
+      return "bg-green-500/15 text-green-700 dark:text-green-300";
     case "medium":
-      return "bg-yellow-500/15 text-yellow-800 dark:text-yellow-300"
+      return "bg-yellow-500/15 text-yellow-800 dark:text-yellow-300";
     case "high":
     case "critical":
-      return "bg-red-500/15 text-red-700 dark:text-red-300"
+      return "bg-red-500/15 text-red-700 dark:text-red-300";
     case "info":
-      return "bg-blue-500/15 text-blue-700 dark:text-blue-300"
+      return "bg-blue-500/15 text-blue-700 dark:text-blue-300";
   }
 }
 
 export function FindingDetailsPage() {
-  const { reviewId, findingId } = useParams()
-  const finding = useFinding(findingId)
-  const review = useReview(reviewId)
-  const project = useProject(review.data?.project_id)
-  const reviewPath = `/reviews/${encodeURIComponent(reviewId ?? "")}?tab=findings`
+  const { reviewId, findingId } = useParams();
+  const finding = useFinding(findingId);
+  const review = useReview(reviewId);
+  const project = useProject(review.data?.project_id);
+  const reviewPath = `/reviews/${encodeURIComponent(reviewId ?? "")}?tab=findings`;
   const reviewLabel = review.data
     ? `Review ${review.data.id.slice(0, 8)}`
-    : "Review"
+    : "Review";
   const projectPath = review.data
     ? `/projects/${encodeURIComponent(review.data.project_id)}`
-    : null
+    : null;
+  const sourceFilesForFinding = finding.data?.source_location
+    ? sourceFiles(finding.data.source_location)
+    : [];
 
   return (
     <AppShell>
@@ -160,11 +164,20 @@ export function FindingDetailsPage() {
                   </dd>
                 </div>
               ) : null}
-              {finding.data.source_location ? (
+              {sourceFilesForFinding.length > 0 ? (
                 <div>
                   <dt className="text-muted-foreground">Source location</dt>
-                  <dd className="mt-1 break-all font-mono text-xs">
-                    {finding.data.source_location}
+                  <dd className="mt-1 flex flex-wrap gap-1">
+                    {sourceFilesForFinding.map((file) => (
+                      <Badge
+                        key={file}
+                        variant="outline"
+                        className="max-w-full shrink-0 truncate font-mono text-xs"
+                        title={file}
+                      >
+                        {file}
+                      </Badge>
+                    ))}
                   </dd>
                 </div>
               ) : null}
@@ -184,5 +197,5 @@ export function FindingDetailsPage() {
         ) : null}
       </section>
     </AppShell>
-  )
+  );
 }
