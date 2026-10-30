@@ -1,11 +1,6 @@
-import githubLogo from "@/assets/github-invertocat-white.svg"
-import linearLogo from "@/assets/linear-logo.svg"
+import { Github } from "@/components/logos/github"
+import { Linear } from "@/components/logos/linear"
 import type { IssueProviderName } from "@/lib/api"
-
-const providerLogos = {
-  github: githubLogo,
-  linear: linearLogo,
-} satisfies Record<IssueProviderName, string>
 
 export function IssueProviderLogo({
   provider,
@@ -21,11 +16,11 @@ export function IssueProviderLogo({
         provider === "github" ? "bg-foreground" : "bg-white"
       } ${className}`}
     >
-      <img
-        alt=""
-        className="size-3/5 object-contain"
-        src={providerLogos[provider]}
-      />
+      {provider === "github" ? (
+        <Github className="size-3/5 text-background" />
+      ) : (
+        <Linear className="size-3/5" />
+      )}
     </span>
   )
 }
