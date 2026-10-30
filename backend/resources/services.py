@@ -29,8 +29,6 @@ from db.rls import principal_transaction
 from db.types import RepositorySource
 from external_repositories.models import ExternalRepository
 from findings.models import Finding, FindingStatus
-from notifications.models import NotificationEventType
-from notifications.service import create_notification
 from projects.models import Project, ProjectCategory
 from remediations.models import Remediation, RemediationStatus
 from remediations.prompt_template import render_remediation_prompt
@@ -951,13 +949,6 @@ class ReviewService:
                         }
                         for assignment in assignments
                     ],
-                )
-                create_notification(
-                    connection,
-                    owner_id=owner_id,
-                    event_type=NotificationEventType.REVIEW_QUEUED,
-                    dedupe_key=f"review:{review_id}:queued",
-                    review_id=review_id,
                 )
         except sa.exc.IntegrityError as error:
             # A concurrent identical request can win the unique idempotency

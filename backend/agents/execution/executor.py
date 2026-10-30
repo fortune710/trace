@@ -171,6 +171,7 @@ class ReviewExecutionService:
                         source_revision=review.source_revision,
                         repository_access=repository_access,
                         review_id=review_id,
+                        tavily_api_key=self._settings.tavily_api_key,
                     )
                     for selected_agent in selected_agent_executions:
                         self._execute_selected_agent(
@@ -245,7 +246,16 @@ class ReviewExecutionService:
                 )
                 .values(status=ReviewStatus.RUNNING, started_at=sa.func.now())
             )
-            return result.rowcount == 1
+            if result.rowcount != 1:
+                return False
+            create_notification(
+                connection,
+                owner_id=owner_id,
+                event_type=NotificationEventType.REVIEW_STARTED,
+                dedupe_key=f"review:{review_id}:started",
+                review_id=review_id,
+            )
+            return True
 
     def _load_review_and_selected_agents(
         self, *, owner_id: UUID, review_id: UUID

@@ -45,6 +45,7 @@ from remediations.models import (
 )
 from reviews.config import AgentExecutionSettings
 from reviews.dispatch import _open_connection
+from reviews.models import ReviewStatus
 
 
 def _tool_context(tavily_api_key: SecretStr | None = None) -> ToolExecutionContext:
@@ -457,7 +458,7 @@ def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -
         "- source kind: gitlab\n"
         "- source identifier: group/project\n"
         f"- immutable revision: {'b' * 40}\n\n"
-        "Inspect this target with your repository tools before returning findings."
+        "Inspect this target with your approved tools before returning findings."
     )
 
 
@@ -782,6 +783,83 @@ def test_local_review_does_not_open_github_source_access() -> None:
         review=review,
     ) as repository_access:
         assert repository_access is None
+
+
+def test_claiming_a_queued_review_creates_a_started_notification(monkeypatch) -> None:
+    service = object.__new__(ReviewExecutionService)
+    service._engine = object()
+    owner_id = uuid4()
+    review_id = uuid4()
+    notifications: list[dict[str, object]] = []
+
+    class StatusResult:
+        def scalar_one_or_none(self):
+            return ReviewStatus.QUEUED
+
+    class UpdateResult:
+        rowcount = 1
+
+    class Connection:
+        calls = 0
+
+        def execute(self, _statement):
+            self.calls += 1
+            return StatusResult() if self.calls == 1 else UpdateResult()
+
+    @contextmanager
+    def fake_principal_transaction(_engine, _owner_id):
+        yield Connection()
+
+    monkeypatch.setattr(
+        execution_executor_module,
+        "principal_transaction",
+        fake_principal_transaction,
+    )
+    monkeypatch.setattr(
+        execution_executor_module,
+        "create_notification",
+        lambda _connection, **kwargs: notifications.append(kwargs),
+    )
+
+    assert service._claim_queued_review(owner_id=owner_id, review_id=review_id)
+    assert notifications == [
+        {
+            "owner_id": owner_id,
+            "event_type": NotificationEventType.REVIEW_STARTED,
+            "dedupe_key": f"review:{review_id}:started",
+            "review_id": review_id,
+        }
+    ]
+
+
+def test_claiming_a_nonqueued_review_does_not_create_a_notification(
+    monkeypatch,
+) -> None:
+    service = object.__new__(ReviewExecutionService)
+    service._engine = object()
+    notifications: list[dict[str, object]] = []
+
+    class Connection:
+        def execute(self, _statement):
+            return SimpleNamespace(scalar_one_or_none=lambda: ReviewStatus.RUNNING)
+
+    @contextmanager
+    def fake_principal_transaction(_engine, _owner_id):
+        yield Connection()
+
+    monkeypatch.setattr(
+        execution_executor_module,
+        "principal_transaction",
+        fake_principal_transaction,
+    )
+    monkeypatch.setattr(
+        execution_executor_module,
+        "create_notification",
+        lambda _connection, **kwargs: notifications.append(kwargs),
+    )
+
+    assert not service._claim_queued_review(owner_id=uuid4(), review_id=uuid4())
+    assert notifications == []
 
 
 def test_github_tool_requires_github_source_access() -> None:

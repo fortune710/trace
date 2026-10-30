@@ -23,6 +23,10 @@ def test_review_notifications_use_expected_presentation() -> None:
         is NotificationCategory.INFO
     )
     assert (
+        _TEMPLATES[NotificationEventType.REVIEW_STARTED].category
+        is NotificationCategory.INFO
+    )
+    assert (
         _TEMPLATES[NotificationEventType.FINDINGS_AVAILABLE].category
         is NotificationCategory.INFO
     )
@@ -49,6 +53,9 @@ def test_review_notifications_use_expected_presentation() -> None:
     assert (
         _TEMPLATES[NotificationEventType.PULL_REQUEST_CREATION_FAILED].category
         is NotificationCategory.WARNING
+    )
+    assert _TEMPLATES[NotificationEventType.REVIEW_STARTED].body == (
+        "Your review is underway. We'll let you know when it is ready."
     )
 
 
