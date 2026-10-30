@@ -1,6 +1,4 @@
-import { useState } from "react"
-import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons"
-import { HugeiconsIcon } from "@hugeicons/react"
+import { useEffect, useRef } from "react"
 import { Link } from "react-router-dom"
 
 import { AppShell } from "@/components/layout/app-shell"
@@ -11,6 +9,7 @@ import {
   useMarkNotificationRead,
   useNotifications,
 } from "@/hooks/use-notifications"
+import type { Notification } from "@/lib/api"
 
 function isSafeActionPath(actionPath: string | null): actionPath is string {
   return Boolean(actionPath && /^\/[^/]/.test(actionPath))
@@ -48,15 +47,88 @@ function formatTimestamp(createdAt: string) {
   }).format(new Date(createdAt))
 }
 
+type NotificationDateGroup = {
+  date: string
+  key: string
+  notifications: Notification[]
+}
+
+function groupNotificationsByDate(
+  notifications: Notification[],
+): NotificationDateGroup[] {
+  const groups = new Map<string, NotificationDateGroup>()
+  const dateFormatter = new Intl.DateTimeFormat(undefined, {
+    dateStyle: "long",
+  })
+
+  for (const notification of notifications) {
+    const date = new Date(notification.created_at)
+    const key = [
+      date.getFullYear(),
+      String(date.getMonth() + 1).padStart(2, "0"),
+      String(date.getDate()).padStart(2, "0"),
+    ].join("-")
+    const group = groups.get(key)
+
+    if (group) {
+      group.notifications.push(notification)
+      continue
+    }
+
+    groups.set(key, {
+      date: dateFormatter.format(date),
+      key,
+      notifications: [notification],
+    })
+  }
+
+  return [...groups.values()]
+}
+
 export function NotificationsPage() {
-  const [page, setPage] = useState(1)
-  const notifications = useNotifications(page)
+  const notifications = useNotifications()
   const markRead = useMarkNotificationRead()
   const markAllRead = useMarkAllNotificationsRead()
+  const dateGroups = groupNotificationsByDate(notifications.notifications)
+  const loadMoreRef = useRef<HTMLDivElement>(null)
+  const {
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = notifications
+
+  useEffect(() => {
+    const loadMoreElement = loadMoreRef.current
+
+    if (
+      !loadMoreElement ||
+      !hasNextPage ||
+      isFetchingNextPage ||
+      typeof IntersectionObserver === "undefined"
+    ) {
+      return
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          void fetchNextPage()
+        }
+      },
+      { rootMargin: "240px" },
+    )
+    observer.observe(loadMoreElement)
+
+    return () => observer.disconnect()
+  }, [
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  ])
 
   return (
     <AppShell>
-      <section className="mx-auto w-full max-w-6xl px-6 pt-8 pb-28 md:px-10 md:pt-10">
+      <section className="mx-auto w-full max-w-6xl px-6 py-8 md:px-10 md:py-10">
         <div className="flex items-center justify-between gap-4">
           <div>
             <h1 className="text-xl font-medium tracking-tight">
@@ -77,7 +149,7 @@ export function NotificationsPage() {
             Mark all read
           </Button>
         </div>
-        <div className="mt-8 space-y-3">
+        <div className="mt-8 space-y-6">
           {notifications.isLoading ? <NotificationsPageSkeleton /> : null}
           {notifications.isError ? (
             <Button
@@ -95,95 +167,93 @@ export function NotificationsPage() {
               No notifications yet.
             </p>
           ) : null}
-          {notifications.notifications.map((notification) => (
-            <article
-              key={notification.id}
-              aria-label={`${notification.read_at ? "Read" : "Unread"} ${formatCategory(notification.category)} notification: ${notification.title}`}
-              className={`rounded-lg border p-4 ${
-                notification.read_at
-                  ? "bg-card"
-                  : "border-primary/30 bg-primary/5"
-              }`}
+          {dateGroups.map((group) => (
+            <section
+              key={group.key}
+              aria-labelledby={`notifications-${group.key}`}
             >
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    {formatCategory(notification.category)}
-                  </p>
-                  <p className="text-sm font-medium">{notification.title}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {notification.body}
-                  </p>
-                  <time
-                    className="mt-2 block text-xs text-muted-foreground"
-                    dateTime={notification.created_at}
+              <h2
+                id={`notifications-${group.key}`}
+                className="mb-3 text-sm font-medium text-muted-foreground"
+              >
+                {group.date}
+              </h2>
+              <div className="space-y-3">
+                {group.notifications.map((notification) => (
+                  <article
+                    key={notification.id}
+                    aria-label={`${notification.read_at ? "Read" : "Unread"} ${formatCategory(notification.category)} notification: ${notification.title}`}
+                    className={`rounded-lg border p-4 ${
+                      notification.read_at
+                        ? "bg-card"
+                        : "border-primary/30 bg-primary/5"
+                    }`}
                   >
-                    {formatTimestamp(notification.created_at)}
-                  </time>
-                </div>
-                {!notification.read_at ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={markRead.isPending}
-                    onClick={() => markRead.mutate(notification.id)}
-                  >
-                    Mark read
-                  </Button>
-                ) : null}
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                          {formatCategory(notification.category)}
+                        </p>
+                        <p className="text-sm font-medium">
+                          {notification.title}
+                        </p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          {notification.body}
+                        </p>
+                        <time
+                          className="mt-2 block text-xs text-muted-foreground"
+                          dateTime={notification.created_at}
+                        >
+                          {formatTimestamp(notification.created_at)}
+                        </time>
+                      </div>
+                      {!notification.read_at ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={markRead.isPending}
+                          onClick={() => markRead.mutate(notification.id)}
+                        >
+                          Mark read
+                        </Button>
+                      ) : null}
+                    </div>
+                    {isSafeActionPath(notification.action_path) ? (
+                      <Link
+                        to={notification.action_path}
+                        className="mt-3 inline-block text-sm text-primary hover:underline"
+                      >
+                        View
+                      </Link>
+                    ) : isSafePullRequestUrl(notification) ? (
+                      <a
+                        href={notification.action_path}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-3 inline-block text-sm text-primary hover:underline"
+                      >
+                        View
+                      </a>
+                    ) : null}
+                  </article>
+                ))}
               </div>
-              {isSafeActionPath(notification.action_path) ? (
-                <Link
-                  to={notification.action_path}
-                  className="mt-3 inline-block text-sm text-primary hover:underline"
-                >
-                  View
-                </Link>
-              ) : isSafePullRequestUrl(notification) ? (
-                <a
-                  href={notification.action_path}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-3 inline-block text-sm text-primary hover:underline"
-                >
-                  View
-                </a>
-              ) : null}
-            </article>
+            </section>
           ))}
+          {hasNextPage ? (
+            <div
+              ref={loadMoreRef}
+              role="status"
+              aria-live="polite"
+              className="py-3 text-center text-sm text-muted-foreground"
+            >
+              {isFetchingNextPage
+                ? "Loading more notifications…"
+                : "Scroll to load more notifications."}
+            </div>
+          ) : null}
         </div>
-        <nav
-          className="fixed right-6 bottom-6 z-20 flex items-center gap-2 md:right-10"
-          aria-label="Notification pagination"
-        >
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={page === 1 || notifications.isFetching}
-            onClick={() => setPage((value) => value - 1)}
-          >
-            <HugeiconsIcon icon={ArrowLeft01Icon} size={15} strokeWidth={2} />
-            Previous
-          </Button>
-          <span
-            className="min-w-16 text-center text-xs text-muted-foreground"
-            aria-live="polite"
-          >
-            Page {page}
-          </span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={!notifications.hasNextPage || notifications.isFetching}
-            onClick={() => setPage((value) => value + 1)}
-          >
-            Next
-            <HugeiconsIcon icon={ArrowRight01Icon} size={15} strokeWidth={2} />
-          </Button>
-        </nav>
       </section>
     </AppShell>
   )

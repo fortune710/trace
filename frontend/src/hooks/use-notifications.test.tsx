@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import {
+  type InfiniteData,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query"
 import {
   act,
   cleanup,
@@ -63,6 +67,11 @@ const page: NotificationPage = {
   unread_count: 1,
 }
 
+const notificationPages: InfiniteData<NotificationPage> = {
+  pages: [page],
+  pageParams: [1],
+}
+
 function createQueryClient() {
   return new QueryClient({
     defaultOptions: {
@@ -115,7 +124,7 @@ describe("notification hooks", () => {
 
   it("optimistically marks one notification read and restores it after failure", async () => {
     const queryClient = createQueryClient()
-    queryClient.setQueryData([...notificationsQueryKey, 1, 25], page)
+    queryClient.setQueryData([...notificationsQueryKey, 20], notificationPages)
     let rejectMutation: (error: Error) => void = () => undefined
     apiMocks.markRead.mockReturnValueOnce(
       new Promise((_, reject) => {
@@ -130,45 +139,59 @@ describe("notification hooks", () => {
     act(() => result.current.mutate("notification-1"))
     await waitFor(() => {
       expect(
-        queryClient.getQueryData<NotificationPage>([
+        queryClient.getQueryData<InfiniteData<NotificationPage>>([
           ...notificationsQueryKey,
-          1,
-          25,
-        ])?.unread_count,
+          20,
+        ])?.pages[0]?.unread_count,
       ).toBe(0)
     })
     act(() => rejectMutation(new Error("network unavailable")))
     await waitFor(() => expect(result.current.isError).toBe(true))
 
     expect(
-      queryClient.getQueryData<NotificationPage>([
+      queryClient.getQueryData<InfiniteData<NotificationPage>>([
         ...notificationsQueryKey,
-        1,
-        25,
+        20,
       ]),
-    ).toEqual(page)
+    ).toEqual(notificationPages)
   })
 
-  it("does not expose a next page while notification data is unavailable", async () => {
+  it("fetches another notification page on demand", async () => {
     const queryClient = createQueryClient()
-    apiMocks.list.mockRejectedValueOnce(new Error("network unavailable"))
+    apiMocks.list
+      .mockResolvedValueOnce({
+        ...page,
+        next_offset: 20,
+      })
+      .mockResolvedValueOnce({
+        ...page,
+        items: [{ ...page.items[0], id: "notification-2" }],
+      })
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     )
-    const { result } = renderHook(() => useNotifications(1), { wrapper })
+    const { result } = renderHook(() => useNotifications(), { wrapper })
 
-    await waitFor(() => expect(result.current.isError).toBe(true))
+    await waitFor(() => expect(result.current.notifications).toHaveLength(1))
+    await act(async () => {
+      await result.current.fetchNextPage()
+    })
 
-    expect(result.current.hasNextPage).toBe(false)
+    await waitFor(() => expect(result.current.notifications).toHaveLength(2))
+
+    expect(apiMocks.list).toHaveBeenNthCalledWith(1, {
+      page: 1,
+      pageSize: 20,
+    })
+    expect(apiMocks.list).toHaveBeenNthCalledWith(2, {
+      page: 2,
+      pageSize: 20,
+    })
   })
 
-  it("optimistically marks all cached pages read and restores them after failure", async () => {
+  it("optimistically marks all notifications read and restores them after failure", async () => {
     const queryClient = createQueryClient()
-    queryClient.setQueryData([...notificationsQueryKey, 1, 25], page)
-    queryClient.setQueryData([...notificationsQueryKey, 2, 25], {
-      ...page,
-      items: [{ ...page.items[0], id: "notification-2" }],
-    })
+    queryClient.setQueryData([...notificationsQueryKey, 20], notificationPages)
     let rejectMutation: (error: Error) => void = () => undefined
     apiMocks.markAllRead.mockReturnValueOnce(
       new Promise((_, reject) => {
@@ -185,23 +208,21 @@ describe("notification hooks", () => {
     act(() => result.current.mutate())
     await waitFor(() => {
       expect(
-        queryClient.getQueryData<NotificationPage>([
+        queryClient.getQueryData<InfiniteData<NotificationPage>>([
           ...notificationsQueryKey,
-          2,
-          25,
-        ])?.unread_count,
+          20,
+        ])?.pages[0]?.unread_count,
       ).toBe(0)
     })
     act(() => rejectMutation(new Error("network unavailable")))
     await waitFor(() => expect(result.current.isError).toBe(true))
 
     expect(
-      queryClient.getQueryData<NotificationPage>([
+      queryClient.getQueryData<InfiniteData<NotificationPage>>([
         ...notificationsQueryKey,
-        1,
-        25,
+        20,
       ]),
-    ).toEqual(page)
+    ).toEqual(notificationPages)
   })
 
   it("creates one leader stream, refreshes on reconnect, deduplicates events, and cleans up", async () => {

@@ -27,20 +27,29 @@ class NotificationTemplate:
 
 _TEMPLATES: dict[NotificationEventType, NotificationTemplate] = {
     NotificationEventType.REVIEW_QUEUED: NotificationTemplate(
-        NotificationCategory.INFO, "Review queued", "Your review has been queued."
+        NotificationCategory.INFO,
+        "Review queued",
+        "Your review is waiting its turn to begin.",
+    ),
+    NotificationEventType.REVIEW_STARTED: NotificationTemplate(
+        NotificationCategory.INFO,
+        "Review started",
+        "Your review is underway. We'll let you know when it is ready.",
     ),
     NotificationEventType.FINDINGS_AVAILABLE: NotificationTemplate(
         NotificationCategory.INFO,
         "Findings available",
-        "Your review has started producing findings.",
+        "Your review found something worth a look.",
     ),
     NotificationEventType.REVIEW_COMPLETED: NotificationTemplate(
-        NotificationCategory.INFO, "Review completed", "Your review is ready to view."
+        NotificationCategory.INFO,
+        "Review complete",
+        "Your review is ready to look through.",
     ),
     NotificationEventType.REVIEW_FAILED: NotificationTemplate(
         NotificationCategory.WARNING,
         "Review needs attention",
-        "Your review could not be completed. Open it to try again.",
+        "We could not finish your review. Open it to see what happened.",
     ),
     NotificationEventType.ACCOUNT_REGISTERED: NotificationTemplate(
         NotificationCategory.SECURITY,

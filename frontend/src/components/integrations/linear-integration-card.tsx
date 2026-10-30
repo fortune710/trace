@@ -1,30 +1,31 @@
-import { useMutation } from "@tanstack/react-query"
+import { useMutation } from "@tanstack/react-query";
 
-import { Button } from "@/components/ui/button"
-import { toast } from "@/components/ui/toast"
-import { ApiError, authApi } from "@/lib/api"
+import { Linear } from "@/components/logos/linear";
+import { Button } from "@/components/ui/button";
+import { toast } from "@/components/ui/toast";
+import { ApiError, authApi } from "@/lib/api";
 
 function errorMessage(error: unknown) {
   return error instanceof ApiError
     ? error.message
-    : "Unable to start the Linear connection. Please try again."
+    : "Unable to start the Linear connection. Please try again.";
 }
 
 export function LinearIntegrationCard() {
   const connect = useMutation({
     mutationFn: authApi.beginLinearConnection,
     onSuccess: ({ authorization_url }) => {
-      window.location.assign(authorization_url)
+      window.location.assign(authorization_url);
     },
     onError: (error) => {
       toast.add({
         type: "error",
         title: "Linear connection could not start",
         description: errorMessage(error),
-      })
+      });
     },
-  })
-  const isConnectionStarting = connect.isPending || connect.isSuccess
+  });
+  const isConnectionStarting = connect.isPending || connect.isSuccess;
 
   return (
     <article className="rounded-lg border border-border bg-card p-5">
@@ -32,9 +33,9 @@ export function LinearIntegrationCard() {
         <div className="flex items-center gap-3">
           <span
             aria-hidden="true"
-            className="flex size-10 items-center justify-center rounded-md bg-foreground text-sm font-semibold text-background"
+            className="flex size-10 items-center justify-center rounded-md bg-foreground text-background"
           >
-            L
+            <Linear className="size-5" />
           </span>
           <div>
             <h2 className="text-sm font-medium">Linear</h2>
@@ -59,5 +60,5 @@ export function LinearIntegrationCard() {
         </Button>
       </div>
     </article>
-  )
+  );
 }

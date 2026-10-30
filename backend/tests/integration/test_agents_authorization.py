@@ -19,7 +19,10 @@ def test_agent_model_catalog_is_authenticated_and_enforced(
         "id": "openai",
         "label": "OpenAI",
         "models": [
+            {"id": "gpt-6-astra", "label": "GPT-6 Astra"},
             {"id": "gpt-6.1-sol", "label": "GPT-6.1 Sol"},
+            {"id": "gpt-6.1-terra", "label": "GPT-6.1 Terra"},
+            {"id": "gpt-6-luna", "label": "GPT-6 Luna"},
             {"id": "gpt-5.1", "label": "GPT-5.1"},
         ],
     }

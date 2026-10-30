@@ -69,7 +69,7 @@ async function mockNotificationsApi(page: Page) {
               },
             ]
           : [secondNotification],
-        next_offset: firstPage ? 1 : null,
+        next_offset: firstPage ? 20 : null,
         unread_count: firstPage && !firstNotificationRead ? 1 : 0,
       })
       return
@@ -98,7 +98,7 @@ async function mockNotificationsApi(page: Page) {
   })
 }
 
-test("shows durable notifications, marks an item read, and moves through pages", async ({
+test("shows durable notifications, marks an item read, and loads more on scroll", async ({
   page,
 }) => {
   await mockNotificationsApi(page)
@@ -109,7 +109,13 @@ test("shows durable notifications, marks an item read, and moves through pages",
       name: "Unread Security notification: Signed in",
     }),
   ).toBeVisible()
-  await expect(page.getByRole("link", { name: "View" })).toHaveAttribute(
+  await expect(
+    page
+      .getByRole("article", {
+        name: "Unread Security notification: Signed in",
+      })
+      .getByRole("link", { name: "View" }),
+  ).toHaveAttribute(
     "href",
     "/reviews/review-1",
   )
@@ -117,7 +123,7 @@ test("shows durable notifications, marks an item read, and moves through pages",
   await page.getByRole("button", { name: "Mark read" }).click()
   await expect(page.getByText("You are all caught up.")).toBeVisible()
 
-  await page.getByRole("button", { name: "Next" }).click()
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
   await expect(
     page.getByRole("article", {
       name: "Read Info notification: Review completed",

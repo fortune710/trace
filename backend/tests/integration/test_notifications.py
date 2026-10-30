@@ -190,7 +190,7 @@ def test_notification_factory_is_deduplicated_and_uses_the_review_action_path(
     assert [item["id"] for item in response.json()["items"]] == [first["id"]]
 
 
-def test_review_submission_creates_a_durable_queued_notification(
+def test_review_submission_does_not_create_a_notification_before_execution_starts(
     account_pair,
     agent_factory,
     local_project_factory,
@@ -200,16 +200,11 @@ def test_review_submission_creates_a_durable_queued_notification(
     project = local_project_factory(owner)
     agent = agent_factory(owner)
 
-    review = review_factory(owner, project, [UUID(agent["id"])])
+    review_factory(owner, project, [UUID(agent["id"])])
 
     response = owner.request("GET", "/api/v1/notifications")
-    queued = next(
-        item
-        for item in response.json()["items"]
-        if item["event_type"] == NotificationEventType.REVIEW_QUEUED.value
-    )
-    assert queued["action_path"] == f"/reviews/{review['id']}"
-    assert queued["data"] == {"review_id": review["id"]}
+
+    assert response.json()["items"] == []
 
 
 def test_concurrent_notification_read_operations_change_each_row_once(

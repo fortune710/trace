@@ -17,16 +17,28 @@ function NotificationRowSkeleton() {
   )
 }
 
+function NotificationDateGroupSkeleton({ rows }: { rows: number }) {
+  return (
+    <section className="space-y-3">
+      <Skeleton className="h-4 w-32" />
+      <div className="space-y-3">
+        {Array.from({ length: rows }, (_, index) => (
+          <NotificationRowSkeleton key={index} />
+        ))}
+      </div>
+    </section>
+  )
+}
+
 export function NotificationsPageSkeleton() {
   return (
     <div
       aria-busy="true"
       aria-label="Loading notifications"
-      className="space-y-3"
+      className="space-y-6"
     >
-      <NotificationRowSkeleton />
-      <NotificationRowSkeleton />
-      <NotificationRowSkeleton />
+      <NotificationDateGroupSkeleton rows={2} />
+      <NotificationDateGroupSkeleton rows={1} />
     </div>
   )
 }

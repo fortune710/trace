@@ -23,6 +23,7 @@ class NotificationCategory(str, Enum):
 
 class NotificationEventType(str, Enum):
     REVIEW_QUEUED = "review_queued"
+    REVIEW_STARTED = "review_started"
     FINDINGS_AVAILABLE = "findings_available"
     REVIEW_COMPLETED = "review_completed"
     REVIEW_FAILED = "review_failed"

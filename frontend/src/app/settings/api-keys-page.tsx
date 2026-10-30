@@ -1,177 +1,154 @@
-import { useState, type FormEvent } from "react"
+import { useRef, useState, type FormEvent } from "react"
 import { Navigate } from "react-router-dom"
 
 import { AppShell } from "@/components/layout/app-shell"
-import {
-  ApiKeysListSkeleton,
-  ApiKeysPageSkeleton,
-} from "@/components/settings/api-keys-page-skeleton"
-import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { ProviderLogo } from "@/components/agents/provider-logo"
+import { ApiKeysPageSkeleton } from "@/components/settings/api-keys-page-skeleton"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { toast } from "@/components/ui/toast"
 import {
-  useAgentModelCatalog,
   useCreateProviderCredential,
   useProviderCredentials,
-  useRevokeProviderCredential,
+  useRotateProviderCredential,
 } from "@/hooks/use-agents"
-import { ApiError, type ModelProvider } from "@/lib/api"
+import type { ModelProvider } from "@/lib/api"
 
-function CreateApiKeyDialog({
-  open,
-  onOpenChange,
-}: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
-  const catalog = useAgentModelCatalog()
+const providerDetails: Array<{
+  provider: ModelProvider
+  title: string
+  description: string
+}> = [
+  {
+    provider: "openai",
+    title: "OpenAI API Key",
+    description: "Use OpenAI models with your own API key.",
+  },
+  {
+    provider: "anthropic",
+    title: "Anthropic API Key",
+    description: "Use Claude models with your own API key.",
+  },
+  {
+    provider: "google",
+    title: "Google API Key",
+    description: "Use Google models with your Google AI Studio key.",
+  },
+  {
+    provider: "xai",
+    title: "xAI API Key",
+    description: "Use Grok models with your own xAI API key.",
+  },
+]
+
+function ProviderApiKeyCard({
+  provider,
+  title,
+  description,
+}: (typeof providerDetails)[number]) {
+  const credentials = useProviderCredentials()
   const create = useCreateProviderCredential()
-  const providers = catalog.data?.providers ?? []
-  const [name, setName] = useState("")
-  const [provider, setProvider] = useState<ModelProvider | "">("")
+  const rotate = useRotateProviderCredential()
   const [apiKey, setApiKey] = useState("")
+  const submittingKey = useRef<string | null>(null)
+  const credential = credentials.credentials.find(
+    (item) => item.provider === provider,
+  )
+  const isSaving = create.isPending || rotate.isPending
 
-  function close(nextOpen: boolean) {
-    onOpenChange(nextOpen)
-    if (!nextOpen) {
-      setName("")
-      setProvider("")
-      setApiKey("")
+  function saveApiKey() {
+    const nextApiKey = apiKey.trim()
+    if (!nextApiKey || isSaving || submittingKey.current === nextApiKey) {
+      return
     }
+
+    submittingKey.current = nextApiKey
+    const payload = {
+      provider,
+      kind: "api_key" as const,
+      payload: { api_key: nextApiKey },
+    }
+    const callbacks = {
+      onSuccess: () => {
+        setApiKey("")
+        submittingKey.current = null
+        toast.add({
+          type: "success",
+          title: "API key saved",
+          description: `${title} is encrypted and ready for agents.`,
+        })
+      },
+      onError: () => {
+        submittingKey.current = null
+        toast.add({
+          type: "error",
+          title: "Key could not be saved",
+          description: "Please try again.",
+        })
+      },
+    }
+
+    if (credential) {
+      rotate.mutate(
+        { credentialId: credential.id, credential: payload },
+        callbacks,
+      )
+      return
+    }
+
+    create.mutate(payload, callbacks)
   }
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const trimmedName = name.trim()
-    const trimmedKey = apiKey.trim()
-    if (!trimmedName || !provider || !trimmedKey) return
-    create.mutate(
-      {
-        provider,
-        kind: "api_key",
-        name: trimmedName,
-        payload: { api_key: trimmedKey },
-      },
-      {
-        onSuccess: () => {
-          toast.add({
-            type: "success",
-            title: "API key saved",
-            description: "Your key is encrypted and ready for agent configuration.",
-          })
-          close(false)
-        },
-        onError: (error) =>
-          toast.add({
-            type: "error",
-            title: "Key could not be saved",
-            description:
-              error instanceof ApiError && error.status === 409
-                ? "A key with that name already exists. Please try another name."
-                : "Your API key could not be saved. Please try again.",
-          }),
-      },
-    )
+    saveApiKey()
   }
 
   return (
-    <Dialog open={open} onOpenChange={close}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Create API key</DialogTitle>
-          <DialogDescription>
-            Your key is encrypted before storage and is never shown again. Give
-            each key a name so you can tell your keys apart when linking them
-            to an agent.
-          </DialogDescription>
-        </DialogHeader>
-        <form id="create-api-key-form" className="grid gap-4" onSubmit={submit}>
-          <div className="grid gap-2">
-            <Label htmlFor="api-key-name">Name</Label>
-            <Input
-              id="api-key-name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              maxLength={100}
-              placeholder="Primary OpenAI key"
-              required
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="api-key-provider">Provider</Label>
-            <Select
-              value={provider}
-              onValueChange={(value) => value && setProvider(value as ModelProvider)}
-            >
-              <SelectTrigger id="api-key-provider" className="w-full">
-                <SelectValue>
-                  {providers.find((item) => item.id === provider)?.label ??
-                    "Choose provider"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {providers.map((item) => (
-                  <SelectItem key={item.id} value={item.id}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="api-key-value">API key</Label>
-            <Input
-              id="api-key-value"
-              type="password"
-              autoComplete="new-password"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              required
-            />
-          </div>
-        </form>
-        <DialogFooter>
-          <Button type="button" variant="ghost" onClick={() => close(false)}>
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            form="create-api-key-form"
-            disabled={
-              create.isPending || !name.trim() || !provider || !apiKey.trim()
+    <section aria-labelledby={`${provider}-api-key-heading`}>
+      <h2
+        id={`${provider}-api-key-heading`}
+        className="flex items-center gap-3 text-xl font-medium tracking-tight"
+      >
+        <ProviderLogo provider={provider} className="size-6" />
+        {title}
+      </h2>
+      <p className="mt-1 text-base text-muted-foreground">{description}</p>
+      <form
+        className="mt-4 rounded-lg border border-white/6 bg-card p-4"
+        onSubmit={handleSubmit}
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <Label htmlFor={`${provider}-api-key`} className="text-base">
+            API Key
+          </Label>
+          <Input
+            id={`${provider}-api-key`}
+            type="password"
+            autoComplete="new-password"
+            value={apiKey}
+            onChange={(event) => setApiKey(event.target.value)}
+            placeholder={
+              credential ? "API key saved — enter a new key" : "Enter API key"
             }
-          >
-            {create.isPending ? "Saving…" : "Create API key"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+            disabled={isSaving}
+            className="h-10 w-full sm:max-w-80"
+          />
+        </div>
+        <p className="mt-4 text-sm text-muted-foreground">
+          {isSaving
+            ? "Saving your API key…"
+            : "Press Enter to save. Keys are encrypted and never shown again."}
+        </p>
+      </form>
+    </section>
   )
 }
 
 export function ApiKeysPage() {
-  const catalog = useAgentModelCatalog()
   const credentials = useProviderCredentials()
-  const revoke = useRevokeProviderCredential()
-  const [dialogOpen, setDialogOpen] = useState(false)
 
-  if (catalog.isLoading) {
+  if (credentials.isLoading) {
     return (
       <AppShell>
         <section className="mx-auto w-full max-w-6xl px-6 py-8 md:px-10 md:py-10">
@@ -180,126 +157,30 @@ export function ApiKeysPage() {
       </AppShell>
     )
   }
-  const providerLabels = new Map<string, string>(
-    catalog.data?.providers.map((item) => [item.id, item.label]) ?? [],
-  )
-
-  function handleRevoke(credentialId: string, name: string | null) {
-    revoke.mutate(credentialId, {
-      onSuccess: () =>
-        toast.add({
-          type: "success",
-          title: "API key revoked",
-          description: name
-            ? `"${name}" can no longer be used by agents.`
-            : "The key can no longer be used by agents.",
-        }),
-      onError: () =>
-        toast.add({
-          type: "error",
-          title: "Key could not be revoked",
-          description: "Please try again.",
-        }),
-    })
-  }
 
   return (
     <AppShell>
       <section className="mx-auto w-full max-w-6xl px-6 py-8 md:px-10 md:py-10">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
+        <div className="grid max-w-4xl gap-12">
+          <header className="max-w-2xl">
             <h1 className="text-xl font-medium tracking-tight">API keys</h1>
             <p className="mt-1 text-sm text-muted-foreground">
               Save your own API keys for model providers, then choose them from
-              an agent&rsquo;s access settings. Keys are encrypted before storage
-              and never shown again.
+              an agent&rsquo;s access settings. Keys are encrypted before
+              storage and never shown again.
             </p>
-          </div>
-          <Button type="button" onClick={() => setDialogOpen(true)}>
-            Create API key
-          </Button>
+          </header>
+          {providerDetails.map((details) => (
+            <ProviderApiKeyCard key={details.provider} {...details} />
+          ))}
         </div>
-        {catalog.isError ? (
-          <div
-            role="alert"
-            className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4"
-          >
-            <p className="text-sm text-destructive">
-              Provider labels could not be loaded. Provider IDs are used as
-              labels while the catalog is unavailable.
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void catalog.refetch()}
-            >
-              Try again
-            </Button>
-          </div>
-        ) : null}
-        {credentials.isLoading ? (
-          <ApiKeysListSkeleton />
-        ) : !credentials.isError && credentials.credentials.length === 0 ? (
-          <div className="mt-8 rounded-lg border border-white/14 bg-[#0a0a0c] p-8 text-center">
-            <p className="text-sm font-medium">No API keys yet</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Create your first key to let agents run on your own provider
-              access instead of Trace-managed access.
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              className="mt-5"
-              onClick={() => setDialogOpen(true)}
-            >
-              Create API key
-            </Button>
-          </div>
-        ) : (
-          <div className="mt-8 grid gap-4">
-            {credentials.credentials.map((credential) => (
-              <article
-                key={credential.id}
-                className="flex flex-wrap items-start justify-between gap-4 rounded-lg border border-white/14 bg-[#0a0a0c] p-5"
-              >
-                <div className="min-w-0">
-                  <h2 className="truncate text-sm font-medium">
-                    {credential.name ?? "Unnamed key"}
-                  </h2>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {providerLabels.get(credential.provider) ??
-                      credential.provider}
-                    {" · "}Created{" "}
-                    {new Date(credential.created_at).toLocaleDateString()}
-                  </p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="rounded-full border border-[#11ff99]/30 px-2 py-1 text-[11px] text-[#11ff99]">
-                    Active
-                  </span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={revoke.isPending}
-                    onClick={() =>
-                      handleRevoke(credential.id, credential.name)
-                    }
-                  >
-                    Revoke
-                  </Button>
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
         {credentials.isError ? (
-          <p role="alert" className="mt-4 text-sm text-destructive">
-            Could not load your saved API keys. Try refreshing this page.
+          <p role="alert" className="mt-6 text-sm text-destructive">
+            Could not load your saved API keys. You can still save a replacement
+            key for a provider.
           </p>
         ) : null}
       </section>
-      <CreateApiKeyDialog open={dialogOpen} onOpenChange={setDialogOpen} />
     </AppShell>
   )
 }

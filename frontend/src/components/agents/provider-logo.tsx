@@ -1,23 +1,33 @@
-import { useState } from "react"
-
+import { AnthropicFill } from "@/components/logos/anthropic"
+import { GoogleGeminiIcon } from "@/components/logos/gemini"
+import { OpenaiChatgpt } from "@/components/logos/openai"
+import { Xai } from "@/components/logos/xai"
 import type { ModelProvider } from "@/lib/api"
 
-const providerLogoUrls = {
-  openai: "https://openai.com/favicon.ico",
-  anthropic: "https://www.anthropic.com/favicon.ico",
-  google: "https://gemini.google.com/favicon.ico",
-  xai: "https://x.ai/favicon.ico",
-} satisfies Record<ModelProvider, string>
+export function ProviderLogo({
+  provider,
+  className = "size-4",
+}: {
+  provider: ModelProvider
+  className?: string
+}) {
+  if (provider === "openai") {
+    return (
+      <OpenaiChatgpt aria-hidden="true" className={`${className} shrink-0`} />
+    )
+  }
 
-const providerInitials = {
-  openai: "O",
-  anthropic: "A",
-  google: "G",
-  xai: "X",
-} satisfies Record<ModelProvider, string>
+  if (provider === "anthropic") {
+    return (
+      <AnthropicFill aria-hidden="true" className={`${className} shrink-0`} />
+    )
+  }
 
-export function ProviderLogo({ provider }: { provider: ModelProvider }) {
-  const [failed, setFailed] = useState(false)
+  if (provider === "xai") {
+    return <Xai aria-hidden="true" className={`${className} shrink-0`} />
+  }
 
-  return <span aria-hidden="true" className="flex size-4 shrink-0 items-center justify-center overflow-hidden rounded-sm bg-white p-px text-[9px] font-semibold text-black">{failed ? providerInitials[provider] : <img src={providerLogoUrls[provider]} alt="" className="size-full object-contain" onError={() => setFailed(true)} />}</span>
+  return (
+    <GoogleGeminiIcon aria-hidden="true" className={`${className} shrink-0`} />
+  )
 }

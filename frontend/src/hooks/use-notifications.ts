@@ -1,7 +1,7 @@
 import {
-  keepPreviousData,
+  type InfiniteData,
+  useInfiniteQuery,
   useMutation,
-  useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
@@ -16,47 +16,56 @@ import { toast } from "@/components/ui/toast"
 import { useSession } from "@/hooks/use-session"
 
 export const notificationsQueryKey = ["notifications"] as const
-const PAGE_SIZE = 25
+const PAGE_SIZE = 20
 
 type NotificationCacheSnapshot = Array<
-  [readonly unknown[], NotificationPage | undefined]
+  [readonly unknown[], InfiniteData<NotificationPage> | undefined]
 >
 
-function unreadNotificationPage(
-  page: NotificationPage,
+function unreadNotifications(
+  data: InfiniteData<NotificationPage>,
   notificationId: string,
   readAt: string,
-): NotificationPage {
-  const wasUnread = page.items.some(
+): InfiniteData<NotificationPage> {
+  const wasUnread = data.pages.some((page) =>
+    page.items.some(
     (notification) =>
       notification.id === notificationId && notification.read_at === null,
+    ),
   )
+  const unreadCount = data.pages[0]?.unread_count ?? 0
 
   return {
-    ...page,
-    items: page.items.map((notification) =>
-      notification.id === notificationId && notification.read_at === null
-        ? { ...notification, read_at: readAt }
-        : notification,
-    ),
-    unread_count: wasUnread
-      ? Math.max(0, page.unread_count - 1)
-      : page.unread_count,
+    ...data,
+    pages: data.pages.map((page) => ({
+      ...page,
+      items: page.items.map((notification) =>
+        notification.id === notificationId && notification.read_at === null
+          ? { ...notification, read_at: readAt }
+          : notification,
+      ),
+      unread_count: wasUnread
+        ? Math.max(0, unreadCount - 1)
+        : page.unread_count,
+    })),
   }
 }
 
-function allReadNotificationPage(
-  page: NotificationPage,
+function allReadNotifications(
+  data: InfiniteData<NotificationPage>,
   readAt: string,
-): NotificationPage {
+): InfiniteData<NotificationPage> {
   return {
-    ...page,
-    items: page.items.map((notification) =>
-      notification.read_at === null
-        ? { ...notification, read_at: readAt }
-        : notification,
-    ),
-    unread_count: 0,
+    ...data,
+    pages: data.pages.map((page) => ({
+      ...page,
+      items: page.items.map((notification) =>
+        notification.read_at === null
+          ? { ...notification, read_at: readAt }
+          : notification,
+      ),
+      unread_count: 0,
+    })),
   }
 }
 
@@ -65,23 +74,27 @@ function restoreNotificationCache(
   snapshot: NotificationCacheSnapshot | undefined,
 ) {
   snapshot?.forEach(([key, value]) => {
-    queryClient.setQueryData(key, value)
+    queryClient.setQueryData<InfiniteData<NotificationPage>>(key, value)
   })
 }
 
-export function useNotifications(page: number) {
-  const query = useQuery({
-    queryKey: [...notificationsQueryKey, page, PAGE_SIZE],
-    queryFn: () => notificationsApi.list({ page, pageSize: PAGE_SIZE }),
-    placeholderData: keepPreviousData,
+export function useNotifications() {
+  const query = useInfiniteQuery({
+    queryKey: [...notificationsQueryKey, PAGE_SIZE],
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) =>
+      notificationsApi.list({ page: pageParam, pageSize: PAGE_SIZE }),
+    getNextPageParam: (lastPage) =>
+      lastPage.next_offset === null
+        ? undefined
+        : Math.floor(lastPage.next_offset / PAGE_SIZE) + 1,
     retry: false,
   })
 
   return {
     ...query,
-    notifications: query.data?.items ?? [],
-    unreadCount: query.data?.unread_count ?? 0,
-    hasNextPage: query.data?.next_offset != null,
+    notifications: query.data?.pages.flatMap((page) => page.items) ?? [],
+    unreadCount: query.data?.pages[0]?.unread_count ?? 0,
   }
 }
 
@@ -92,15 +105,15 @@ export function useMarkNotificationRead() {
     mutationFn: notificationsApi.markRead,
     onMutate: async (notificationId) => {
       await queryClient.cancelQueries({ queryKey: notificationsQueryKey })
-      const previous = queryClient.getQueriesData<NotificationPage>({
+      const previous = queryClient.getQueriesData<InfiniteData<NotificationPage>>({
         queryKey: notificationsQueryKey,
       }) as NotificationCacheSnapshot
       const readAt = new Date().toISOString()
 
-      queryClient.setQueriesData<NotificationPage>(
+      queryClient.setQueriesData<InfiniteData<NotificationPage>>(
         { queryKey: notificationsQueryKey },
-        (page) =>
-          page ? unreadNotificationPage(page, notificationId, readAt) : page,
+        (data) =>
+          data ? unreadNotifications(data, notificationId, readAt) : data,
       )
 
       return { previous }
@@ -120,14 +133,14 @@ export function useMarkAllNotificationsRead() {
     mutationFn: notificationsApi.markAllRead,
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: notificationsQueryKey })
-      const previous = queryClient.getQueriesData<NotificationPage>({
+      const previous = queryClient.getQueriesData<InfiniteData<NotificationPage>>({
         queryKey: notificationsQueryKey,
       }) as NotificationCacheSnapshot
       const readAt = new Date().toISOString()
 
-      queryClient.setQueriesData<NotificationPage>(
+      queryClient.setQueriesData<InfiniteData<NotificationPage>>(
         { queryKey: notificationsQueryKey },
-        (page) => (page ? allReadNotificationPage(page, readAt) : page),
+        (data) => (data ? allReadNotifications(data, readAt) : data),
       )
 
       return { previous }

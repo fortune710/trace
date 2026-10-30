@@ -7,9 +7,36 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      compose: ${{ steps.filter.outputs.compose }}
+      workflow: ${{ steps.filter.outputs.workflow }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            frontend:
+              - 'frontend/**'
+            compose:
+              - 'compose*.yaml'
+              - 'scripts/**'
+              - '.env.example'
+            workflow:
+              - '.github/workflows/merge-checks.yml'
+
   backend-quality:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -24,6 +51,8 @@ jobs:
       - run: uv run pytest
 
   frontend-quality:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -39,6 +68,8 @@ jobs:
       - run: bun run build
 
   desktop-build:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.workflow == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -124,6 +155,8 @@ jobs:
           if-no-files-found: ignore
 
   migrations-and-integration:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.compose == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     env:
       COMPOSE_PROJECT_NAME: trace-ci-${{ github.run_id }}
@@ -136,6 +169,8 @@ jobs:
         run: docker compose --env-file .ci.env --profile test down --volumes --remove-orphans
 
   compose-lifecycle:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.compose == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -143,6 +178,8 @@ jobs:
       - run: COMPOSE_PROJECT_NAME=trace-lifecycle scripts/ci/verify-compose-lifecycle.sh .ci.env
 
   auth-e2e:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -168,6 +205,8 @@ jobs:
           fi
 
   security:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.compose == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

@@ -24,7 +24,11 @@ class FindingOutput(BaseModel):
     severity: str = Field(pattern="^(info|low|medium|high|critical)$")
     title: str = Field(min_length=1, max_length=500)
     explanation: str = Field(min_length=1, max_length=10_000)
-    evidence: str | None = Field(default=None, max_length=10_000)
+    evidence: str | None = Field(
+        default=None,
+        max_length=10_000,
+        description="Repository evidence formatted as GitHub-Flavored Markdown.",
+    )
     source_location: str | None = Field(default=None, max_length=2_000)
     recommendation: str | None = Field(default=None, max_length=10_000)
 
