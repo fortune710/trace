@@ -229,5 +229,7 @@ test("a completed review preserves findings and explains unavailable changes", a
   await page.goto("/reviews/review-1/findings/finding-1")
   await expect(page.getByRole("heading", { name: "Missing authorization check" })).toBeVisible()
   await expect(page.getByText(/The finding is saved. Automated changes are unavailable: Invalid line range/)).toBeVisible()
-  await expect(page.getByRole("button", { name: /create pull request/i })).toBeDisabled()
+  await expect(page.getByRole("button", { name: "Accept" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Dismiss" })).toBeVisible()
+  await expect(page.getByRole("button", { name: /create pull request/i })).toHaveCount(0)
 })
