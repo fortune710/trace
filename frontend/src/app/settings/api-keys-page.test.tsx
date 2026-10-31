@@ -95,6 +95,19 @@ describe("ApiKeysPage", () => {
         .getByLabelText("API Key", { selector: "#openai-api-key" })
         .getAttribute("placeholder"),
     ).toBe("API key saved — enter a new key")
+    const openAiInput = screen.getByLabelText("API Key", {
+      selector: "#openai-api-key",
+    })
+    expect(openAiInput.className).toContain("sm:w-80")
+    expect(openAiInput.className).toContain("border-transparent")
+    expect(openAiInput.className).toContain("bg-black/50")
+    expect(openAiInput.className).toContain("focus:border-foreground")
+    expect(openAiInput.closest("form")?.className).toContain("p-3")
+    expect(
+      screen.getAllByText(
+        "Press Enter to save. Keys are encrypted and never shown again.",
+      ),
+    ).toHaveLength(4)
     expect(screen.queryByRole("button", { name: /create api key/i })).toBeNull()
   })
 
