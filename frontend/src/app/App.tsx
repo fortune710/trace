@@ -13,6 +13,7 @@ import { AuthenticatedOnly, GuestOnly } from "@/app/auth/route-guards"
 import { AgentsPage } from "@/app/agents/agents-page"
 import { AgentDetailsPage } from "@/app/agents/agent-details-page"
 import { IntegrationsPage } from "@/app/integrations/integrations-page"
+import { LandingRoute } from "@/app/landing/landing-route"
 import { NotificationsPage } from "@/app/notifications/notifications-page"
 import { FindingDetailsPage } from "@/app/findings/finding-details-page"
 import { ProjectDetailsPage } from "@/app/projects/project-details-page"
@@ -28,6 +29,10 @@ import { WorkspacePage } from "@/app/workspace/workspace-page"
 function App() {
   return (
     <Routes>
+      <Route
+        path="/"
+        element={<LandingRoute />}
+      />
       <Route element={<GuestOnly />}>
         <Route
           path="/sign-in"

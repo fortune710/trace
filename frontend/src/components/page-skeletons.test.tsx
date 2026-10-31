@@ -10,6 +10,7 @@ import { AuthPageSkeleton } from "@/components/auth/layout"
 import { FindingDetailsPageSkeleton } from "@/components/findings/finding-details-page-skeleton"
 import { ReviewFindingsSkeleton } from "@/components/findings/review-findings-skeleton"
 import { IntegrationsPageSkeleton } from "@/components/integrations/integrations-page-skeleton"
+import { LandingPageSkeleton } from "@/components/landing/landing-page-skeleton"
 import { NotificationsPageSkeleton } from "@/components/notifications/notifications-page-skeleton"
 import {
   ProjectDetailsPageSkeleton,
@@ -35,6 +36,7 @@ describe("page loading skeletons", () => {
         <NotificationsPageSkeleton />
         <ApiKeysPageSkeleton />
         <WorkspacePageSkeleton />
+        <LandingPageSkeleton />
       </MemoryRouter>,
     )
 
@@ -51,6 +53,7 @@ describe("page loading skeletons", () => {
       "Loading notifications",
       "Loading API keys",
       "Loading workspace page",
+      "Loading landing page",
     ]
 
     for (const label of loadingLabels) {

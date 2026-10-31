@@ -43,6 +43,11 @@ bun run --cwd frontend tauri:build
 The runtime environment is determined by Tauri's `isTauri()` API, not by
 `VITE_APP_MODE`.
 
+The public landing page at `/` renders only in the browser. Inside the desktop
+app, `/` redirects to `/account`. Its "Download for macOS" button points to
+`VITE_DESKTOP_DOWNLOAD_URL` when that is set to an `https:` URL, and otherwise to
+the repository's latest GitHub release.
+
 The backend separately allows credentialed desktop origins with
 `AUTH_DESKTOP_ALLOWED_ORIGINS`. Local development should include
 `http://127.0.0.1:5173`; packaged builds use the configured Tauri webview
