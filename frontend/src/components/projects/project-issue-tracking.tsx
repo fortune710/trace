@@ -156,21 +156,39 @@ export function ProjectIssueTracking({ project }: { project: Project }) {
         <div className="mt-4 rounded-lg border border-white/6 bg-card p-4">
           {teams.isLoading ? <ProjectIssuesSkeleton /> : null}
           {teams.isError ? (
-            <dl className="flex flex-wrap items-center justify-between gap-3">
-              <dt className="text-sm text-muted-foreground">Project</dt>
-              <dd className="min-w-0 text-right text-sm font-medium">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="px-2"
-                  nativeButton={false}
-                  render={<Link to="/settings/integrations" />}
-                >
-                  Connect to Linear
-                </Button>
-              </dd>
-            </dl>
+            <>
+              <dl className="flex flex-wrap items-center justify-between gap-3">
+                <dt className="text-sm text-muted-foreground">Project</dt>
+                <dd className="min-w-0 break-all text-right text-sm font-medium">
+                  {savedLinear ? (
+                    <>{savedLinear.owner}/{savedLinear.project}</>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="px-2"
+                      nativeButton={false}
+                      render={<Link to="/settings/integrations" />}
+                    >
+                      Connect to Linear
+                    </Button>
+                  )}
+                </dd>
+              </dl>
+              {savedLinear ? (
+                <div className="mt-4 flex justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={update.isPending}
+                    onClick={removeLinearDestination}
+                  >
+                    Remove Linear destination
+                  </Button>
+                </div>
+              ) : null}
+            </>
           ) : null}
           {teams.data ? (
             <>
