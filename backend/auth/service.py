@@ -11,6 +11,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.engine import Engine
 
+from agents.defaults import seed_default_agents
 from auth.config import AuthSettings
 from auth.credentials import (
     CredentialCipher,
@@ -133,6 +134,8 @@ class AuthService:
                 connection.execute(
                     sa.insert(User).values(id=user_id, display_name=display_name)
                 )
+                set_principal_context(connection, user_id)
+                seed_default_agents(connection, owner_id=user_id)
                 connection.execute(
                     sa.insert(AuthIdentity).values(
                         id=uuid7(),
@@ -166,7 +169,6 @@ class AuthService:
                     },
                     cipher=self._email_cipher,
                 )
-                set_principal_context(connection, user_id)
                 create_notification(
                     connection,
                     owner_id=user_id,
@@ -403,6 +405,8 @@ class AuthService:
                 connection.execute(
                     sa.insert(User).values(id=user_id, display_name=display_name)
                 )
+                set_principal_context(connection, user_id)
+                seed_default_agents(connection, owner_id=user_id)
                 connection.execute(
                     sa.insert(AuthIdentity).values(
                         id=uuid7(),
@@ -412,7 +416,6 @@ class AuthService:
                     )
                 )
                 tokens = self._create_session(connection, user_id=user_id)
-                set_principal_context(connection, user_id)
                 create_notification(
                     connection,
                     owner_id=user_id,

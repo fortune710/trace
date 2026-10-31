@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 import sqlalchemy as sa
 
+from agents.defaults import DEFAULT_AGENTS
+from agents.models import Agent
 from auth.models import AuthIdentity, AuthUser, IdentityProvider
 from auth.service import AuthService
 from db.rls import principal_transaction
@@ -43,6 +45,58 @@ def test_google_oauth_persists_the_provider_display_name(
             ).one()
         assert row.email == email
         assert row.display_name == "Google Test User"
+        assert result.user_id is not None
+        with principal_transaction(integration_engine, result.user_id) as connection:
+            keys = set(
+                connection.execute(
+                    sa.select(Agent.default_key).where(Agent.owner_id == result.user_id)
+                ).scalars()
+            )
+        assert keys == {agent.key for agent in DEFAULT_AGENTS}
+
+        repeated = service.oauth_login(
+            provider=IdentityProvider.GOOGLE,
+            subject=subject,
+            email=email,
+            display_name="Google Test User",
+        )
+        assert repeated.user_id == result.user_id
+        with principal_transaction(integration_engine, result.user_id) as connection:
+            count = connection.scalar(
+                sa.select(sa.func.count())
+                .select_from(Agent)
+                .where(Agent.owner_id == result.user_id)
+            )
+        assert count == len(DEFAULT_AGENTS)
+    finally:
+        with integration_engine.begin() as connection:
+            connection.execute(sa.delete(AuthUser).where(AuthUser.email == email))
+
+
+def test_email_registration_seeds_default_agents(
+    integration_engine, integration_settings
+) -> None:
+    service = AuthService.from_settings(
+        engine=integration_engine,
+        settings=integration_settings,
+    )
+    email = "default-agents-registration@example.test"
+
+    try:
+        user_id = service.register(
+            email=email,
+            password="InitialPassword123!",
+            display_name="Default Agent Test",
+            destination="https://trace.example.test/verify-email",
+        )
+        assert user_id is not None
+        with principal_transaction(integration_engine, user_id) as connection:
+            keys = set(
+                connection.execute(
+                    sa.select(Agent.default_key).where(Agent.owner_id == user_id)
+                ).scalars()
+            )
+        assert keys == {agent.key for agent in DEFAULT_AGENTS}
     finally:
         with integration_engine.begin() as connection:
             connection.execute(sa.delete(AuthUser).where(AuthUser.email == email))
