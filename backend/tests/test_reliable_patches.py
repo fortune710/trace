@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
@@ -409,3 +410,21 @@ def test_several_edit_batches_in_one_reply_get_their_own_diagnostic(monkeypatch)
         for message in conversations[1]
         if type(message).__name__ == "ToolMessage"
     ] == ["Return exactly one edit batch containing every edit for this finding."] * 2
+
+
+def test_legacy_patch_is_stored_as_the_canonical_verified_patch():
+    canonical = build_patch(
+        original={"app.py": "old\n"}, updated={"app.py": "new\n"}, snapshot={}
+    )
+    # Git applies this, but the index line is not what Git would serialize.
+    legacy = re.sub(r"index \S+\.\.\S+", "index 1234567..89abcde", canonical.diff)
+    assert legacy != canonical.diff
+
+    stored = validate_legacy_patch(
+        legacy, context({"app.py": "old\n"}).source_reader(), {}
+    )
+
+    assert stored.diff == canonical.diff
+    assert "1234567" not in stored.diff
+    assert stored.sha256 == hashlib.sha256(stored.diff.encode()).hexdigest()
+    assert stored.files == canonical.files

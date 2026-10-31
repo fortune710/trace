@@ -5,7 +5,10 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import re
 from pathlib import PurePosixPath
+
+_SHA256_HEX = re.compile(r"[0-9a-fA-F]{64}")
 
 
 def decode_snapshot_entries(
@@ -22,6 +25,7 @@ def decode_snapshot_entries(
         path = entry.get("path")
         directory = entry.get("directory")
         encoded = entry.get("content_base64")
+        declared_sha256 = entry.get("content_sha256")
         if (
             not isinstance(path, str)
             or not path
@@ -38,10 +42,19 @@ def decode_snapshot_entries(
             raise ValueError("snapshot_path_invalid")
         seen.add(path)
         if directory:
-            if encoded is not None:
+            if encoded is not None or declared_sha256 is not None:
                 raise ValueError("snapshot_entry_invalid")
             records.append((path, True, None))
             directories.add(path)
+        elif declared_sha256 is not None:
+            # Oversized and binary files are verified by content hash only; their
+            # bytes are never uploaded, stored, or readable by reviewers.
+            if encoded is not None or not (
+                isinstance(declared_sha256, str)
+                and _SHA256_HEX.fullmatch(declared_sha256)
+            ):
+                raise ValueError("snapshot_entry_invalid")
+            records.append((path, False, bytes.fromhex(declared_sha256)))
         else:
             if not isinstance(encoded, str) or len(encoded) > 350_000:
                 raise ValueError("snapshot_entry_invalid")

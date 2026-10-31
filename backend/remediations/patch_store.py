@@ -13,7 +13,7 @@ from agents.execution.patches import GeneratedPatch
 from agents.execution.redaction import redact_text
 from auth.config import AuthSettings
 from auth.credentials import EncryptedCredential, credential_cipher_from_settings
-from auth.errors import ResourceConflict
+from auth.errors import ResourceConflict, ResourceUnavailable
 from auth.uuids import uuid7
 from db.rls import principal_transaction
 from remediations.models import Remediation
@@ -142,6 +142,19 @@ class PatchStore:
             )
 
     def load(self, *, owner_id: UUID, remediation_id: UUID) -> GeneratedPatch:
+        patch = self.load_if_ready(owner_id=owner_id, remediation_id=remediation_id)
+        if patch is None:
+            raise ResourceConflict("remediation_patch_unavailable")
+        return patch
+
+    def load_if_ready(
+        self, *, owner_id: UUID, remediation_id: UUID
+    ) -> GeneratedPatch | None:
+        """Return the verified artifact, or None when no ready artifact exists.
+
+        This decrypts through the key provider and may record an integrity failure
+        on the remediation, so callers must not hold a lock on that row.
+        """
         with principal_transaction(self.engine, owner_id) as connection:
             row = (
                 connection.execute(
@@ -164,7 +177,7 @@ class PatchStore:
                 .one_or_none()
             )
         if row is None:
-            raise ResourceConflict("remediation_patch_unavailable")
+            return None
         try:
             payload = self.cipher.decrypt_json(
                 EncryptedCredential(
@@ -180,6 +193,11 @@ class PatchStore:
                 provider="trace",
                 credential_kind="remediation_patch",
             )
+        except Exception as exc:
+            # A cipher or key-provider failure says nothing about the stored
+            # artifact, so it must not permanently mark the patch unusable.
+            raise ResourceUnavailable() from exc
+        try:
             patch = GeneratedPatch.model_validate(payload)
             if (
                 hashlib.sha256(patch.diff.encode()).hexdigest() != row["sha256"]
@@ -187,8 +205,9 @@ class PatchStore:
                 or patch.source_snapshot != row["source_snapshot"]
             ):
                 raise ValueError("artifact_integrity")
-            return patch
-        except Exception as exc:
+        except ValueError as exc:
+            # Only a decrypted payload that fails validation proves an integrity
+            # mismatch worth recording.
             with principal_transaction(self.engine, owner_id) as connection:
                 connection.execute(
                     sa.update(Remediation)
@@ -204,3 +223,4 @@ class PatchStore:
                     )
                 )
             raise ResourceConflict("remediation_patch_integrity_failed") from exc
+        return patch

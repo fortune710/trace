@@ -308,7 +308,12 @@ export type ReviewCreate = {
   local_source_snapshot?: LocalSourceSnapshot
   local_source_upload?: {
     digest: string
-    entries: { path: string; directory: boolean; content_base64: string | null }[]
+    entries: {
+      path: string
+      directory: boolean
+      content_base64: string | null
+      content_sha256?: string | null
+    }[]
   }
 }
 

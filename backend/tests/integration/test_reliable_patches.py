@@ -9,14 +9,20 @@ import sqlalchemy as sa
 from agents.execution.agent import ReviewFindingOutput
 from agents.execution.executor import ReviewExecutionService
 from agents.execution.patches import build_patch
-from auth.credentials import credential_cipher_from_settings
-from auth.errors import ResourceConflict
+from artifacts.models import LocalFileBackup
+from auth.credentials import (
+    CredentialDecryptionError,
+    CredentialEncryptionUnavailable,
+    credential_cipher_from_settings,
+)
+from auth.errors import ResourceConflict, ResourceUnavailable
 from db.rls import principal_transaction
 from findings.models import Finding, FindingStatus
 from notifications.models import Notification, NotificationEventType
 from remediations.models import Remediation
 from remediations.patch_models import patch_artifacts
 from remediations.patch_store import PatchStore
+from remediations.service import LocalRemediationApplyService
 from reviews.models import Review, ReviewAgent
 
 pytestmark = pytest.mark.integration
@@ -576,3 +582,161 @@ def test_worker_role_can_stage_replay_and_store_remediations(
         store.load(owner_id=owner.user_id, remediation_id=remediation_id).diff
         == patch.diff
     )
+
+
+def test_cipher_failures_do_not_mark_a_ready_patch_unverifiable(
+    account_pair,
+    local_project_factory,
+    agent_factory,
+    artifact_graph_factory,
+    integration_engine,
+    integration_settings,
+):
+    owner, _ = account_pair
+    project = local_project_factory(owner)
+    agent = agent_factory(owner)
+    graph = artifact_graph_factory(owner, UUID(project["id"]), UUID(agent["id"]))
+    cipher = credential_cipher_from_settings(integration_settings)
+    store = PatchStore(integration_engine, cipher)
+    patch = build_patch(
+        original={"app.py": "old\n"},
+        updated={"app.py": "new\n"},
+        snapshot={
+            "source_kind": "local",
+            "source_identifier": "integration-local-source",
+            "revision": "a" * 64,
+        },
+    )
+    store.save(
+        owner_id=owner.user_id, remediation_id=graph["remediation_id"], patch=patch
+    )
+
+    def failing_cipher(error: Exception) -> SimpleNamespace:
+        def decrypt_json(*args, **kwargs):
+            raise error
+
+        return SimpleNamespace(decrypt_json=decrypt_json)
+
+    for error in (
+        CredentialEncryptionUnavailable("key provider is down"),
+        CredentialDecryptionError("key version is not available"),
+        RuntimeError("unexpected provider failure"),
+    ):
+        store._cipher = failing_cipher(error)
+        with pytest.raises(ResourceUnavailable):
+            store.load(owner_id=owner.user_id, remediation_id=graph["remediation_id"])
+
+    with principal_transaction(integration_engine, owner.user_id) as connection:
+        row = (
+            connection.execute(
+                sa.select(
+                    Remediation.generation_status, Remediation.generation_failure
+                ).where(Remediation.id == graph["remediation_id"])
+            )
+            .mappings()
+            .one()
+        )
+    assert row["generation_status"] == "ready"
+    assert row["generation_failure"] is None
+    # Once the key provider recovers, the same artifact is retrievable and exact.
+    store._cipher = cipher
+    assert (
+        store.load(owner_id=owner.user_id, remediation_id=graph["remediation_id"]).diff
+        == patch.diff
+    )
+
+
+def test_apply_decrypts_before_locking_and_defers_key_provider_failures(
+    account_pair,
+    local_project_factory,
+    agent_factory,
+    artifact_graph_factory,
+    integration_engine,
+    integration_settings,
+):
+    owner, _ = account_pair
+    project = local_project_factory(owner)
+    agent = agent_factory(owner)
+    graph = artifact_graph_factory(owner, UUID(project["id"]), UUID(agent["id"]))
+    remediation_id = graph["remediation_id"]
+    cipher = credential_cipher_from_settings(integration_settings)
+    patch = build_patch(
+        original={"app.py": "old\n"},
+        updated={"app.py": "new\n"},
+        snapshot={
+            "source_kind": "local",
+            "source_identifier": "integration-local-source",
+            "revision": "a" * 64,
+        },
+    )
+    PatchStore(integration_engine, cipher).save(
+        owner_id=owner.user_id, remediation_id=remediation_id, patch=patch
+    )
+    with principal_transaction(integration_engine, owner.user_id) as connection:
+        connection.execute(
+            sa.update(Finding)
+            .where(Finding.id == graph["finding_id"])
+            .values(status=FindingStatus.ACCEPTED)
+        )
+
+    # Waiting on a lock this test's own apply holds fails fast instead of hanging.
+    lock_engine = sa.create_engine(
+        integration_engine.url, connect_args={"options": "-c lock_timeout=3000"}
+    )
+
+    def service_with(decrypt) -> LocalRemediationApplyService:
+        store = PatchStore(lock_engine, SimpleNamespace(decrypt_json=decrypt))
+        return LocalRemediationApplyService(integration_engine, None, patch_store=store)
+
+    def provider_down(*args, **kwargs):
+        raise CredentialEncryptionUnavailable("key provider is down")
+
+    def tampered(*args, **kwargs):
+        return {**patch.model_dump(), "diff": "tampered"}
+
+    def apply(service: LocalRemediationApplyService):
+        return service.complete(
+            owner_id=owner.user_id,
+            remediation_id=remediation_id,
+            files=[],
+            request_id="request",
+        )
+
+    try:
+        # The fixture already recorded a local apply. Replaying it never needs the
+        # key provider, as before the patch moved outside the lock.
+        replayed = apply(service_with(provider_down))
+        assert replayed["id"] == remediation_id
+
+        with principal_transaction(integration_engine, owner.user_id) as connection:
+            connection.execute(
+                sa.delete(LocalFileBackup).where(
+                    LocalFileBackup.remediation_id == remediation_id
+                )
+            )
+
+        # A key-provider failure is reported where the patch is first needed and
+        # leaves the artifact untouched.
+        with pytest.raises(ResourceUnavailable):
+            apply(service_with(provider_down))
+        with principal_transaction(integration_engine, owner.user_id) as connection:
+            failure = connection.execute(
+                sa.select(Remediation.generation_failure).where(
+                    Remediation.id == remediation_id
+                )
+            ).scalar_one()
+        assert failure is None
+
+        # Recording an integrity failure updates the remediation row, which would
+        # block on this apply's own lock had the patch been loaded inside it.
+        with pytest.raises(ResourceConflict):
+            apply(service_with(tampered))
+        with principal_transaction(integration_engine, owner.user_id) as connection:
+            failure = connection.execute(
+                sa.select(Remediation.generation_failure).where(
+                    Remediation.id == remediation_id
+                )
+            ).scalar_one()
+        assert failure["code"] == "patch_decryption_or_integrity_failed"
+    finally:
+        lock_engine.dispose()

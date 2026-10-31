@@ -7,7 +7,6 @@ Write verified artifacts: add --apply. No review or model request is initiated.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import tempfile
 from pathlib import Path
@@ -67,11 +66,10 @@ def validate_legacy_patch(diff, reader, snapshot, log_context=None):
         updated = {
             path: (root / path).read_bytes().decode("utf-8") for path in originals
         }
-    canonical = build_patch(original=originals, updated=updated, snapshot=snapshot)
-    # Store the exact legacy artifact that passed Git, not a rewritten preview.
-    return canonical.model_copy(
-        update={"diff": diff, "sha256": hashlib.sha256(diff.encode()).hexdigest()}
-    )
+    # The legacy text only proves which bytes the change produces. Store the patch
+    # Git serializes from those verified before/after bytes, so the artifact, its
+    # hash, and its per-file hashes describe exactly the same change.
+    return build_patch(original=originals, updated=updated, snapshot=snapshot)
 
 
 def main():

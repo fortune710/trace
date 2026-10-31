@@ -70,6 +70,74 @@ def test_desktop_manifest_recomputes_digest_and_rejects_traversal() -> None:
         )
 
 
+def _manifest_digest(records: list[tuple[str, bytes | None]]) -> str:
+    digest = hashlib.sha256(b"trace-local-source-snapshot\0v1\0")
+    for path, content in sorted(records):
+        digest.update(b"F")
+        digest.update(len(path.encode()).to_bytes(8, "big"))
+        digest.update(path.encode())
+        digest.update(hashlib.sha256(content or b"").digest())
+    return digest.hexdigest()
+
+
+def test_oversized_and_binary_files_are_verified_by_hash_and_never_stored() -> None:
+    text = b"const value = 1;\n"
+    large = b"x" * 300_000
+    image = b"\x89PNG\x00\x01"
+    digest = _manifest_digest(
+        [("a.ts", text), ("bundle.min.js", large), ("logo.png", image)]
+    )
+    entries: list[dict[str, object]] = [
+        {
+            "path": "a.ts",
+            "directory": False,
+            "content_base64": base64.b64encode(text).decode(),
+        },
+        {
+            "path": "bundle.min.js",
+            "directory": False,
+            "content_sha256": hashlib.sha256(large).hexdigest(),
+        },
+        {
+            "path": "logo.png",
+            "directory": False,
+            "content_sha256": hashlib.sha256(image).hexdigest().upper(),
+        },
+    ]
+
+    # The digest covers every file, but only readable text is returned for storage.
+    assert decode_snapshot_entries(entries, digest) == {"a.ts": text}
+
+    changed = [{**entries[1], "content_sha256": hashlib.sha256(b"y").hexdigest()}]
+    with pytest.raises(ValueError, match="snapshot_digest_mismatch"):
+        decode_snapshot_entries([entries[0], *changed, entries[2]], digest)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"content_base64": "AA==", "content_sha256": "0" * 64},
+        {"content_sha256": "not-a-hash"},
+        {"content_sha256": "0" * 63},
+        {"content_sha256": 7},
+        {},
+    ],
+)
+def test_hash_only_entries_must_be_well_formed(entry: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="snapshot_entry_invalid"):
+        decode_snapshot_entries(
+            [{"path": "a.bin", "directory": False, **entry}], "0" * 64
+        )
+
+
+def test_directories_cannot_carry_content_hashes() -> None:
+    with pytest.raises(ValueError, match="snapshot_entry_invalid"):
+        decode_snapshot_entries(
+            [{"path": "src", "directory": True, "content_sha256": "0" * 64}],
+            "0" * 64,
+        )
+
+
 def test_local_source_diff_validation_uses_uploaded_revision() -> None:
     reader = LocalReviewSourceAccess({"a.txt": b"old\n"})
     diff = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n"

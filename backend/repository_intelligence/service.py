@@ -11,6 +11,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 
+from auth.uuids import uuid7
 from db.types import RepositorySource
 from repository_intelligence import models
 from repository_intelligence.scanner import (
@@ -110,57 +111,67 @@ def persist_analysis(
         raise ValueError("intelligence_revision_mismatch")
     if row["status"] == "ready":
         return pack
+    # Generate identifiers up front so related rows can be built without a round
+    # trip per fact, and so each collection is written with one statement.
     file_ids: dict[str, UUID] = {}
+    fact_rows = []
     for item in pack.facts:
-        result = connection.execute(
-            sa.insert(models.fact)
-            .values(
-                owner_id=owner_id,
-                snapshot_id=snapshot_id,
-                kind=item.kind,
-                path=item.path,
-                symbol=item.symbol,
-                line_start=item.line,
-                line_end=item.line,
-                attributes_json={"value": item.value} if item.value else {},
-                evidence_digest=item.digest,
-            )
-            .returning(models.fact.c.id)
+        fact_id = uuid7()
+        file_ids.setdefault(item.path, fact_id)
+        fact_rows.append(
+            {
+                "id": fact_id,
+                "owner_id": owner_id,
+                "snapshot_id": snapshot_id,
+                "kind": item.kind,
+                "path": item.path,
+                "symbol": item.symbol,
+                "line_start": item.line,
+                "line_end": item.line,
+                "attributes_json": {"value": item.value} if item.value else {},
+                "evidence_digest": item.digest,
+            }
         )
-        file_ids.setdefault(item.path, result.scalar_one())
-    for edge in pack.edges:
-        if edge.from_path in file_ids and edge.to_path in file_ids:
-            connection.execute(
-                sa.insert(models.edge).values(
-                    owner_id=owner_id,
-                    snapshot_id=snapshot_id,
-                    from_fact_id=file_ids[edge.from_path],
-                    to_fact_id=file_ids[edge.to_path],
-                    relationship=edge.relationship,
-                    evidence_path=edge.from_path,
-                    evidence_line=edge.line,
-                )
-            )
+    if fact_rows:
+        connection.execute(sa.insert(models.fact), fact_rows)
+    edge_rows = [
+        {
+            "owner_id": owner_id,
+            "snapshot_id": snapshot_id,
+            "from_fact_id": file_ids[edge.from_path],
+            "to_fact_id": file_ids[edge.to_path],
+            "relationship": edge.relationship,
+            "evidence_path": edge.from_path,
+            "evidence_line": edge.line,
+        }
+        for edge in pack.edges
+        if edge.from_path in file_ids and edge.to_path in file_ids
+    ]
+    if edge_rows:
+        connection.execute(sa.insert(models.edge), edge_rows)
     seen_hits: set[tuple[str, int, str, int]] = set()
+    rule_hit_rows = []
     for hit in pack.rule_hits:
         hit_key = (hit.rule_id, hit.version, hit.path, hit.line)
         if hit_key in seen_hits:
             continue
         seen_hits.add(hit_key)
-        connection.execute(
-            sa.insert(models.rule_hit).values(
-                owner_id=owner_id,
-                snapshot_id=snapshot_id,
-                rule_id=hit.rule_id,
-                rule_version=hit.version,
-                path=hit.path,
-                line_start=hit.line,
-                severity="medium",
-                confidence="candidate",
-                metadata_json={"symbol": hit.symbol},
-                evidence_digest=hit.digest,
-            )
+        rule_hit_rows.append(
+            {
+                "owner_id": owner_id,
+                "snapshot_id": snapshot_id,
+                "rule_id": hit.rule_id,
+                "rule_version": hit.version,
+                "path": hit.path,
+                "line_start": hit.line,
+                "severity": "medium",
+                "confidence": "candidate",
+                "metadata_json": {"symbol": hit.symbol},
+                "evidence_digest": hit.digest,
+            }
         )
+    if rule_hit_rows:
+        connection.execute(sa.insert(models.rule_hit), rule_hit_rows)
     connection.execute(
         sa.update(models.snapshot)
         .where(models.snapshot.c.id == snapshot_id)

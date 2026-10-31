@@ -34,3 +34,49 @@ def test_compose_defines_a_test_database_and_dedicated_migration_runner() -> Non
     assert "      POSTGRES_DB: trace_test" in compose
     assert "  migrate-test:\n" in compose
     assert "TEST_MIGRATION_DATABASE_URL" in compose
+
+
+def test_production_vault_workers_start_through_their_token_loading_scripts() -> None:
+    import yaml
+
+    compose = yaml.safe_load((ROOT_DIRECTORY / "compose.production.yaml").read_text())
+
+    for name, service in compose["services"].items():
+        mounts_vault_token = any(
+            secret.get("source") == "vault_runtime_token"
+            for secret in service.get("secrets", [])
+        )
+        command = service.get("command")
+        if not mounts_vault_token or command is None:
+            continue
+        # Vault encryption reads AUTH_VAULT_TOKEN, which only the start scripts
+        # derive from the mounted AUTH_VAULT_TOKEN_FILE.
+        assert command[0].startswith("./start-"), name
+        assert (ROOT_DIRECTORY / "backend" / command[0]).is_file(), name
+
+
+def test_nginx_admits_the_largest_valid_local_source_upload() -> None:
+    import re
+
+    from resources.schemas import LocalSourceUpload
+
+    https = (ROOT_DIRECTORY / "config/nginx/https.conf").read_text()
+    block = re.search(
+        r"location = /api/v1/reviews \{(?P<body>[^}]*)\}", https, re.DOTALL
+    )
+    assert block is not None
+    limit = re.search(r"client_max_body_size (\d+)m;", block["body"])
+    assert limit is not None
+
+    entries = LocalSourceUpload.model_fields["entries"]
+    max_entries = next(
+        item.max_length for item in entries.metadata if hasattr(item, "max_length")
+    )
+    # The base64 budget enforced by the schema, then per entry a 1,024 character
+    # path (up to 4 bytes each in UTF-8) plus roughly 200 bytes of JSON structure.
+    base64_budget = 5_400_000
+    worst_case = base64_budget + max_entries * (1_024 * 4 + 200)
+
+    assert int(limit[1]) * 1024 * 1024 >= worst_case
+    # Every other backend route keeps NGINX's default request body limit.
+    assert https.count("client_max_body_size") == 1

@@ -249,6 +249,8 @@ class LocalSourceEntry(RequestModel):
     path: str = Field(min_length=1, max_length=1024)
     directory: bool
     content_base64: str | None = Field(default=None, max_length=350_000)
+    # Oversized or binary files carry their content hash instead of their bytes.
+    content_sha256: HashString | None = None
 
 
 class LocalSourceUpload(RequestModel):

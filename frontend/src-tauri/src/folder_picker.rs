@@ -71,12 +71,26 @@ pub struct NativeLocalSourceEntry {
     path: String,
     directory: bool,
     content_base64: Option<String>,
+    // Oversized and binary files are verified by content hash and never uploaded.
+    content_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NativeLocalSourceUpload {
     digest: String,
     entries: Vec<NativeLocalSourceEntry>,
+}
+
+const MAX_UPLOADED_FILE_BYTES: u64 = 256_000;
+const MAX_UPLOADED_TOTAL_BYTES: usize = 4_000_000;
+
+/// Git's heuristic plus UTF-8: reviewers can only read UTF-8 text.
+fn is_binary(bytes: &[u8]) -> bool {
+    bytes.contains(&0) || std::str::from_utf8(bytes).is_err()
+}
+
+fn hex_digest(digest: &[u8; 32]) -> String {
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn snapshot_upload(
@@ -109,30 +123,35 @@ fn snapshot_upload(
             return Err(snapshot_error());
         }
         let directory = entry.file_type().is_dir();
-        let content_base64 = if directory {
-            None
-        } else {
+        let mut content_base64 = None;
+        let mut content_sha256 = None;
+        if !directory {
             if !entry.file_type().is_file() {
                 return Err(snapshot_error());
             }
-            if entry.metadata().map_err(|_| snapshot_error())?.len() > 256_000 {
-                return Err(FolderPickerError {
-                    code: FolderPickerErrorCode::SnapshotUploadTooLarge,
-                });
+            let length = entry.metadata().map_err(|_| snapshot_error())?.len();
+            if length > MAX_UPLOADED_FILE_BYTES {
+                content_sha256 = Some(hex_digest(&digest_file(entry.path())?));
+            } else {
+                let bytes = fs::read(entry.path()).map_err(|_| snapshot_error())?;
+                if is_binary(&bytes) {
+                    content_sha256 = Some(sha256_hex(&bytes));
+                } else {
+                    total += bytes.len();
+                    if total > MAX_UPLOADED_TOTAL_BYTES {
+                        return Err(FolderPickerError {
+                            code: FolderPickerErrorCode::SnapshotUploadTooLarge,
+                        });
+                    }
+                    content_base64 = Some(base64::engine::general_purpose::STANDARD.encode(bytes));
+                }
             }
-            let bytes = fs::read(entry.path()).map_err(|_| snapshot_error())?;
-            total += bytes.len();
-            if bytes.len() > 256_000 || total > 4_000_000 {
-                return Err(FolderPickerError {
-                    code: FolderPickerErrorCode::SnapshotUploadTooLarge,
-                });
-            }
-            Some(base64::engine::general_purpose::STANDARD.encode(bytes))
-        };
+        }
         entries.push(NativeLocalSourceEntry {
             path,
             directory,
             content_base64,
+            content_sha256,
         });
     }
     entries.sort_by(|left, right| left.path.cmp(&right.path));
@@ -1268,7 +1287,82 @@ mod tests {
             .unwrap(),
             b"const value = 1;\n"
         );
-        fs::write(root.join("large.bin"), vec![b'x'; 256_001]).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn snapshot_upload_sends_oversized_and_binary_files_as_hashes_only() {
+        use super::{encode_record, sha256_hex};
+        use sha2::{Digest, Sha256};
+        let root = temporary_directory();
+        fs::write(root.join("a.ts"), b"const value = 1;\n").unwrap();
+        fs::write(root.join("large.txt"), vec![b'x'; 256_001]).unwrap();
+        fs::write(root.join("logo.png"), [0x89, b'P', b'N', b'G', 0, 1, 2]).unwrap();
+        fs::write(root.join("latin1.txt"), [b'c', b'a', b'f', 0xe9]).unwrap();
+        let snapshot = capture_snapshot(&root).unwrap();
+
+        let upload = super::snapshot_upload(&root, &snapshot.digest).unwrap();
+
+        let entry = |path: &str| {
+            upload
+                .entries
+                .iter()
+                .find(|item| item.path == path)
+                .unwrap()
+        };
+        assert!(entry("a.ts").content_base64.is_some());
+        assert!(entry("a.ts").content_sha256.is_none());
+        for (path, bytes) in [
+            ("large.txt", vec![b'x'; 256_001]),
+            ("logo.png", vec![0x89, b'P', b'N', b'G', 0, 1, 2]),
+            ("latin1.txt", vec![b'c', b'a', b'f', 0xe9]),
+        ] {
+            // Nothing is uploaded for these files, but their hash is preserved.
+            assert!(entry(path).content_base64.is_none(), "{path}");
+            assert_eq!(
+                entry(path).content_sha256.as_deref(),
+                Some(sha256_hex(&bytes).as_str()),
+                "{path}"
+            );
+        }
+
+        // The backend recomputes the manifest digest from these entries alone.
+        let mut hasher = Sha256::new();
+        hasher.update(b"trace-local-source-snapshot\0v1\0");
+        for item in &upload.entries {
+            let content_digest = if item.directory {
+                None
+            } else if let Some(encoded) = &item.content_base64 {
+                let bytes =
+                    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+                        .unwrap();
+                Some(Sha256::digest(bytes).into())
+            } else {
+                let hex = item.content_sha256.as_ref().unwrap();
+                let mut digest = [0_u8; 32];
+                for (index, byte) in digest.iter_mut().enumerate() {
+                    *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).unwrap();
+                }
+                Some(digest)
+            };
+            encode_record(
+                &mut hasher,
+                if item.directory { b'D' } else { b'F' },
+                &item.path,
+                content_digest,
+            );
+        }
+        assert_eq!(format!("{:x}", hasher.finalize()), snapshot.digest);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn snapshot_upload_still_bounds_the_total_uploaded_text() {
+        let root = temporary_directory();
+        for index in 0..17 {
+            fs::write(root.join(format!("file{index}.txt")), vec![b'x'; 250_000]).unwrap();
+        }
+        let snapshot = capture_snapshot(&root).unwrap();
         let error = super::snapshot_upload(&root, &snapshot.digest).unwrap_err();
         assert!(matches!(
             error.code,

@@ -22,7 +22,7 @@ from fastapi import FastAPI, Response
 from fastapi import Request as FastAPIRequest
 from fastapi.responses import RedirectResponse
 from jwt import PyJWKClient
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from redis.exceptions import RedisError
 
 from audit.emit import enqueue_audit
@@ -106,8 +106,10 @@ class GitHubConnectionStatusResponse(BaseModel):
 
 
 class DesktopOAuthExchangeRequest(BaseModel):
-    code: str
-    verifier: str
+    # Unauthenticated input: the ticket is an opaque token and the verifier is an
+    # RFC 7636 code verifier, so neither needs to be larger than these bounds.
+    code: str = Field(min_length=16, max_length=512)
+    verifier: str = Field(min_length=43, max_length=128)
 
 
 @dataclass(frozen=True)
@@ -416,6 +418,14 @@ def install_oauth_routes(
         }
         if nonce:
             parameters["nonce"] = nonce
+        audit(
+            request,
+            event="oauth",
+            outcome="accepted",
+            reason="authorization_started",
+            status_code=302,
+            provider=provider,
+        )
         return RedirectResponse(
             f"{configuration.authorize_url}?{urlencode(parameters)}", status_code=302
         )
@@ -424,8 +434,11 @@ def install_oauth_routes(
     async def desktop_oauth_exchange(
         request: FastAPIRequest, body: DesktopOAuthExchangeRequest, response: Response
     ):
+        # The provider is only known once the single-use ticket is consumed.
+        provider = "unknown"
         try:
             code, transaction = await consume_desktop_ticket(body.code)
+            provider = transaction.provider
             if _pkce_challenge(body.verifier) != transaction.verifier:
                 raise OAuthRejected("OAuth verifier is invalid")
             transaction = OAuthTransaction(
@@ -453,11 +466,35 @@ def install_oauth_routes(
                 result.tokens.session_id,
                 settings,
             )
-            return {"message": "Authenticated.", "csrf_token": csrf_token}
         except (OAuthRejected, ValueError, AuthError) as error:
+            audit(
+                request,
+                event="oauth",
+                outcome="rejected",
+                reason="callback_rejected",
+                status_code=401,
+                provider=provider,
+            )
             raise _authentication_failed() from error
         except (OAuthUnavailable, AuthenticationUnavailable) as error:
+            audit(
+                request,
+                event="oauth",
+                outcome="rejected",
+                reason="dependency_unavailable",
+                status_code=503,
+                provider=provider,
+            )
             raise _unavailable() from error
+        audit(
+            request,
+            event="oauth",
+            outcome="accepted",
+            reason="session_created",
+            status_code=200,
+            provider=provider,
+        )
+        return {"message": "Authenticated.", "csrf_token": csrf_token}
 
     @app.get("/auth/oauth/{provider}/start")
     async def oauth_start(
@@ -679,6 +716,14 @@ def install_oauth_routes(
             )
             if transaction.desktop:
                 ticket = await create_desktop_ticket(code, transaction)
+                audit(
+                    request,
+                    event="oauth",
+                    outcome="accepted",
+                    reason="desktop_ticket_issued",
+                    status_code=303,
+                    provider=provider,
+                )
                 return RedirectResponse(
                     f"trace://oauth/callback?{urlencode({'code': ticket})}",
                     status_code=303,

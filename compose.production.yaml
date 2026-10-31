@@ -310,7 +310,7 @@ services:
 
   repository-intelligence-worker:
     <<: [*backend-image, *app-hardening]
-    command: ["python", "-m", "repository_intelligence.worker"]
+    command: ["./start-repository-intelligence-worker.sh"]
     environment:
       <<: *vault-settings
       AUTH_ENVIRONMENT: production

@@ -10,7 +10,12 @@ export type NativeStoredSourceSnapshot = NativeSourceSnapshot & {
   snapshotId: string
   upload: {
     digest: string
-    entries: { path: string; directory: boolean; content_base64: string | null }[]
+    entries: {
+      path: string
+      directory: boolean
+      content_base64: string | null
+      content_sha256?: string | null
+    }[]
   }
 }
 

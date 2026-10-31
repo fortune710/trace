@@ -9,6 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
+from agents.execution.patches import GeneratedPatch
 from artifacts.models import LocalFileBackup
 from audit.outbox import AuditRecorder
 from auth.errors import (
@@ -34,6 +35,25 @@ from remediations.models import (
 from remediations.patch_store import PatchStore
 from resources.services import _raise_access, _remediation_response
 from reviews.models import Review, ReviewStatus
+
+
+def _preload_patch(
+    store: PatchStore, *, owner_id: UUID, remediation_id: UUID
+) -> tuple[GeneratedPatch | None, AuthError | None]:
+    """Decrypt the artifact outside any row lock, deferring its failure.
+
+    Decrypting calls the key provider and can record an integrity failure on the
+    remediation. Both must happen before the row is locked. A failure is returned
+    rather than raised so the caller reports it where it first needs the patch,
+    keeping earlier outcomes (not found, already published, wrong state) unchanged.
+    """
+    try:
+        return (
+            store.load_if_ready(owner_id=owner_id, remediation_id=remediation_id),
+            None,
+        )
+    except AuthError as error:
+        return None, error
 
 
 class RemediationPullRequestService:
@@ -91,6 +111,9 @@ class RemediationPullRequestService:
     def _publish(
         self, *, owner_id: UUID, remediation_id: UUID, request_id: str
     ) -> dict[str, object]:
+        patch, patch_error = _preload_patch(
+            self._patch_store, owner_id=owner_id, remediation_id=remediation_id
+        )
         with principal_transaction(self._engine, owner_id) as connection:
             connection.execute(
                 sa.text(
@@ -158,11 +181,14 @@ class RemediationPullRequestService:
                 raise ResourceConflict("review_not_completed")
             if context["project_source"] is not RepositorySource.GITHUB:
                 raise UnsupportedSource()
+            # Artifacts are immutable once ready, so re-checking the locked status
+            # confirms the patch loaded above is the one this remediation publishes.
             if context["generation_status"] != "ready":
                 raise ResourceConflict("remediation_patch_unavailable")
-            patch = self._patch_store.load(
-                owner_id=owner_id, remediation_id=remediation_id
-            )
+            if patch_error is not None:
+                raise patch_error
+            if patch is None:
+                raise ResourceConflict("remediation_patch_unavailable")
             if context[
                 "source_kind"
             ] is not RepositorySource.GITHUB or patch.source_snapshot != {
@@ -345,6 +371,9 @@ class LocalRemediationApplyService:
         files: list[dict[str, str]],
         request_id: str,
     ) -> dict[str, object]:
+        patch, patch_error = _preload_patch(
+            self._patch_store, owner_id=owner_id, remediation_id=remediation_id
+        )
         with principal_transaction(self._engine, owner_id) as connection:
             connection.execute(
                 sa.text(
@@ -414,9 +443,14 @@ class LocalRemediationApplyService:
                 raise ResourceConflict("finding_not_accepted")
             if context["review_status"] is not ReviewStatus.COMPLETED:
                 raise ResourceConflict("review_not_completed")
-            patch = self._patch_store.load(
-                owner_id=owner_id, remediation_id=remediation_id
-            )
+            # Artifacts are immutable once ready, so re-checking the locked status
+            # confirms the patch loaded above is the one being applied.
+            if context["generation_status"] != "ready":
+                raise ResourceConflict("remediation_patch_unavailable")
+            if patch_error is not None:
+                raise patch_error
+            if patch is None:
+                raise ResourceConflict("remediation_patch_unavailable")
             expected_files = {item.path: item for item in patch.files}
             expected_paths = set(expected_files)
             supplied_paths = {file["file_path"] for file in files}
