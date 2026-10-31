@@ -23,6 +23,7 @@ from remediations.models import (
 )
 from remediations.queueing import RemediationPullRequestMessageV1
 from reviews.dispatch import _open_connection, _persistent_properties
+from reviews.models import Review, ReviewStatus
 
 try:
     from pika.exceptions import AMQPConnectionError, AMQPError
@@ -320,11 +321,20 @@ class RemediationPullRequestOutboxWorker:
                             Finding.id == Remediation.finding_id,
                         ),
                     )
+                    .join(
+                        Review,
+                        sa.and_(
+                            Review.owner_id == Finding.owner_id,
+                            Review.id == Finding.review_id,
+                        ),
+                    )
                     .where(
                         Remediation.id == claim.remediation_id,
                         Remediation.owner_id == claim.owner_id,
                         Remediation.status == RemediationStatus.PROPOSED,
                         Finding.status == FindingStatus.ACCEPTED,
+                        Remediation.generation_status == "ready",
+                        Review.status == ReviewStatus.COMPLETED,
                     )
                 ).scalar_one_or_none()
                 is not None

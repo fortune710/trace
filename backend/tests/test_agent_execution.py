@@ -14,10 +14,15 @@ from agents.execution.agent import (
     Agent,
     FindingBatch,
     RemediationFindingOutput,
+    ReviewFindingBatch,
+    ReviewFindingOutput,
     ReviewTarget,
 )
 from agents.execution.executor import ReviewExecutionService, _source_failure_code
 from agents.execution.orchestrator import OrchestratorAgent
+from agents.execution.patches import (
+    PatchIntentBatch,
+)
 from agents.execution.redaction import redact_text
 from agents.execution.tools import (
     REPOSITORY_REVIEW_TOOLS,
@@ -34,15 +39,8 @@ from auth.errors import (
     ProviderUnavailable,
     RepositoryNotFound,
 )
-from db.types import RepositorySource, ReviewCategory
 from external_repositories.service import ReviewSourceFileError
-from findings.models import Finding
 from notifications.models import NotificationEventType
-from remediations.models import (
-    Remediation,
-    RemediationPullRequestOutboxJob,
-    RemediationStatus,
-)
 from reviews.config import AgentExecutionSettings
 from reviews.dispatch import _open_connection
 from reviews.models import ReviewStatus
@@ -92,7 +90,6 @@ def test_agent_has_repository_and_web_tools_by_default() -> None:
         "list_paths",
         "read_file",
         "search_code",
-        "validate_diff",
         "web_search",
     ]
 
@@ -106,7 +103,6 @@ def test_repository_tools_require_source_without_exposing_runtime_context() -> N
     assert set(schemas["list_paths"]) == {"source", "path_prefix", "max_results"}
     assert set(schemas["read_file"]) == {"source", "path"}
     assert set(schemas["search_code"]) == {"source", "query", "path_prefix"}
-    assert set(schemas["validate_diff"]) == {"source", "diff"}
     assert set(schemas["web_search"]) == {"query"}
     assert (
         "must match the target source" in schemas["list_paths"]["source"]["description"]
@@ -121,9 +117,6 @@ def test_repository_tools_require_source_without_exposing_runtime_context() -> N
     )
     assert "returned by list_paths" in schemas["read_file"]["path"]["description"]
     assert "Literal text" in schemas["search_code"]["query"]["description"]
-    assert (
-        "complete Git unified diff" in schemas["validate_diff"]["diff"]["description"]
-    )
     assert "public research query" in schemas["web_search"]["query"]["description"]
 
 
@@ -267,6 +260,30 @@ def test_validate_diff_rejects_structurally_malformed_hunks_before_git() -> None
     }
 
 
+def test_validate_diff_reports_invalid_hunk_line_location() -> None:
+    result = validate_diff_for_review(
+        source="github",
+        diff=(
+            "diff --git a/app.py b/app.py\n"
+            "--- a/app.py\n"
+            "+++ b/app.py\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "new-without-a-prefix\n"
+            "+new\n"
+        ),
+        context=_tool_context(),
+    )
+
+    assert result == {
+        "valid": False,
+        "level": "structure",
+        "reason": "invalid_hunk_line",
+        "line_offset": 6,
+        "hunk_number": 1,
+    }
+
+
 def test_validate_diff_runs_exact_revision_check_without_logging_source(caplog) -> None:
     class RepositoryAccess:
         def validate_diff(self, **kwargs):
@@ -407,7 +424,7 @@ def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -
         def invoke(self, inputs, *, context):
             messages.extend(inputs["messages"])
             assert context == _tool_context()
-            return {"structured_response": FindingBatch()}
+            return {"structured_response": ReviewFindingBatch()}
 
     def fake_create_agent(**kwargs):
         create_agent_arguments.update(kwargs)
@@ -428,12 +445,14 @@ def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -
 
     assert create_agent_arguments["model"] is model
     assert create_agent_arguments["tools"] == list(REPOSITORY_REVIEW_TOOLS)
-    assert create_agent_arguments["response_format"] is FindingBatch
+    assert create_agent_arguments["response_format"] is ReviewFindingBatch
     assert "approved tools" in create_agent_arguments["system_prompt"]
     assert (
         "Never include repository source text"
         in create_agent_arguments["system_prompt"]
     )
+    assert "candidate navigation hints only" in create_agent_arguments["system_prompt"]
+    assert "must never block the review" in create_agent_arguments["system_prompt"]
     assert (
         "research its plausible public impact"
         in create_agent_arguments["system_prompt"]
@@ -450,8 +469,11 @@ def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -
         in create_agent_arguments["system_prompt"]
     )
     assert "prompt_text" in create_agent_arguments["system_prompt"]
-    assert "diff --git" in create_agent_arguments["system_prompt"]
-    assert "files you inspected" in create_agent_arguments["system_prompt"]
+    assert (
+        "Do not produce patches or calculate hashes"
+        in create_agent_arguments["system_prompt"]
+    )
+    assert "after your findings are saved" in create_agent_arguments["system_prompt"]
     assert create_agent_arguments["context_schema"] is ToolExecutionContext
     assert messages[0].content == (
         "Review target:\n"
@@ -462,45 +484,82 @@ def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -
     )
 
 
-def test_agent_revalidates_every_final_diff_before_returning_it(monkeypatch) -> None:
-    class RepositoryAccess:
-        def validate_diff(self, **kwargs):
-            assert kwargs["diff"].startswith("diff --git")
-            return True
-
-    context = ToolExecutionContext(
-        owner_id=uuid4(),
-        source_kind="github",
-        source_identifier="123",
-        source_revision="a" * 40,
-        repository_access=RepositoryAccess(),  # type: ignore[arg-type]
-        review_id=uuid4(),
-    )
-
-    class LangChainAgent:
-        def invoke(self, _inputs, *, context: ToolExecutionContext):
-            assert context is not None
+def test_review_saves_output_without_requiring_a_patch(monkeypatch) -> None:
+    class Runtime:
+        def invoke(self, inputs, *, context):
             return {
-                "structured_response": FindingBatch(findings=[_remediation_finding()])
+                "structured_response": ReviewFindingBatch(
+                    findings=[
+                        ReviewFindingOutput(
+                            severity="high",
+                            title="Missing authorization",
+                            explanation="Evidence",
+                            prompt_text="Add authorization.",
+                        )
+                    ]
+                )
             }
 
-    monkeypatch.setattr(Agent, "_model", lambda _agent: object())
+    monkeypatch.setattr(Agent, "_model", lambda self: object())
     monkeypatch.setattr(
-        execution_agent_module,
-        "create_agent",
-        lambda **_kwargs: LangChainAgent(),
+        execution_agent_module, "create_agent", lambda **kwargs: Runtime()
     )
+    result = Agent(provider="openai", model="test").run(
+        review_target=ReviewTarget("github", "123", "a" * 40),
+        tool_context=_tool_context(),
+    )
+    assert len(result.findings) == 1
+    assert "patch_intents" not in result.findings[0].model_dump()
 
-    result = Agent(provider="openai", model="test-model").run(
+
+def test_diff_specialist_preserves_correction_history(monkeypatch) -> None:
+    from langchain_core.messages import AIMessage
+
+    from agents.execution.agent import DiffAgent
+    from agents.execution.patches import ReplaceEdit
+
+    context = _tool_context()
+    reference = context.register_source(path="app.py", content="old\n")
+    calls = []
+    submissions = []
+
+    class Runtime:
+        def invoke(self, inputs, *, context, config):
+            calls.append(inputs["messages"])
+            return {
+                "messages": [*inputs["messages"], AIMessage(content="candidate edits")],
+                "structured_response": PatchIntentBatch(
+                    edits=[
+                        ReplaceEdit(
+                            source_ref="wrong" if len(calls) == 1 else reference,
+                            start_line=1,
+                            end_line=1,
+                            replacement="new\n",
+                        )
+                    ]
+                ),
+            }
+
+    monkeypatch.setattr(Agent, "_model", lambda self: object())
+    monkeypatch.setattr(
+        execution_agent_module, "create_agent", lambda **kwargs: Runtime()
+    )
+    result = DiffAgent(provider="openai", model="test").run(
+        finding=ReviewFindingOutput(
+            severity="high", title="Issue", explanation="Evidence", prompt_text="Fix"
+        ),
         review_target=ReviewTarget(
-            source_kind="github",
-            source_identifier="123",
-            source_revision="a" * 40,
+            context.source_kind, context.source_identifier, context.source_revision
         ),
         tool_context=context,
+        on_submission=lambda **values: submissions.append(values),
     )
-
-    assert len(result.findings) == 1
+    assert len(calls) == 2
+    assert any(message.content == "candidate edits" for message in calls[1])
+    assert "invalid_source_reference" in calls[1][-1].content
+    assert submissions[0]["diagnostic"]["code"] == "invalid_source_reference"
+    assert submissions[1]["diagnostic"] is None
+    assert "@@ -1 +1 @@" in result.diff
 
 
 def test_orchestrator_runs_only_supplied_agents(monkeypatch) -> None:
@@ -557,194 +616,6 @@ def test_remediation_finding_output_requires_fix_content(field: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("finding_inserted", "expected_notification_count"),
-    [(True, 1), (False, 0)],
-)
-def test_new_findings_create_matching_remediations_and_deduplicated_findings_do_not(
-    monkeypatch, finding_inserted, expected_notification_count
-) -> None:
-    service = object.__new__(ReviewExecutionService)
-    owner_id = uuid4()
-    review_id = uuid4()
-    project_id = uuid4()
-    finding_id = uuid4()
-    remediation_id = uuid4()
-    notifications: list[dict[str, object]] = []
-    remediation_statements = []
-
-    generated_ids = iter((finding_id, remediation_id))
-    monkeypatch.setattr(
-        execution_executor_module,
-        "uuid7",
-        lambda: next(generated_ids),
-    )
-
-    class InsertResult:
-        def scalars(self):
-            return self
-
-        def all(self):
-            return [finding_id] if finding_inserted else []
-
-    class PreferenceResult:
-        def scalar_one_or_none(self):
-            return False
-
-    class ProjectResult:
-        def mappings(self):
-            return self
-
-        def one_or_none(self):
-            return None
-
-    class Connection:
-        select_count = 0
-
-        def execute(self, statement):
-            if not hasattr(statement, "table"):
-                self.select_count += 1
-                return PreferenceResult() if self.select_count == 1 else ProjectResult()
-            if statement.table.name == Remediation.__tablename__:
-                remediation_statements.append(statement)
-                return None
-            return InsertResult()
-
-    @contextmanager
-    def fake_principal_transaction(_engine, _owner_id):
-        yield Connection()
-
-    def fake_create_notification(_connection, **kwargs):
-        notifications.append(kwargs)
-
-    monkeypatch.setattr(
-        execution_executor_module,
-        "principal_transaction",
-        fake_principal_transaction,
-    )
-    monkeypatch.setattr(
-        execution_executor_module,
-        "create_notification",
-        fake_create_notification,
-    )
-
-    service._engine = object()
-    service._persist_findings(
-        owner_id=owner_id,
-        review=SimpleNamespace(id=review_id, project_id=project_id),
-        review_agent=SimpleNamespace(
-            id=uuid4(),
-            agent_id=uuid4(),
-            agent_specialization=ReviewCategory.SECURITY,
-        ),
-        finding_outputs=[
-            _remediation_finding(
-                prompt_text="Use token sk-example_secret_key_123456789012345 safely."
-            )
-        ],
-    )
-
-    assert len(notifications) == expected_notification_count
-    if notifications:
-        assert notifications == [
-            {
-                "owner_id": owner_id,
-                "event_type": NotificationEventType.FINDINGS_AVAILABLE,
-                "dedupe_key": f"review:{review_id}:findings_available",
-                "review_id": review_id,
-            }
-        ]
-    if finding_inserted:
-        assert len(remediation_statements) == 1
-        remediation_values = remediation_statements[0].compile().params
-        assert project_id in remediation_values.values()
-        assert finding_id in remediation_values.values()
-        assert remediation_id in remediation_values.values()
-        assert RemediationStatus.PROPOSED in remediation_values.values()
-        assert "sk-example_secret_key_123456789012345" not in str(remediation_values)
-        assert "[REDACTED_SECRET]" in str(remediation_values)
-    else:
-        assert remediation_statements == []
-
-
-def test_eligible_new_remediations_create_an_automatic_pr_outbox_record(
-    monkeypatch,
-) -> None:
-    service = object.__new__(ReviewExecutionService)
-    owner_id, review_id, project_id, finding_id, remediation_id, outbox_id = (
-        uuid4(),
-        uuid4(),
-        uuid4(),
-        uuid4(),
-        uuid4(),
-        uuid4(),
-    )
-    statements = []
-    generated_ids = iter((finding_id, remediation_id, outbox_id))
-    monkeypatch.setattr(execution_executor_module, "uuid7", lambda: next(generated_ids))
-
-    class InsertResult:
-        def scalars(self):
-            return self
-
-        def all(self):
-            return [finding_id]
-
-    class PreferenceResult:
-        def scalar_one_or_none(self):
-            return True
-
-    class ProjectResult:
-        def mappings(self):
-            return self
-
-        def one_or_none(self):
-            return {
-                "source": RepositorySource.GITHUB,
-                "external_repository_id": "123",
-                "branch_name": "main",
-            }
-
-    class Connection:
-        select_count = 0
-
-        def execute(self, statement):
-            statements.append(statement)
-            if not hasattr(statement, "table"):
-                self.select_count += 1
-                return PreferenceResult() if self.select_count == 1 else ProjectResult()
-            if statement.table.name == Finding.__tablename__:
-                return InsertResult()
-            return None
-
-    @contextmanager
-    def fake_principal_transaction(_engine, _owner_id):
-        yield Connection()
-
-    monkeypatch.setattr(
-        execution_executor_module,
-        "principal_transaction",
-        fake_principal_transaction,
-    )
-    monkeypatch.setattr(
-        execution_executor_module, "create_notification", lambda *_a, **_k: None
-    )
-    service._engine = object()
-    service._persist_findings(
-        owner_id=owner_id,
-        review=SimpleNamespace(id=review_id, project_id=project_id),
-        review_agent=SimpleNamespace(
-            id=uuid4(), agent_id=uuid4(), agent_specialization=ReviewCategory.SECURITY
-        ),
-        finding_outputs=[_remediation_finding()],
-    )
-
-    assert any(
-        RemediationPullRequestOutboxJob.__tablename__ in str(statement)
-        for statement in statements
-    )
-
-
-@pytest.mark.parametrize(
     ("error", "failure_code"),
     [
         (GithubAuthorizationRequired(), "source_authorization_failed"),
@@ -759,7 +630,7 @@ def test_repository_tool_failures_have_source_specific_codes(
     assert _source_failure_code(error) == failure_code
 
 
-def test_local_review_does_not_open_github_source_access() -> None:
+def test_local_review_does_not_open_github_source_access(monkeypatch) -> None:
     service = object.__new__(ReviewExecutionService)
     service._repository_service = SimpleNamespace(
         open_review_github_source_access=lambda **_kwargs: pytest.fail(
@@ -774,15 +645,23 @@ def test_local_review_does_not_open_github_source_access() -> None:
     )
     review = SimpleNamespace(
         source_kind=SimpleNamespace(value="local"),
+        id=uuid4(),
         source_identifier="workspace-123",
         source_revision="revision-123",
     )
 
+    reader = object()
+    service._engine = object()
+    service._patch_store = SimpleNamespace(cipher=object())
+    monkeypatch.setattr(
+        "repository_intelligence.local_source.LocalReviewSourceAccess.open",
+        lambda **kwargs: reader,
+    )
     with service._open_review_source_access(  # type: ignore[arg-type]
         owner_id=uuid4(),
         review=review,
     ) as repository_access:
-        assert repository_access is None
+        assert repository_access is reader
 
 
 def test_claiming_a_queued_review_creates_a_started_notification(monkeypatch) -> None:

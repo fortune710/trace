@@ -11,7 +11,7 @@ import json
 import logging
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 from uuid import UUID
 
@@ -21,10 +21,10 @@ from pydantic import BaseModel, Field, SecretStr
 from tavily import TavilyClient  # type: ignore[import-untyped]
 
 from agents.execution.redaction import redact_text
+from agents.execution.source import SourceReader, SourceRegistry, source_lines
 from auth.errors import RepositoryNotFound
 from external_repositories.service import (
     GitHubRequestLogContext,
-    ReviewGitHubSourceAccess,
     ReviewSourceFileError,
     _is_safe_patch,
 )
@@ -134,9 +134,11 @@ class WebSearchInput(BaseModel):
     )
 
 
-_DIFF_HEADER = re.compile(r"^diff --git a/([^\s]+) b/([^\s]+)$")
-_OLD_FILE_HEADER = re.compile(r"^--- (?:a/[^\s]+|/dev/null)$")
-_NEW_FILE_HEADER = re.compile(r"^\+\+\+ (?:b/[^\s]+|/dev/null)$")
+_DIFF_HEADER = re.compile(
+    r'^diff --git (?:a/.+ b/.+|"(?:[^"\\]|\\.)*" "(?:[^"\\]|\\.)*")$'
+)
+_OLD_FILE_HEADER = re.compile(r'^--- (?:a/.+|/dev/null|"a/(?:[^"\\]|\\.)*")$')
+_NEW_FILE_HEADER = re.compile(r'^\+\+\+ (?:b/.+|/dev/null|"b/(?:[^"\\]|\\.)*")$')
 _HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?$")
 
 
@@ -147,6 +149,7 @@ def _structure_error(diff: str) -> str | None:
     saw_old_header = False
     saw_new_header = False
     saw_hunk = False
+    empty_creation = False
     expected_old: int | None = None
     expected_new: int | None = None
     actual_old = 0
@@ -159,19 +162,21 @@ def _structure_error(diff: str) -> str | None:
             return "hunk_line_count_mismatch"
         return None
 
-    for line in diff.splitlines():
+    for line in diff.removesuffix("\n").split("\n"):
         if _DIFF_HEADER.fullmatch(line):
             error = finish_hunk()
             if error is not None:
                 return error
             if file_count and (
-                not saw_old_header or not saw_new_header or not saw_hunk
+                (not saw_old_header or not saw_new_header or not saw_hunk)
+                and not (empty_creation and not saw_old_header and not saw_new_header)
             ):
                 return "incomplete_file_section"
             file_count += 1
             saw_old_header = False
             saw_new_header = False
             saw_hunk = False
+            empty_creation = False
             expected_old = None
             expected_new = None
             actual_old = 0
@@ -179,6 +184,8 @@ def _structure_error(diff: str) -> str | None:
             continue
         if file_count == 0:
             return "missing_diff_header"
+        if line == "new file mode 100644" and expected_old is None:
+            empty_creation = True
         if expected_old is None and line.startswith("--- "):
             if saw_old_header or saw_new_header or not _OLD_FILE_HEADER.fullmatch(line):
                 return "invalid_old_file_header"
@@ -220,8 +227,32 @@ def _structure_error(diff: str) -> str | None:
         return error
     if file_count == 0:
         return "missing_diff_header"
-    if not saw_old_header or not saw_new_header or not saw_hunk:
+    if (not saw_old_header or not saw_new_header or not saw_hunk) and not (
+        empty_creation and not saw_old_header and not saw_new_header
+    ):
         return "incomplete_file_section"
+    return None
+
+
+def _invalid_hunk_location(diff: str) -> tuple[int, int] | None:
+    """Return the physical line and hunk number for the first malformed hunk line."""
+
+    hunk_number = 0
+    in_hunk = False
+    for line_number, line in enumerate(diff.removesuffix("\n").split("\n"), start=1):
+        if _HUNK_HEADER.fullmatch(line):
+            hunk_number += 1
+            in_hunk = True
+            continue
+        if _DIFF_HEADER.fullmatch(line):
+            in_hunk = False
+            continue
+        if (
+            in_hunk
+            and line != "\\ No newline at end of file"
+            and (not line or line[0] not in {" ", "+", "-"})
+        ):
+            return line_number, hunk_number
     return None
 
 
@@ -233,11 +264,37 @@ class ToolExecutionContext:
     source_kind: str
     source_identifier: str
     source_revision: str
-    repository_access: ReviewGitHubSourceAccess | None
+    repository_access: SourceReader | None
     review_id: UUID
     review_agent_id: UUID | None = None
     attempt_id: UUID | None = None
     tavily_api_key: SecretStr | None = None
+    read_paths: set[str] = field(default_factory=set, repr=False)
+    source_registry: SourceRegistry = field(default_factory=SourceRegistry, repr=False)
+
+    def source_scope(self) -> tuple[str, ...]:
+        return (
+            str(self.owner_id),
+            str(self.review_id),
+            str(self.review_agent_id),
+            str(self.attempt_id),
+            self.source_kind,
+            self.source_identifier,
+            self.source_revision,
+        )
+
+    def register_source(self, *, path: str, content: str) -> str:
+        return self.source_registry.register(
+            path=path,
+            revision=self.source_revision,
+            content=content,
+            scope=self.source_scope(),
+        )
+
+    def source_reader(self) -> SourceReader:
+        if self.repository_access is None:
+            raise ToolException("source_execution_unsupported")
+        return self.repository_access
 
     def github_log_context(self) -> GitHubRequestLogContext:
         return GitHubRequestLogContext(
@@ -246,7 +303,7 @@ class ToolExecutionContext:
             attempt_id=self.attempt_id,
         )
 
-    def github_repository_access(self) -> ReviewGitHubSourceAccess:
+    def github_repository_access(self) -> SourceReader:
         """Return the configured GitHub reader for a GitHub tool invocation."""
         if self.repository_access is None:
             raise ToolException("source_execution_unsupported")
@@ -365,7 +422,7 @@ def list_paths(
     )
     _validate_source(source=source, runtime=runtime)
     bounded_max_results = min(max(max_results, 1), _MAX_PATH_RESULTS)
-    if source == "github":
+    if source in {"github", "local"}:
         try:
             paths, truncated, skipped_paths = (
                 context.github_repository_access().list_paths(
@@ -417,7 +474,7 @@ def read_file(
     source: ReviewSource,
     path: str,
     runtime: ToolRuntime,
-) -> dict[str, str]:
+) -> dict[str, object]:
     """Read one repository-relative UTF-8 text file from the immutable target.
 
     Supply the target's source kind and a path returned by ``list_paths``.
@@ -430,7 +487,7 @@ def read_file(
         arguments={"source": source, "path": path},
     )
     _validate_source(source=source, runtime=runtime)
-    if source == "github":
+    if source in {"github", "local"}:
         try:
             content = context.github_repository_access().read_file(
                 path=path,
@@ -461,7 +518,24 @@ def read_file(
             arguments={"source": source, "path": path},
             result={"content_bytes": len(content.encode("utf-8"))},
         )
-        return {"path": path, "content": content}
+        context.read_paths.add(path)
+        reference = context.register_source(path=path, content=content)
+        lines = source_lines(content)
+        return {
+            "path": path,
+            "content": content,
+            "source_ref": reference,
+            "line_count": len(lines),
+            "numbered_content": "".join(
+                f"{index}: {line}" + ("\n" if not line.endswith("\n") else "")
+                for index, line in enumerate(lines, 1)
+            ),
+            "line_endings": {
+                "crlf": content.count("\r\n"),
+                "lf": content.count("\n") - content.count("\r\n"),
+                "terminal_newline": content.endswith("\n"),
+            },
+        }
     if source == "local":
         pass
     raise ToolException("source_execution_unsupported")
@@ -495,7 +569,7 @@ def search_code(
     normalized_query = query.strip()
     if not normalized_query:
         raise ValueError("search_query_required")
-    if source == "github":
+    if source in {"github", "local"}:
         try:
             paths, truncated, skipped_paths = (
                 context.github_repository_access().list_paths(
@@ -603,10 +677,19 @@ def validate_diff_for_review(
         raise ToolException("source_mismatch")
     structure_error = _structure_error(diff)
     if structure_error is not None:
-        return {"valid": False, "level": "structure", "reason": structure_error}
+        result: dict[str, object] = {
+            "valid": False,
+            "level": "structure",
+            "reason": structure_error,
+        }
+        if structure_error == "invalid_hunk_line":
+            location = _invalid_hunk_location(diff)
+            if location is not None:
+                result["line_offset"], result["hunk_number"] = location
+        return result
     if not _is_safe_patch(diff):
         return {"valid": False, "level": "safety", "reason": "unsafe_patch"}
-    if source != "github":
+    if source not in {"github", "local"}:
         raise ToolException("source_execution_unsupported")
     if not context.github_repository_access().validate_diff(
         diff=diff,
@@ -743,7 +826,6 @@ REPOSITORY_REVIEW_TOOLS = (
     list_paths,
     read_file,
     search_code,
-    validate_diff,
     web_search,
 )
 

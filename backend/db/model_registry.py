@@ -24,10 +24,14 @@ from issue_tracking.models import IssueLink
 from local_projects.models import LocalProjectHandle
 from notifications.models import Notification
 from projects.models import Project
+from remediations import patch_models as remediation_patch_models  # noqa: F401
 from remediations.models import (
     Remediation,
     RemediationPullRequestJob,
     RemediationPullRequestOutboxJob,
+)
+from repository_intelligence import (
+    models as repository_intelligence_models,  # noqa: F401
 )
 from reviews.models import (
     Review,

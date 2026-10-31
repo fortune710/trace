@@ -2,6 +2,8 @@ from db import model_registry
 from db.base import Base
 
 EXPECTED_TABLES = {
+    "private.remediation_patch_artifacts",
+    "private.remediation_generation_attempts",
     "auth.email_delivery_jobs",
     "auth.email_verification_tokens",
     "auth.identities",
@@ -14,6 +16,11 @@ EXPECTED_TABLES = {
     "private.credential_reencryption_items",
     "private.credential_reencryption_runs",
     "private.credentials",
+    "private.repository_intelligence_snapshots",
+    "private.repository_intelligence_facts",
+    "private.repository_intelligence_edges",
+    "private.repository_static_rule_hits",
+    "private.local_review_source_snapshots",
     "private.remediation_pull_request_jobs",
     "private.remediation_pull_request_outbox_jobs",
     "private.review_dispatch_jobs",

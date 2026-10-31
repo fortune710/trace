@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 import sqlalchemy as sa
 
+from agents.execution.patches import build_patch
 from artifacts.models import LocalFileBackup
+from auth.credentials import CredentialCipher
 from db.rls import principal_transaction
 from findings.models import Finding, FindingStatus
 from remediations.models import Remediation, RemediationStatus
+from remediations.patch_store import PatchStore
 from reviews.models import Review, ReviewStatus
 
 pytestmark = pytest.mark.integration
@@ -17,8 +22,8 @@ def _files(remediation_id: object, *paths: str) -> list[dict[str, str]]:
         {
             "file_path": path,
             "backup_reference": f"local-remediation-backups/{remediation_id}/{path}",
-            "source_hash": "a" * 64,
-            "applied_hash": "b" * 64,
+            "source_hash": hashlib.sha256(b"before\n").hexdigest(),
+            "applied_hash": hashlib.sha256(b"after\n").hexdigest(),
         }
         for path in paths
     ]
@@ -53,6 +58,21 @@ def _prepare_accepted_multi_file_remediation(
                 )
             )
         )
+
+    patch = build_patch(
+        original={"src/first.txt": "before\n", "src/second.txt": "before\n"},
+        updated={"src/first.txt": "after\n", "src/second.txt": "after\n"},
+        snapshot={
+            "source_kind": "local",
+            "source_identifier": "integration-local-source",
+            "revision": "a" * 64,
+        },
+    )
+    PatchStore(
+        integration_engine, CredentialCipher(key=b"c" * 32, key_version="local-v1")
+    ).save(
+        owner_id=account.user_id, remediation_id=graph["remediation_id"], patch=patch
+    )
 
 
 def test_owner_records_every_local_file_and_audits_once(
@@ -96,8 +116,14 @@ def test_owner_records_every_local_file_and_audits_once(
         "src/first.txt",
         "src/second.txt",
     }
-    assert all(backup["source_hash"] == bytes.fromhex("a" * 64) for backup in backups)
-    assert all(backup["applied_hash"] == bytes.fromhex("b" * 64) for backup in backups)
+    assert all(
+        backup["source_hash"] == hashlib.sha256(b"before\n").digest()
+        for backup in backups
+    )
+    assert all(
+        backup["applied_hash"] == hashlib.sha256(b"after\n").digest()
+        for backup in backups
+    )
     local_apply_events = [
         event
         for event in recording_audit_recorder.events

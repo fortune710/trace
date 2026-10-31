@@ -1,0 +1,9 @@
+# Repository intelligence
+
+Each review points to an immutable `repository_intelligence_snapshots` row keyed by owner, source kind, source identifier, source revision, and analyzer version. GitHub project import and review submission insert a pending row. The separate `repository-intelligence-worker` reads the pinned commit and writes facts, edges, and rule hits. It retries a stale or failed attempt up to three times. A review can start before analysis is ready; in that case the agent uses the bounded tool mapping fallback.
+
+Desktop reviews export the copied immutable snapshot, not the live folder. The backend recomputes its `sha256-directory-manifest-v1` digest, encrypts the bounded source with the configured credential cipher, and stores the ciphertext in `private.local_review_source_snapshots`. The intelligence tables contain paths and content digests, never raw source. The local source adapter decrypts only the review's exact revision for `list_paths`, `read_file`, `search_code`, and `validate_diff`.
+
+`scanner.py` inventories supported text files, parses JavaScript and TypeScript syntax with Tree-sitter and Python with `ast`, and emits normalized candidate signals. Rules are versioned in `rules.py`. Rule hits and the selected path pack guide inspection; the reviewer must read source through approved tools and validate a diff before submitting a finding. A ready pack initializes up to three surfaces before the first model call. Each surface permits twelve exploration calls, followed by a decision-only turn.
+
+The desktop upload is limited to 3,000 entries, 256 KB per file, and 4 MB total source bytes. Generated and dependency paths are excluded from scanning. GitHub analysis currently reads at most 500 eligible paths and records truncation in the snapshot summary. Bump `ANALYZER_VERSION` whenever extraction or rule semantics change so old analyses are never silently reused.

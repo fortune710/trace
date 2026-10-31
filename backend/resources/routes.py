@@ -49,6 +49,7 @@ from resources.schemas import (
     CredentialCreate,
     CredentialPage,
     CredentialResponse,
+    ExecutablePatchResponse,
     FindingPage,
     FindingResponse,
     FindingUpdate,
@@ -102,7 +103,11 @@ def install_resource_routes(
 
     @lru_cache
     def review_service() -> ReviewService:
-        return ReviewService(get_engine(), repository_service=repository_service())
+        return ReviewService(
+            get_engine(),
+            repository_service=repository_service(),
+            snapshot_cipher=credential_cipher_from_settings(settings),
+        )
 
     @lru_cache
     def finding_service() -> FindingService:
@@ -110,7 +115,17 @@ def install_resource_routes(
 
     @lru_cache
     def artifact_service() -> ArtifactService:
-        return ArtifactService(get_engine())
+        from remediations.patch_store import PatchStore
+
+        return ArtifactService(
+            get_engine(),
+            PatchStore(
+                get_engine(),
+                lambda: credential_cipher_from_settings(
+                    settings, validate_authentication=False
+                ),
+            ),
+        )
 
     @lru_cache
     def credential_service() -> CredentialService:
@@ -440,6 +455,17 @@ def install_resource_routes(
     ) -> list[dict[str, object]]:
         return artifact_service().list_remediations(
             owner_id=principal.user_id, finding_id=finding_id
+        )
+
+    @app.get(
+        "/remediations/{remediation_id}/patch", response_model=ExecutablePatchResponse
+    )
+    def executable_patch(
+        remediation_id: UUID, principal: CurrentPrincipal, response: Response
+    ):
+        response.headers["Cache-Control"] = "no-store"
+        return artifact_service().get_executable_patch(
+            owner_id=principal.user_id, remediation_id=remediation_id
         )
 
     @app.get("/remediations/{remediation_id}", response_model=RemediationResponse)

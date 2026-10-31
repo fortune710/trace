@@ -308,6 +308,30 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
+  repository-intelligence-worker:
+    <<: [*backend-image, *app-hardening]
+    command: ["python", "-m", "repository_intelligence.worker"]
+    environment:
+      <<: *vault-settings
+      AUTH_ENVIRONMENT: production
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD}@postgres:5432/trace
+    secrets:
+      - source: vault_runtime_token
+        target: /run/vault/trace-backend-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    networks:
+      - edge
+      - data
+      - secrets
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    pids_limit: 64
+    restart: unless-stopped
+
   review-execution-worker:
     <<: [*backend-image, *app-hardening]
     command: ["./start-review-execution-worker.sh"]

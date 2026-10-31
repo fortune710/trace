@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import re
+import hashlib
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -31,6 +31,7 @@ from remediations.models import (
     RemediationPullRequestJob,
     RemediationStatus,
 )
+from remediations.patch_store import PatchStore
 from resources.services import _raise_access, _remediation_response
 from reviews.models import Review, ReviewStatus
 
@@ -41,10 +42,12 @@ class RemediationPullRequestService:
         engine: Engine,
         repository_service: RepositoryService,
         audit_recorder: AuditRecorder | None = None,
+        patch_store: PatchStore | None = None,
     ) -> None:
         self._engine = engine
         self._repository_service = repository_service
         self._audit_recorder = audit_recorder
+        self._patch_store = patch_store or PatchStore(engine)
 
     def create(
         self, *, owner_id: UUID, remediation_id: UUID, request_id: str
@@ -104,6 +107,8 @@ class RemediationPullRequestService:
                         Review.status.label("review_status"),
                         Review.id.label("review_id"),
                         Review.source_revision,
+                        Review.source_kind,
+                        Review.source_identifier,
                         Project.source.label("project_source"),
                         Project.external_repository_id,
                         Project.branch_name,
@@ -153,17 +158,32 @@ class RemediationPullRequestService:
                 raise ResourceConflict("review_not_completed")
             if context["project_source"] is not RepositorySource.GITHUB:
                 raise UnsupportedSource()
+            if context["generation_status"] != "ready":
+                raise ResourceConflict("remediation_patch_unavailable")
+            patch = self._patch_store.load(
+                owner_id=owner_id, remediation_id=remediation_id
+            )
+            if context[
+                "source_kind"
+            ] is not RepositorySource.GITHUB or patch.source_snapshot != {
+                "source_kind": context["source_kind"].value,
+                "source_identifier": context["source_identifier"],
+                "revision": context["source_revision"],
+            }:
+                raise ResourceConflict("remediation_patch_revision_mismatch")
             repository_id = context["external_repository_id"]
             branch_name = context["branch_name"]
             if not isinstance(repository_id, str) or not isinstance(branch_name, str):
                 raise ResourceConflict("project_repository_invalid")
+            if repository_id != context["source_identifier"]:
+                raise ResourceConflict("project_repository_changed")
             published = self._repository_service.publish_remediation_pull_request(
                 owner_id=owner_id,
                 repository_identifier=repository_id,
                 source_revision=str(context["source_revision"]),
                 base_branch=branch_name,
                 remediation_id=remediation_id,
-                diff=str(context["proposed_diff"]),
+                diff=patch.diff,
                 finding_title=str(context["finding_title"]),
             )
             pull_request: dict[str, object] = {
@@ -308,10 +328,14 @@ class LocalRemediationApplyService:
     """
 
     def __init__(
-        self, engine: Engine, audit_recorder: AuditRecorder | None = None
+        self,
+        engine: Engine,
+        audit_recorder: AuditRecorder | None = None,
+        patch_store: PatchStore | None = None,
     ) -> None:
         self._engine = engine
         self._audit_recorder = audit_recorder
+        self._patch_store = patch_store or PatchStore(engine)
 
     def complete(
         self,
@@ -390,7 +414,11 @@ class LocalRemediationApplyService:
                 raise ResourceConflict("finding_not_accepted")
             if context["review_status"] is not ReviewStatus.COMPLETED:
                 raise ResourceConflict("review_not_completed")
-            expected_paths = _remediation_diff_paths(str(context["proposed_diff"]))
+            patch = self._patch_store.load(
+                owner_id=owner_id, remediation_id=remediation_id
+            )
+            expected_files = {item.path: item for item in patch.files}
+            expected_paths = set(expected_files)
             supplied_paths = {file["file_path"] for file in files}
             if (
                 supplied_paths != expected_paths
@@ -399,6 +427,17 @@ class LocalRemediationApplyService:
                     file["backup_reference"]
                     != f"local-remediation-backups/{remediation_id}/{file['file_path']}"
                     for file in files
+                )
+                or any(
+                    file["applied_hash"]
+                    != expected_files[file["file_path"]].result_sha256
+                    or file["source_hash"]
+                    != (
+                        expected_files[file["file_path"]].original_sha256
+                        or hashlib.sha256(b"").hexdigest()
+                    )
+                    for file in files
+                    if file["file_path"] in expected_files
                 )
             ):
                 raise ResourceConflict("remediation_file_mismatch")
@@ -455,26 +494,12 @@ class LocalRemediationApplyService:
 
 
 def _remediation_diff_paths(diff: str) -> set[str]:
-    paths: set[str] = set()
-    for line in diff.splitlines():
-        match = re.fullmatch(r"diff --git a/([^\s]+) b/([^\s]+)", line)
-        if match is None:
-            continue
-        old_path, new_path = match.groups()
-        if (
-            old_path != new_path
-            or not old_path
-            or old_path.startswith("/")
-            or "\\" in old_path
-            or any(segment in {"", ".", ".."} for segment in old_path.split("/"))
-        ):
-            raise ResourceConflict("remediation_file_mismatch")
-        if old_path in paths:
-            raise ResourceConflict("remediation_file_mismatch")
-        paths.add(old_path)
-    if not paths:
-        raise ResourceConflict("remediation_file_mismatch")
-    return paths
+    from agents.execution.source import patch_paths
+
+    try:
+        return set(patch_paths(diff))
+    except ValueError:
+        raise ResourceConflict("remediation_file_mismatch") from None
 
 
 __all__ = ["LocalRemediationApplyService", "RemediationPullRequestService"]

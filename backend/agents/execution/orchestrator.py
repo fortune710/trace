@@ -8,7 +8,7 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-from agents.execution.agent import Agent, FindingBatch, ReviewTarget
+from agents.execution.agent import Agent, ReviewFindingBatch, ReviewTarget
 from agents.execution.tools import ToolExecutionContext
 
 
@@ -18,7 +18,7 @@ class ReviewGraphState(TypedDict):
     review_target: ReviewTarget
     tool_context: ToolExecutionContext
     agents: tuple[Agent, ...]
-    results: Annotated[list[FindingBatch], operator.add]
+    results: Annotated[list[ReviewFindingBatch], operator.add]
 
 
 class ReviewSubagentState(TypedDict):
@@ -45,7 +45,7 @@ class OrchestratorAgent:
         review_target: ReviewTarget,
         tool_context: ToolExecutionContext,
         agents: tuple[Agent, ...],
-    ) -> list[FindingBatch]:
+    ) -> list[ReviewFindingBatch]:
         """Delegate the prepared source to exactly the selected runtime agents."""
         state = self._graph.invoke(
             {
@@ -75,7 +75,7 @@ class OrchestratorAgent:
     @staticmethod
     def _run_review_subagent(
         state: ReviewSubagentState,
-    ) -> dict[str, list[FindingBatch]]:
+    ) -> dict[str, list[ReviewFindingBatch]]:
         """Return this subagent's validated findings to the orchestrator."""
         return {
             "results": [

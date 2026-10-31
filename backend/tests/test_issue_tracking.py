@@ -463,3 +463,24 @@ def test_issue_creation_rejection_audit_event_keeps_provider_and_no_ticket_conte
     }
     assert "token" not in repr(events[0]).casefold()
     assert "body_markdown" not in repr(events[0])
+
+
+def test_issue_payload_omits_the_diff_section_while_a_patch_is_unavailable() -> None:
+    payload = _payload(
+        finding={
+            "id": uuid4(),
+            "title": "Risk",
+            "explanation": "Evidence",
+            "severity": "high",
+            "category": "security",
+            "evidence": None,
+            "source_location": None,
+            "recommendation": None,
+        },
+        review={"id": uuid4(), "source_revision": "abc123"},
+        remediation={"prompt_text": "Fix it", "proposed_diff": ""},
+    )
+
+    assert "## Proposed implementation prompt" in payload.body_markdown
+    assert "## Proposed diff" not in payload.body_markdown
+    assert "```diff" not in payload.body_markdown
