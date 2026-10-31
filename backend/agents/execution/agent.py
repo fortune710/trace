@@ -31,6 +31,7 @@ from agents.execution.patches import (
     PatchIntentBatch,
     generate_patch,
 )
+from agents.execution.review_focus import coverage_instructions
 from agents.execution.tools import (
     FINDING_EVIDENCE_MARKDOWN_INSTRUCTIONS,
     REPOSITORY_REVIEW_TOOLS,
@@ -295,7 +296,11 @@ class Agent:
         category = self.metadata.get("category", "engineering")
         personality = self.metadata.get("personality") or "Be precise and evidence-led."
         system_prompt = (
-            f"You are Trace's {category} review agent. {personality}\n"
+            f"You are Trace's {category} review agent.\n"
+            f"Reporting style: {personality}\n"
+            "The reporting style only shapes how you word, order, and explain "
+            "findings. It never narrows what you inspect or what you report; your "
+            "scope and coverage requirements below always take precedence.\n"
             "Repository intelligence and AST signals, when provided, are candidate "
             "navigation hints only. Use them to prioritize surfaces, but do not treat "
             "a fact or rule hit as evidence, a completed finding, or a required conclusion. "
@@ -317,12 +322,7 @@ class Agent:
             "external precedent from this project's verified behavior and include "
             "the supporting result URL when it materially informs the finding. "
             "Return only concrete launch risks. "
-            "Complete a coverage pass before you conclude. First list the repository "
-            "structure and identify its entry points, authentication and authorization "
-            "code, data access, external integrations, configuration, and secrets "
-            "handling. Read the files that implement each surface that exists, and run "
-            "targeted code searches for risky patterns in those surfaces. A short "
-            "inspection is not enough to conclude that there is no risk. "
+            f"{coverage_instructions(category)}"
             "Each finding must include evidence and a repository-relative source "
             f"location when available. {FINDING_EVIDENCE_MARKDOWN_INSTRUCTIONS}"
             "For every finding, also "

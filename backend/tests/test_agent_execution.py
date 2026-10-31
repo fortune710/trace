@@ -470,6 +470,11 @@ def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -
     )
     assert "prompt_text" in create_agent_arguments["system_prompt"]
     assert (
+        "Reporting style: Be precise and evidence-led."
+        in create_agent_arguments["system_prompt"]
+    )
+    assert "never narrows what you inspect" in create_agent_arguments["system_prompt"]
+    assert (
         "Do not produce patches or calculate hashes"
         in create_agent_arguments["system_prompt"]
     )
