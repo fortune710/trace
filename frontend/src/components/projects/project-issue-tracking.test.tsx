@@ -145,6 +145,56 @@ describe("ProjectIssueTracking", () => {
     )
   })
 
+  it("renders GitHub repository states independently from its destination", () => {
+    vi.mocked(useProjectIssueTracking).mockReturnValue({
+      data: { connected_projects: [] },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useProjectIssueTracking>)
+    vi.mocked(useLinearTeams).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      isSuccess: false,
+    } as unknown as ReturnType<typeof useLinearTeams>)
+    vi.mocked(useLinearProjects).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useLinearProjects>)
+    vi.mocked(useUpdateProjectIssueTracking).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    } as unknown as ReturnType<typeof useUpdateProjectIssueTracking>)
+    vi.mocked(useGitHubConnection).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+    } as ReturnType<typeof useGitHubConnection>)
+
+    const view = render(
+      <MemoryRouter>
+        <ProjectIssueTracking project={project} />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByLabelText("Loading GitHub repository")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Connect to GitHub" })).toBeNull()
+
+    vi.mocked(useGitHubConnection).mockReturnValue({
+      data: { status: "connected" },
+      isLoading: false,
+    } as ReturnType<typeof useGitHubConnection>)
+    view.rerender(
+      <MemoryRouter>
+        <ProjectIssueTracking project={project} />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText("Not configured", { selector: "dd" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Connect to GitHub" })).toBeNull()
+  })
+
   it("preserves a saved Linear destination when loading teams fails", () => {
     const mutate = vi.fn()
     vi.mocked(useProjectIssueTracking).mockReturnValue({

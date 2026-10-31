@@ -5,6 +5,7 @@ import { IssueProviderLogo } from "@/components/issue-tracking/issue-provider-lo
 import { notifyIssueTrackingError } from "@/components/issue-tracking/issue-tracking-feedback"
 import { ProjectIssuesSkeleton } from "@/components/projects/project-details-page-skeleton"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Select,
   SelectContent,
@@ -122,8 +123,15 @@ export function ProjectIssueTracking({ project }: { project: Project }) {
           <dl className="flex flex-wrap items-center justify-between gap-3">
             <dt className="text-sm text-muted-foreground">Repository</dt>
             <dd className="min-w-0 break-all text-right text-sm font-medium">
-              {githubIsConnected && github ? (
+              {githubConnection.isLoading ? (
+                <Skeleton
+                  aria-label="Loading GitHub repository"
+                  className="ml-auto h-4 w-28"
+                />
+              ) : githubIsConnected && github ? (
                 <>{github.owner}/{github.project}</>
+              ) : githubConnection.data?.status === "connected" ? (
+                "Not configured"
               ) : (
                 <Button
                   type="button"
