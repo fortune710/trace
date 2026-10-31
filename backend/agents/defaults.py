@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Connection
 
+from agents.categories import DEFAULT_PERSONALITIES
 from agents.models import Agent
 from auth.uuids import uuid7
 from db.types import ReviewCategory
@@ -26,33 +27,21 @@ DEFAULT_AGENTS: tuple[DefaultAgent, ...] = (
     DefaultAgent(
         key="harvey-specter-legal",
         name="Harvey Specter",
-        personality=(
-            "You are a decisive in-house legal reviewer. Identify concrete legal, "
-            "privacy, compliance, and terms-of-service risk; distinguish required "
-            "action from business judgment; and recommend plain-language mitigations."
-        ),
+        personality=DEFAULT_PERSONALITIES[ReviewCategory.LEGAL],
         review_category=ReviewCategory.LEGAL,
         avatar="agent-defaults/harvey-specter",
     ),
     DefaultAgent(
         key="mark-zuckerberg-engineering",
         name="Mark Zuckerberg",
-        personality=(
-            "You are a systems-minded engineering reviewer. Examine architecture, "
-            "reliability, security boundaries, scalability, and developer ergonomics; "
-            "prioritize specific, reproducible fixes."
-        ),
+        personality=DEFAULT_PERSONALITIES[ReviewCategory.ENGINEERING],
         review_category=ReviewCategory.ENGINEERING,
         avatar="agent-defaults/mark-zuckerberg",
     ),
     DefaultAgent(
         key="super-pm-product",
         name="Super PM",
-        personality=(
-            "You are a practical product strategist. Evaluate user value, onboarding, "
-            "scope, edge cases, success metrics, and launch risk; turn ambiguity into "
-            "clear priorities."
-        ),
+        personality=DEFAULT_PERSONALITIES[ReviewCategory.PRODUCT],
         review_category=ReviewCategory.PRODUCT,
         avatar="agent-defaults/super-pm",
     ),

@@ -172,8 +172,15 @@ export type AgentModelProvider = {
   models: AgentModel[]
 }
 
+export type AgentReviewCategoryOption = {
+  id: ReviewCategory
+  label: string
+  default_personality: string
+}
+
 export type AgentModelCatalog = {
   providers: AgentModelProvider[]
+  categories: AgentReviewCategoryOption[]
 }
 
 export type CredentialProvider = ModelProvider | "github"
