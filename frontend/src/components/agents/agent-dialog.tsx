@@ -217,7 +217,24 @@ export function AgentDialog({ agent, catalog, credentials, open, onOpenChange }:
             </p>
           </div>
         </form>
-        <DialogFooter><Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" form="agent-form" disabled={isPending || !catalog || !name.trim() || !model || !category}>{isPending ? "Saving…" : isEditing ? "Save changes" : "Create agent"}</Button></DialogFooter>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            form="agent-form"
+            disabled={
+              isPending || !catalog || !name.trim() || !model || !category
+            }
+          >
+            {isPending ? "Saving…" : isEditing ? "Save changes" : "Create agent"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )
