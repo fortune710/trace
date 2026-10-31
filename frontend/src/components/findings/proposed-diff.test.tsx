@@ -93,6 +93,11 @@ describe("ProposedDiff", () => {
     expect(screen.getByText("const newValue = true")).toBeTruthy()
     expect(screen.queryByText("@@ -1,2 +1,2 @@")).toBeNull()
     expect(document.querySelector("script")).toBeNull()
+
+    const diffLine = screen.getByText("const retained = true")
+
+    expect(diffLine.className).toContain("whitespace-pre-wrap")
+    expect(diffLine.className).toContain("break-all")
   })
 })
 it("renders paths and line counts from the shared native patch fixtures", () => {

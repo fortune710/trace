@@ -36,6 +36,7 @@ import {
   useCreateRemediationPullRequest,
   useApplyLocalRemediation,
   useFindingRemediations,
+  useUpdateFindingStatus,
 } from "@/hooks/use-findings"
 import { useRuntimeEnvironment } from "@/hooks/use-runtime-environment"
 import { useSession, useUpdateAutomaticPullRequests } from "@/hooks/use-session"
@@ -77,6 +78,7 @@ export function FindingIssueActions({
   const [actionMenuWidth, setActionMenuWidth] = useState<number>()
   const session = useSession()
   const runtime = useRuntimeEnvironment()
+  const updateFindingStatus = useUpdateFindingStatus()
   const updateAutomaticPullRequests = useUpdateAutomaticPullRequests()
   const remediations = useFindingRemediations(findingId)
   const remediation = remediations.data?.[0]
@@ -89,6 +91,9 @@ export function FindingIssueActions({
   )
   const applyLocalRemediation = useApplyLocalRemediation(findingId)
   const appliesLocally = runtime.isTauri && isLocalProject
+  const isUpdatingStatus =
+    updateFindingStatus.isPending &&
+    updateFindingStatus.variables?.findingId === findingId
 
   useLayoutEffect(() => {
     const element = actionGroup.current
@@ -106,7 +111,7 @@ export function FindingIssueActions({
     resizeObserver.observe(element)
 
     return () => resizeObserver.disconnect()
-  }, [])
+  }, [status])
 
   function requestPullRequest() {
     if (!remediationId || !reviewCompleted || !remediation?.patch_available || status !== "accepted") return
@@ -157,79 +162,107 @@ export function FindingIssueActions({
   return (
     <>
       <div className="flex flex-col items-end gap-2">
-        <div
-          ref={actionGroup}
-          className="flex items-stretch"
-          aria-label="Finding actions"
-        >
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger render={<span className="inline-flex" />}>
-                <Button
-                  type="button"
-                  disabled={
-                    remediations.isLoading ||
-                    !remediationId ||
-                    !reviewCompleted ||
-                    !remediation?.patch_available ||
-                    status !== "accepted" ||
-                    (!appliesLocally && Boolean(remediation?.pull_request)) ||
-                    createPullRequest.isPending ||
-                    applyLocalRemediation.isPending
-                  }
-                  className="rounded-r-none"
-                  onClick={requestPullRequest}
-                >
-                  {appliesLocally ? null : (
-                    <IssueProviderActionLogo provider="github" />
-                  )}
-                  {applyLocalRemediation.isPending
-                    ? "Applying change…"
-                    : appliesLocally
-                      ? "Apply change"
-                      : "Create pull request"}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                {appliesLocally
-                  ? "Apply the stored remediation diff to the selected local project."
-                  : remediation?.pull_request
-                  ? "A pull request already exists for this remediation."
-                  : status === "accepted"
-                    ? "Create a pull request from the stored remediation diff."
-                    : "Accept this finding before creating a pull request."}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <Select
-            value={provider}
-            onValueChange={handleProviderChange}
-            disabled={remediations.isLoading || !remediationId}
+        {status === "open" ? (
+          <div className="flex items-center gap-2" aria-label="Finding actions">
+            <Button
+              type="button"
+              disabled={isUpdatingStatus}
+              onClick={() =>
+                updateFindingStatus.mutate({
+                  findingId,
+                  status: "accepted",
+                })
+              }
+            >
+              Accept
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isUpdatingStatus}
+              onClick={() =>
+                updateFindingStatus.mutate({
+                  findingId,
+                  status: "dismissed",
+                })
+              }
+            >
+              Dismiss
+            </Button>
+          </div>
+        ) : (
+          <div
+            ref={actionGroup}
+            className="flex items-stretch"
+            aria-label="Finding actions"
           >
-            <SelectTrigger
-              aria-label="Choose issue tracker"
-              className="h-9 rounded-l-none rounded-r-md border-l border-l-primary-foreground/30 bg-primary px-2 text-primary-foreground hover:bg-primary/80 [&_svg]:text-primary-foreground"
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger render={<span className="inline-flex" />}>
+                  <Button
+                    type="button"
+                    disabled={
+                      remediations.isLoading ||
+                      !remediationId ||
+                      !reviewCompleted ||
+                      !remediation?.patch_available ||
+                      status !== "accepted" ||
+                      (!appliesLocally && Boolean(remediation?.pull_request)) ||
+                      createPullRequest.isPending ||
+                      applyLocalRemediation.isPending
+                    }
+                    className="rounded-r-none"
+                    onClick={requestPullRequest}
+                  >
+                    {appliesLocally ? null : (
+                      <IssueProviderActionLogo provider="github" />
+                    )}
+                    {applyLocalRemediation.isPending
+                      ? "Applying change…"
+                      : appliesLocally
+                        ? "Apply change"
+                        : "Create pull request"}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {appliesLocally
+                    ? "Apply the stored remediation diff to the selected local project."
+                    : remediation?.pull_request
+                    ? "A pull request already exists for this remediation."
+                    : "Create a pull request from the stored remediation diff."}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <Select
+              value={provider}
+              onValueChange={handleProviderChange}
+              disabled={remediations.isLoading || !remediationId}
             >
-              <SelectValue className="sr-only">Create issue</SelectValue>
-            </SelectTrigger>
-            <SelectContent
-              align="end"
-              alignItemWithTrigger={false}
-              className="min-w-0"
-              style={actionMenuWidth ? { width: actionMenuWidth } : undefined}
-            >
-              <SelectGroup>
-                <SelectLabel>Issue trackers</SelectLabel>
-                {providers.map((item) => (
-                  <SelectItem key={item} value={item}>
-                    <IssueProviderActionLogo provider={item} />
-                    {issueProviderLabel(item)} issue
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </div>
+              <SelectTrigger
+                aria-label="Choose issue tracker"
+                className="h-9 rounded-l-none rounded-r-md border-l border-l-primary-foreground/30 bg-primary px-2 text-primary-foreground hover:bg-primary/80 [&_svg]:text-primary-foreground"
+              >
+                <SelectValue className="sr-only">Create issue</SelectValue>
+              </SelectTrigger>
+              <SelectContent
+                align="end"
+                alignItemWithTrigger={false}
+                className="min-w-0"
+                style={actionMenuWidth ? { width: actionMenuWidth } : undefined}
+              >
+                <SelectGroup>
+                  <SelectLabel>Issue trackers</SelectLabel>
+                  {providers.map((item) => (
+                    <SelectItem key={item} value={item}>
+                      <IssueProviderActionLogo provider={item} />
+                      {issueProviderLabel(item)} issue
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         {remediation?.pull_request ? (
           <a

@@ -107,6 +107,7 @@ async function mockIssueTrackingApi(page: Page) {
     ],
   }
   let issueLinks: Array<Record<string, unknown>> = []
+  let findingStatus = finding.status
 
   await page.route(`${apiBaseUrl}/**`, async (route) => {
     const request = route.request()
@@ -118,6 +119,13 @@ async function mockIssueTrackingApi(page: Page) {
     }
     if (request.method() === "GET" && url.pathname === "/auth/csrf") {
       await fulfillJson(route, { csrf_token: csrfToken })
+      return
+    }
+    if (
+      request.method() === "GET" &&
+      url.pathname === "/auth/oauth/github/connection"
+    ) {
+      await fulfillJson(route, { status: "connected" })
       return
     }
     if (
@@ -181,7 +189,14 @@ async function mockIssueTrackingApi(page: Page) {
       return
     }
     if (request.method() === "GET" && url.pathname === "/api/v1/findings/finding-1") {
-      await fulfillJson(route, finding)
+      await fulfillJson(route, { ...finding, status: findingStatus })
+      return
+    }
+    if (request.method() === "PATCH" && url.pathname === "/api/v1/findings/finding-1") {
+      expect(request.headers()["x-csrf-token"]).toBe(csrfToken)
+      expect(request.postDataJSON()).toEqual({ status: "accepted" })
+      findingStatus = "accepted"
+      await fulfillJson(route, { ...finding, status: findingStatus })
       return
     }
     if (request.method() === "GET" && url.pathname === "/api/v1/findings/finding-1/remediations") {
@@ -245,7 +260,13 @@ test("configures a Linear destination while preserving the GitHub source", async
 
   await page.getByRole("tab", { name: "Issues" }).click()
 
-  await expect(page.getByText("trace-labs/trace-dashboard is the source repository for this project.")).toBeVisible()
+  await expect(page.getByRole("heading", { name: "GitHub Issues" })).toBeVisible()
+  await expect(page.getByText("Repository")).toBeVisible()
+  await expect(
+    page
+      .getByRole("tabpanel", { name: "Issues" })
+      .getByText("trace-labs/trace-dashboard", { exact: true }),
+  ).toBeVisible()
   await page.getByRole("combobox", { name: "Team" }).click()
   await page.getByText("Engineering (ENG)", { exact: true }).click()
   await page.getByRole("combobox", { name: "Project" }).click()
@@ -254,13 +275,14 @@ test("configures a Linear destination while preserving the GitHub source", async
 
   await expect(page.getByRole("combobox", { name: "Team" })).toContainText("Engineering")
   await expect(page.getByRole("combobox", { name: "Project" })).toContainText("Trace")
-  await expect(page.getByText("The source repository is managed by Trace and cannot be changed here.")).toBeVisible()
+  await expect(page.getByText("Project", { exact: true })).toBeVisible()
 })
 
 test("creates a Linear issue from a finding and renders the linked issue", async ({ page }) => {
   await mockIssueTrackingApi(page)
   await page.goto("/reviews/review-1/findings/finding-1")
 
+  await page.getByRole("button", { name: "Accept" }).click()
   const issueTracker = page.getByLabel("Choose issue tracker")
   await expect(issueTracker).toBeEnabled()
   await issueTracker.click()

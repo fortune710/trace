@@ -47,11 +47,11 @@ function FileDiffAccordion({ file }: { file: FileDiff }) {
         </span>
       </summary>
       {file.lines.length > 0 ? (
-        <div className="overflow-x-auto border-t border-border font-mono text-xs leading-5">
+        <div className="overflow-hidden border-t border-border font-mono text-xs leading-5">
           {file.lines.map((line, index) => (
             <div
               key={`${line.oldLineNumber}-${line.newLineNumber}-${index}`}
-              className={`grid min-w-max grid-cols-[3.5rem_1.5rem_minmax(0,1fr)] ${lineClassName(line.kind)}`}
+              className={`grid min-w-0 grid-cols-[3.5rem_1.5rem_minmax(0,1fr)] ${lineClassName(line.kind)}`}
             >
               <span className="border-r border-current/10 px-2 text-right text-muted-foreground/80 select-none">
                 {displayLineNumber(line)}
@@ -59,7 +59,7 @@ function FileDiffAccordion({ file }: { file: FileDiff }) {
               <span className="border-r border-current/10 text-center select-none">
                 {lineMarker(line.kind)}
               </span>
-              <code className="min-w-0 px-3 whitespace-pre">
+              <code className="min-w-0 break-all px-3 whitespace-pre-wrap">
                 {line.content || " "}
               </code>
             </div>

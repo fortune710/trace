@@ -129,6 +129,11 @@ describe("ReviewFindings", () => {
     }, true, false)
     expect(screen.getByText("Missing authorization check")).toBeTruthy()
     expect(screen.getByText("Security Scout")).toBeTruthy()
+    for (const name of ["Category", "Severity", "Status", "Reviewer"]) {
+      expect(screen.getByRole("combobox", { name }).className).toContain(
+        "rounded-sm",
+      )
+    }
     expect(
       screen.getByText("backend/routes.py:42").getAttribute("data-slot"),
     ).toBe("badge")

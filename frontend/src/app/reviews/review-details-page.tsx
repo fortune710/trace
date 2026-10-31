@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useProject } from "@/hooks/use-projects"
 import { useReview } from "@/hooks/use-reviews"
+import type { Review } from "@/lib/api"
 
 function displaySourceKind(kind: "github" | "local") {
   return kind === "github" ? "GitHub" : "Local folder"
@@ -32,6 +33,27 @@ const reviewStatusDescriptions = {
   completed: "The selected reviewers have finished this review.",
   failed: "This review could not be completed.",
   cancelled: "This review was cancelled before it finished.",
+}
+
+const reviewStatusBadgeBaseClassName = "h-auto rounded-sm px-1.5 py-0.5 text-sm font-semibold"
+
+function reviewStatusBadgeClassName(status: Review["status"]) {
+  switch (status) {
+    case "completed":
+      return "bg-green-500/15 text-green-700 dark:text-green-300"
+    case "running":
+      return "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+    case "failed":
+      return "bg-red-500/15 text-red-700 dark:text-red-300"
+    case "queued":
+      return "bg-blue-500/15 text-blue-700 dark:text-blue-300"
+    case "cancelled":
+      return "bg-muted text-muted-foreground"
+  }
+}
+
+function reviewStatusLabel(status: Review["status"]) {
+  return `${status.slice(0, 1).toUpperCase()}${status.slice(1)}`
 }
 
 export function ReviewDetailsPage() {
@@ -97,7 +119,7 @@ export function ReviewDetailsPage() {
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <h1 className="text-xl font-medium tracking-tight">
-                  Review {review.data.status}
+                  {reviewLabel}
                 </h1>
                 <p className="mt-2 text-sm text-muted-foreground">
                   {reviewStatusDescriptions[review.data.status]}
@@ -127,8 +149,12 @@ export function ReviewDetailsPage() {
             >
               <div className="min-w-0">
                 <dt className="text-muted-foreground">Status</dt>
-                <dd className="mt-1 capitalize text-foreground">
-                  {review.data.status}
+                <dd className="mt-1">
+                  <Badge
+                    className={`${reviewStatusBadgeBaseClassName} ${reviewStatusBadgeClassName(review.data.status)}`}
+                  >
+                    {reviewStatusLabel(review.data.status)}
+                  </Badge>
                 </dd>
               </div>
               <div className="min-w-0">

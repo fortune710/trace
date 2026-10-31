@@ -113,15 +113,22 @@ function ProviderApiKeyCard({
         <ProviderLogo provider={provider} className="size-6" />
         {title}
       </h2>
-      <p className="mt-1 text-base text-muted-foreground">{description}</p>
+      <p className="mt-0 text-base text-muted-foreground">{description}</p>
       <form
-        className="mt-4 rounded-lg border border-white/6 bg-card p-4"
+        className="mt-4 rounded-lg border border-white/6 bg-card p-3"
         onSubmit={handleSubmit}
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <Label htmlFor={`${provider}-api-key`} className="text-base">
-            API Key
-          </Label>
+          <div>
+            <Label htmlFor={`${provider}-api-key`} className="text-base">
+              API Key
+            </Label>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {isSaving
+                ? "Saving your API key…"
+                : "Press Enter to save. Keys are encrypted and never shown again."}
+            </p>
+          </div>
           <Input
             id={`${provider}-api-key`}
             type="password"
@@ -132,14 +139,9 @@ function ProviderApiKeyCard({
               credential ? "API key saved — enter a new key" : "Enter API key"
             }
             disabled={isSaving}
-            className="h-10 w-full sm:max-w-80"
+            className="h-10 w-full shrink-0 border-transparent bg-black/50 focus:border-foreground focus:ring-[3px] focus:ring-ring/50 sm:w-80"
           />
         </div>
-        <p className="mt-4 text-sm text-muted-foreground">
-          {isSaving
-            ? "Saving your API key…"
-            : "Press Enter to save. Keys are encrypted and never shown again."}
-        </p>
       </form>
     </section>
   )
@@ -164,7 +166,7 @@ export function ApiKeysPage() {
         <div className="grid max-w-4xl gap-12">
           <header className="max-w-2xl">
             <h1 className="text-xl font-medium tracking-tight">API keys</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <p className="mt-0 text-sm text-muted-foreground">
               Save your own API keys for model providers, then choose them from
               an agent&rsquo;s access settings. Keys are encrypted before
               storage and never shown again.

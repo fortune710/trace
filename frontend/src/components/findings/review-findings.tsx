@@ -339,7 +339,7 @@ export function ReviewFindings({ review }: { review: Review }) {
               })
             }
           >
-            <SelectTrigger id="finding-category" className="w-full">
+            <SelectTrigger id="finding-category" className="w-full rounded-sm">
               <SelectValue>
                 {filters.category ? label(filters.category) : "All categories"}
               </SelectValue>
@@ -367,7 +367,7 @@ export function ReviewFindings({ review }: { review: Review }) {
               })
             }
           >
-            <SelectTrigger id="finding-severity" className="w-full">
+            <SelectTrigger id="finding-severity" className="w-full rounded-sm">
               <SelectValue>{filters.severity ?? "All severities"}</SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -393,7 +393,7 @@ export function ReviewFindings({ review }: { review: Review }) {
               })
             }
           >
-            <SelectTrigger id="finding-status" className="w-full">
+            <SelectTrigger id="finding-status" className="w-full rounded-sm">
               <SelectValue>{filters.status ?? "All statuses"}</SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -417,7 +417,7 @@ export function ReviewFindings({ review }: { review: Review }) {
               })
             }
           >
-            <SelectTrigger id="finding-reviewer" className="w-full">
+            <SelectTrigger id="finding-reviewer" className="w-full rounded-sm">
               <SelectValue>
                 {review.agents.find(
                   (agent) => agent.agent_id === filters.agentId,

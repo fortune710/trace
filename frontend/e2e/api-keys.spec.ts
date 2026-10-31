@@ -52,7 +52,15 @@ test.describe('isolated authentication stack', () => {
       .click()
     await expect(page.getByText('Back to app')).toBeVisible()
     await expect(page.getByRole('heading', { name: 'API keys' })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'OpenAI API Key' })).toBeVisible()
+    const openAiApiKeySection = page
+      .getByRole('heading', { name: 'OpenAI API Key' })
+      .locator('xpath=..')
+    await expect(openAiApiKeySection).toBeVisible()
+    await expect(
+      openAiApiKeySection.getByText(
+        'Press Enter to save. Keys are encrypted and never shown again.',
+      ),
+    ).toBeVisible()
     await page.locator('#openai-api-key').fill('sk-e2e-test-key')
     await page.locator('#openai-api-key').press('Enter')
     await expect(page.getByText('API key saved')).toBeVisible()

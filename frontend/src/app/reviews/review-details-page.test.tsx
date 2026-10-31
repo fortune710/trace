@@ -104,7 +104,8 @@ describe("ReviewDetailsPage", () => {
       "/projects/project-a",
     )
     expect(screen.getByText("Review review-a", { selector: "[aria-current=page]" })).toBeTruthy()
-    expect(screen.getByText("Review queued")).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "Review review-a" })).toBeTruthy()
+    expect(screen.getAllByText("Queued", { selector: "[data-slot=badge]" })).toHaveLength(1)
     expect(screen.getByText("GitHub")).toBeTruthy()
     expect(screen.getByText("123")).toBeTruthy()
     expect(screen.getByText("Status").closest("dl")?.className).toContain("grid-cols-1")
@@ -141,9 +142,14 @@ describe("ReviewDetailsPage", () => {
     )
   })
 
-  it("shows the current execution status", () => {
+  it.each([
+    ["completed", "Completed", "bg-green-500/15"],
+    ["running", "Running", "bg-amber-500/15"],
+    ["failed", "Failed", "bg-red-500/15"],
+    ["queued", "Queued", "bg-blue-500/15"],
+  ] as const)("shows %s status with its colored badge", (status, label, colorClass) => {
     mockedUseReview.mockReturnValue({
-      data: { ...review, status: "running" },
+      data: { ...review, status },
       isLoading: false,
       isError: false,
       refetch: vi.fn(),
@@ -160,7 +166,14 @@ describe("ReviewDetailsPage", () => {
       </MemoryRouter>,
     )
 
-    expect(screen.getByRole("heading", { name: "Review running" })).toBeTruthy()
+    const badge = screen.getByText(label, { selector: "[data-slot=badge]" })
+
+    expect(badge.className).toContain(colorClass)
+    expect(badge.className).toContain("rounded-sm")
+    expect(badge.className).toContain("px-1.5")
+    expect(badge.className).toContain("py-0.5")
+    expect(badge.className).toContain("text-sm")
+    expect(badge.className).toContain("font-semibold")
   })
 
   it("opens the findings tab from its URL state", () => {
