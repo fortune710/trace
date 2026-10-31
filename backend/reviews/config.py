@@ -41,6 +41,14 @@ class AgentExecutionSettings(BaseSettings):
     langsmith_project: str = Field(
         default="trace", validation_alias="LANGSMITH_PROJECT"
     )
+    # Prompts, tool arguments, and model output contain customer source code, so
+    # traces stay redacted unless an operator opts in while debugging.
+    langsmith_hide_inputs: bool = Field(
+        default=True, validation_alias="LANGSMITH_HIDE_INPUTS"
+    )
+    langsmith_hide_outputs: bool = Field(
+        default=True, validation_alias="LANGSMITH_HIDE_OUTPUTS"
+    )
     openai_api_key: SecretStr | None = Field(
         default=None, validation_alias="AGENT_OPENAI_API_KEY"
     )

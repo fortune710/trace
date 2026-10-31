@@ -829,3 +829,28 @@ def test_execution_service_hides_langsmith_inputs_and_outputs(monkeypatch) -> No
     assert client_arguments["api_key"] == "ls-test"
     assert client_arguments["hide_inputs"] is True
     assert client_arguments["hide_outputs"] is True
+
+
+def test_execution_service_langsmith_redaction_is_opt_out(monkeypatch) -> None:
+    monkeypatch.setenv("REVIEW_RABBITMQ_URL", "amqp://guest:guest@localhost/")
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
+    monkeypatch.setenv("LANGSMITH_HIDE_INPUTS", "false")
+    monkeypatch.setenv("LANGSMITH_HIDE_OUTPUTS", "false")
+    client_arguments = {}
+
+    def fake_client(**kwargs):
+        client_arguments.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(execution_executor_module, "Client", fake_client)
+
+    ReviewExecutionService(
+        engine=None,  # type: ignore[arg-type]
+        credential_service=None,  # type: ignore[arg-type]
+        repository_service=None,  # type: ignore[arg-type]
+        settings=AgentExecutionSettings(),
+    )
+
+    assert client_arguments["hide_inputs"] is False
+    assert client_arguments["hide_outputs"] is False

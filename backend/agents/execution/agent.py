@@ -317,6 +317,12 @@ class Agent:
             "external precedent from this project's verified behavior and include "
             "the supporting result URL when it materially informs the finding. "
             "Return only concrete launch risks. "
+            "Complete a coverage pass before you conclude. First list the repository "
+            "structure and identify its entry points, authentication and authorization "
+            "code, data access, external integrations, configuration, and secrets "
+            "handling. Read the files that implement each surface that exists, and run "
+            "targeted code searches for risky patterns in those surfaces. A short "
+            "inspection is not enough to conclude that there is no risk. "
             "Each finding must include evidence and a repository-relative source "
             f"location when available. {FINDING_EVIDENCE_MARKDOWN_INSTRUCTIONS}"
             "For every finding, also "
@@ -325,7 +331,8 @@ class Agent:
             "agent to resolve the finding in this exact repository revision.\n"
             "A same-model specialist will independently generate remediation edits after "
             "your findings are saved. Do not produce patches or calculate hashes.\n"
-            "Return no finding when there is no risk."
+            "Return no finding only after that coverage pass finds no risk, and never "
+            "to end the review early."
         )
         human_message = (
             "Review target:\n"

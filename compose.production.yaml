@@ -185,6 +185,26 @@ services:
     pids_limit: 128
     restart: "no"
 
+  remediation-diagnostics:
+    <<: [*backend-image, *app-hardening]
+    profiles: [maintenance]
+    command: ["./start-remediation-diagnostics.sh"]
+    environment:
+      AUTH_ENVIRONMENT: production
+      MAINTENANCE_DATABASE_URL: ${MAINTENANCE_DATABASE_URL:?Set MAINTENANCE_DATABASE_URL}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data
+    tmpfs:
+      # Match review-execution-worker so the git smoke test sees the same limits.
+      - /tmp:rw,noexec,nosuid,size=32m
+    pids_limit: 128
+    restart: "no"
+
   migrate:
     <<: [*backend-image, *app-hardening]
     profiles: [migration]
@@ -344,6 +364,8 @@ services:
       LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:?Set LANGSMITH_API_KEY}
       LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-}
       LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:?Set LANGSMITH_PROJECT}
+      LANGSMITH_HIDE_INPUTS: ${LANGSMITH_HIDE_INPUTS:-true}
+      LANGSMITH_HIDE_OUTPUTS: ${LANGSMITH_HIDE_OUTPUTS:-true}
       AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY:-}
       AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY:-}
       AGENT_GOOGLE_API_KEY: ${AGENT_GOOGLE_API_KEY:-}
