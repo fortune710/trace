@@ -134,13 +134,13 @@ export function DesktopOAuthBootstrap() {
         }
         void authApi.exchangeDesktopOAuth(callback.code, pending.verifier)
           .then(async () => {
-            if (disposed) return
+            if (disposed || pendingOAuth !== pending) return
             finishPendingOAuth()
             await queryClient.invalidateQueries({ queryKey: sessionQueryKey })
             navigate(consumeReturnTo(), { replace: true })
           })
           .catch(() => {
-            if (disposed) return
+            if (disposed || pendingOAuth !== pending) return
             showDesktopOAuthError("Unable to finish sign-in. Please try again.")
             navigate("/sign-in", { replace: true })
           })
