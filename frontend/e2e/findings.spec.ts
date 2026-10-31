@@ -65,6 +65,10 @@ const remediation = {
   project_id: "project-1",
   finding_id: finding.id,
   proposed_diff: "diff --git a/backend/routes.py b/backend/routes.py",
+  generation_status: "ready",
+  generation_failure: null,
+  patch_available: true,
+  preview_is_redacted: true,
   status: "proposed",
   approved_at: null,
   created_at: "2026-10-21T00:00:30Z",
@@ -99,7 +103,7 @@ async function fulfillJson(route: Route, json: unknown, status = 200) {
   })
 }
 
-async function mockFindingsApi(page: Page, promptStatus = 200) {
+async function mockFindingsApi(page: Page, promptStatus = 200, failedPatch = false) {
   await page.route(`${apiBaseUrl}/**`, async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -116,7 +120,7 @@ async function mockFindingsApi(page: Page, promptStatus = 200) {
       request.method() === "GET" &&
       url.pathname === "/api/v1/reviews/review-1"
     ) {
-      await fulfillJson(route, review)
+      await fulfillJson(route, { ...review, warnings: failedPatch ? ["remediation_generation_incomplete"] : [], remediation_generation_failed_count: failedPatch ? 1 : 0 })
       return
     }
     if (
@@ -139,7 +143,7 @@ async function mockFindingsApi(page: Page, promptStatus = 200) {
       request.method() === "GET" &&
       url.pathname === "/api/v1/findings/finding-1/remediations"
     ) {
-      await fulfillJson(route, [remediation])
+      await fulfillJson(route, [{ ...remediation, ...(failedPatch ? { generation_status: "failed", proposed_diff: "", patch_available: false, generation_failure: { code: "invalid_line_range", message: "Invalid line range" } } : {}) }])
       return
     }
     if (
@@ -216,4 +220,14 @@ test("a forbidden remediation prompt is never rendered", async ({ page }) => {
     page.getByText("We could not load the coding-agent prompt."),
   ).toBeVisible()
   await expect(page.getByText(codingPrompt)).toHaveCount(0)
+})
+
+test("a completed review preserves findings and explains unavailable changes", async ({ page }) => {
+  await mockFindingsApi(page, 200, true)
+  await page.goto("/reviews/review-1")
+  await expect(page.getByText(/Findings are saved. Automated changes are unavailable/)).toBeVisible()
+  await page.goto("/reviews/review-1/findings/finding-1")
+  await expect(page.getByRole("heading", { name: "Missing authorization check" })).toBeVisible()
+  await expect(page.getByText(/The finding is saved. Automated changes are unavailable: Invalid line range/)).toBeVisible()
+  await expect(page.getByRole("button", { name: /create pull request/i })).toBeDisabled()
 })

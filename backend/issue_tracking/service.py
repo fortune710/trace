@@ -587,7 +587,10 @@ def _payload(
     assert isinstance(proposed_diff, str)
     title = finding["title"]
     assert isinstance(title, str)
-    sections.append(f"## Proposed diff\n\n```diff\n{redact_text(proposed_diff)}\n```")
+    if proposed_diff:
+        sections.append(
+            f"## Proposed diff\n\n```diff\n{redact_text(proposed_diff)}\n```"
+        )
     return IssuePayload(
         title=redact_text(title),
         body_markdown="\n\n".join(sections),

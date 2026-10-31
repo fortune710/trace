@@ -293,6 +293,8 @@ export type Review = {
   created_at: string
   updated_at: string
   agents: ReviewAgent[]
+  warnings?: string[]
+  remediation_generation_failed_count?: number
 }
 
 export type ReviewPage = {
@@ -304,6 +306,15 @@ export type ReviewCreate = {
   project_id: string
   agent_ids: string[]
   local_source_snapshot?: LocalSourceSnapshot
+  local_source_upload?: {
+    digest: string
+    entries: {
+      path: string
+      directory: boolean
+      content_base64: string | null
+      content_sha256?: string | null
+    }[]
+  }
 }
 
 export type FindingSeverity = "info" | "low" | "medium" | "high" | "critical"
@@ -348,6 +359,23 @@ export type Remediation = {
   approved_at: string | null
   created_at: string
   updated_at: string
+  generation_status: "pending" | "running" | "ready" | "failed" | "legacy_unverified"
+  generation_failure: { code: string; message: string } | null
+  patch_available: boolean
+  preview_is_redacted: boolean
+}
+
+export type ExecutablePatch = {
+  diff: string
+  sha256: string
+  source_snapshot: { source_kind: string; source_identifier: string; revision: string }
+  files: {
+    path: string
+    operation: "replace" | "create"
+    original_sha256: string | null
+    result_sha256: string
+  }[]
+  warnings: string[]
 }
 
 export type LocalRemediationApplyFile = {
@@ -749,6 +777,11 @@ export const issueTrackingApi = {
 }
 
 export const remediationsApi = {
+  getPatch: (remediationId: string) =>
+    request<ExecutablePatch>(
+      `/api/v1/remediations/${encodeURIComponent(remediationId)}/patch`,
+      { cache: "no-store" },
+    ),
   listForFinding: (findingId: string) =>
     request<Remediation[]>(
       `/api/v1/findings/${encodeURIComponent(findingId)}/remediations`,

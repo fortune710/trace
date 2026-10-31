@@ -281,7 +281,7 @@ def test_review_source_access_validates_a_diff_against_the_pinned_revision(
         ("git", "fetch", "--depth=1", "origin", "a" * 40),
         ("git", "checkout", "-q", "--detach", "FETCH_HEAD"),
     ]
-    assert calls[4][:4] == ("git", "apply", "--check", "--whitespace=error")
+    assert calls[4][:4] == ("git", "apply", "--check", "--whitespace=nowarn")
 
 
 def test_review_source_access_limits_concurrent_requests_to_two() -> None:

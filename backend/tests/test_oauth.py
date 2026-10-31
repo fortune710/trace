@@ -6,6 +6,7 @@ from uuid import UUID
 
 import pytest
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from auth.config import AuthSettings
@@ -598,3 +599,235 @@ def test_documented_oauth_redirect_uri_matches_the_registered_callback_route(
 
     assert configured_path == oauth_callback_path(provider)
     assert OAUTH_CALLBACK_ROUTE in registered_paths
+
+
+@pytest.mark.parametrize(
+    ("code", "verifier"),
+    [
+        ("c" * 15, "v" * 43),
+        ("c" * 513, "v" * 43),
+        ("c" * 43, "v" * 42),
+        ("c" * 43, "v" * 129),
+        ("c" * 100_000, "v" * 100_000),
+        ("", ""),
+    ],
+    ids=[
+        "code-too-short",
+        "code-too-long",
+        "verifier-too-short",
+        "verifier-too-long",
+        "oversized-body",
+        "empty",
+    ],
+)
+def test_desktop_exchange_bounds_unauthenticated_fields_before_any_lookup(
+    monkeypatch, code: str, verifier: str
+) -> None:
+    import auth.oauth as oauth_module
+    from auth.errors import install_auth_error_handlers
+
+    def redis_must_not_be_used():
+        raise AssertionError("an out-of-range field reached the Redis lookup")
+
+    monkeypatch.setattr(oauth_module, "get_redis_client", redis_must_not_be_used)
+    app = FastAPI()
+    install_auth_error_handlers(app)
+    install_oauth_routes(app, AuthSettings(), audit_hasher=None)
+
+    response = TestClient(app).post(
+        "/auth/oauth/desktop/exchange", json={"code": code, "verifier": verifier}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.parametrize(
+    ("code", "verifier"),
+    [("c" * 16, "v" * 43), ("c" * 512, "v" * 128)],
+    ids=["minimum-lengths", "maximum-lengths"],
+)
+def test_desktop_exchange_accepts_the_documented_field_bounds(
+    monkeypatch, code: str, verifier: str
+) -> None:
+    import auth.oauth as oauth_module
+    from auth.errors import install_auth_error_handlers
+
+    monkeypatch.setattr(oauth_module, "get_redis_client", lambda: FakeRedis())
+    app = FastAPI()
+    install_auth_error_handlers(app)
+    install_oauth_routes(app, AuthSettings(), audit_hasher=None)
+
+    response = TestClient(app).post(
+        "/auth/oauth/desktop/exchange", json={"code": code, "verifier": verifier}
+    )
+
+    # Within bounds the request is processed; an unknown ticket is simply rejected.
+    assert response.status_code == 401
+
+
+class _RecordingAudit:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def create_event(self, **kwargs: object) -> None:
+        self.events.append(kwargs)
+
+    def reasons(self) -> list[tuple[str, str, str]]:
+        return [
+            (
+                str(event["event_type"]),
+                str(event["fields"]["reason"]),  # type: ignore[index]
+                str(event["fields"]["status_code"]),  # type: ignore[index]
+            )
+            for event in self.events
+        ]
+
+
+def _desktop_oauth_client(monkeypatch):
+    import base64
+
+    import auth.oauth as oauth_module
+    from auth.errors import install_auth_error_handlers
+
+    redis = FakeRedis()
+    monkeypatch.setattr(oauth_module, "get_redis_client", lambda: redis)
+
+    async def allowed(*args, **kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(oauth_module, "enforce_rate_limit", allowed)
+    monkeypatch.setattr(oauth_module, "rate_limiter_from_settings", lambda _: None)
+    settings = AuthSettings(
+        github_client_id="github-test-client",
+        github_client_secret=SecretStr("github-test-secret"),
+        github_redirect_uri="https://api.example.test/auth/oauth/github/callback",
+        token_hash_key=SecretStr(
+            base64.urlsafe_b64encode(b"k" * 32).decode().rstrip("=")
+        ),
+    )
+    audit = _RecordingAudit()
+    app = FastAPI()
+    install_auth_error_handlers(app)
+    install_oauth_routes(
+        app,
+        settings,
+        audit_hasher=None,
+        audit_recorder=audit,  # type: ignore[arg-type]
+    )
+    return TestClient(app, follow_redirects=False), redis, audit, oauth_module
+
+
+def _desktop_ticket(redis: FakeRedis, verifier: str, *, ticket: str) -> None:
+    import json
+    from dataclasses import asdict
+
+    from auth.oauth import _pkce_challenge
+
+    transaction = OAuthTransaction(
+        provider="github",
+        verifier=_pkce_challenge(verifier),
+        nonce=None,
+        destination="trace://oauth/callback",
+        user_agent_hash="hash",
+        desktop=True,
+    )
+    redis.values[f"trace:oauth:desktop:{ticket}"] = json.dumps(
+        {"code": "provider-code", "transaction": asdict(transaction)}
+    )
+
+
+def test_desktop_authorization_start_and_ticket_issuance_are_audited(
+    monkeypatch,
+) -> None:
+    client, _, audit, _ = _desktop_oauth_client(monkeypatch)
+
+    started = client.get(
+        "/auth/oauth/github/desktop/start", params={"challenge": "c" * 43}
+    )
+    assert started.status_code == 302
+    assert audit.reasons() == [("oauth.oauth", "authorization_started", "302")]
+
+    callback = client.get(
+        "/auth/oauth/github/callback",
+        params={"state": _state_from(started.headers["location"]), "code": "provider"},
+    )
+    assert callback.status_code == 303
+    assert callback.headers["location"].startswith("trace://oauth/callback?code=")
+    assert audit.reasons()[-1] == ("oauth.oauth", "desktop_ticket_issued", "303")
+    ticket = callback.headers["location"].split("code=")[-1]
+    # The single-use ticket is a credential and never appears in audit fields.
+    assert ticket not in repr(audit.events)
+
+
+def _state_from(location: str) -> str:
+    from urllib.parse import parse_qs, urlparse
+
+    return parse_qs(urlparse(location).query)["state"][0]
+
+
+def test_desktop_exchange_audits_success_rejection_and_unavailability(
+    monkeypatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import auth.oauth as oauth_module
+    from auth.oauth import OAuthUnavailable, ProviderIdentity
+    from auth.service import SessionTokens
+
+    client, redis, audit, _ = _desktop_oauth_client(monkeypatch)
+    verifier = "v" * 43
+    session = SessionTokens("access", "refresh", UUID(int=1))
+    monkeypatch.setattr(oauth_module, "get_engine", lambda: None)
+    monkeypatch.setattr(
+        oauth_module.AuthService,
+        "from_settings",
+        classmethod(
+            lambda cls, **kwargs: SimpleNamespace(
+                oauth_login=lambda **values: SimpleNamespace(tokens=session)
+            )
+        ),
+    )
+    monkeypatch.setattr(oauth_module, "_set_session", lambda *args: "csrf-token")
+    monkeypatch.setattr(
+        oauth_module,
+        "_provider_identity",
+        lambda *args: ProviderIdentity(subject="1", email="user@example.test"),
+    )
+
+    # An unknown ticket is rejected.
+    unknown = client.post(
+        "/auth/oauth/desktop/exchange", json={"code": "u" * 43, "verifier": verifier}
+    )
+    assert unknown.status_code == 401
+
+    # A valid ticket creates a session.
+    _desktop_ticket(redis, verifier, ticket="s" * 43)
+    ok = client.post(
+        "/auth/oauth/desktop/exchange", json={"code": "s" * 43, "verifier": verifier}
+    )
+    assert ok.status_code == 200
+
+    # A provider or dependency outage is reported as unavailable.
+    def provider_down(*args):
+        raise OAuthUnavailable("provider is down")
+
+    monkeypatch.setattr(oauth_module, "_provider_identity", provider_down)
+    _desktop_ticket(redis, verifier, ticket="d" * 43)
+    down = client.post(
+        "/auth/oauth/desktop/exchange", json={"code": "d" * 43, "verifier": verifier}
+    )
+    assert down.status_code == 503
+
+    assert audit.reasons() == [
+        ("oauth.oauth", "callback_rejected", "401"),
+        ("oauth.oauth", "session_created", "200"),
+        ("oauth.oauth", "dependency_unavailable", "503"),
+    ]
+    # Tickets, verifiers and tokens never reach the audit trail.
+    recorded = repr(audit.events)
+    for secret in (verifier, "s" * 43, "csrf-token", "access", "refresh"):
+        assert secret not in recorded
+    # The provider is attributed once the ticket identifies it.
+    providers = [event["fields"]["provider"] for event in audit.events]  # type: ignore[index]
+    assert providers == ["unknown", "github", "github"]

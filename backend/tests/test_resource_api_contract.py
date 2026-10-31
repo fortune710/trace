@@ -70,6 +70,7 @@ def test_resource_routes_register_the_complete_owner_scoped_surface() -> None:
         "project_id",
         "agent_ids",
         "local_source_snapshot",
+        "local_source_upload",
     }
     assert set(review_properties["required"]) == {"project_id", "agent_ids"}
     assert any(

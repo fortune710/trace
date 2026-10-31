@@ -1034,11 +1034,13 @@ class ReviewGitHubSourceAccess:
             environment = {
                 **os.environ,
                 "GIT_TERMINAL_PROMPT": "0",
-                "GIT_CONFIG_COUNT": "2",
+                "GIT_CONFIG_COUNT": "3",
                 "GIT_CONFIG_KEY_0": "http.extraHeader",
                 "GIT_CONFIG_VALUE_0": f"Authorization: Basic {git_authorization}",
                 "GIT_CONFIG_KEY_1": "core.hooksPath",
                 "GIT_CONFIG_VALUE_1": "/dev/null",
+                "GIT_CONFIG_KEY_2": "core.autocrlf",
+                "GIT_CONFIG_VALUE_2": "false",
             }
             with tempfile.TemporaryDirectory(
                 prefix="trace-diff-validation-"
@@ -1071,7 +1073,7 @@ class ReviewGitHubSourceAccess:
                         "git",
                         "apply",
                         "--check",
-                        "--whitespace=error",
+                        "--whitespace=nowarn",
                         patch_path,
                     ),
                     cwd=directory,
@@ -1690,11 +1692,13 @@ class RepositoryService:
             environment = {
                 **os.environ,
                 "GIT_TERMINAL_PROMPT": "0",
-                "GIT_CONFIG_COUNT": "2",
+                "GIT_CONFIG_COUNT": "3",
                 "GIT_CONFIG_KEY_0": "http.extraHeader",
                 "GIT_CONFIG_VALUE_0": f"Authorization: Basic {git_authorization}",
                 "GIT_CONFIG_KEY_1": "core.hooksPath",
                 "GIT_CONFIG_VALUE_1": "/dev/null",
+                "GIT_CONFIG_KEY_2": "core.autocrlf",
+                "GIT_CONFIG_VALUE_2": "false",
             }
 
             def run(
@@ -1725,6 +1729,10 @@ class RepositoryService:
                 return True
 
             run("git", "init", "-q")
+            with open(
+                f"{directory}/.git/info/attributes", "w", encoding="utf-8"
+            ) as attributes:
+                attributes.write("* -text -filter -ident -working-tree-encoding\n")
             run("git", "remote", "add", "origin", remote)
             run("git", "fetch", "--depth=1", "origin", revision)
             run("git", "checkout", "-q", "-b", branch_name, "FETCH_HEAD")
@@ -1732,14 +1740,14 @@ class RepositoryService:
                 "git",
                 "apply",
                 "--check",
-                "--whitespace=error",
+                "--whitespace=nowarn",
                 patch_path,
                 invalid_patch=True,
             )
             run(
                 "git",
                 "apply",
-                "--whitespace=error",
+                "--whitespace=nowarn",
                 patch_path,
                 invalid_patch=True,
             )
@@ -1781,7 +1789,7 @@ class RepositoryService:
                 "apply",
                 "--reverse",
                 "--check",
-                "--whitespace=error",
+                "--whitespace=nowarn",
                 patch_path,
                 allow_failure=True,
             ):
@@ -2024,21 +2032,37 @@ def _is_excluded_review_path(path: str) -> bool:
 
 
 def _is_safe_patch(diff: str) -> bool:
-    if not diff.startswith("diff --git ") or "GIT binary patch" in diff:
+    from agents.execution.source import patch_paths
+
+    if not diff.startswith("diff --git "):
         return False
-    for line in diff.splitlines():
+    try:
+        patch_paths(diff)
+    except (ValueError, TypeError):
+        return False
+    in_hunk = False
+    for line in diff.split("\n"):
+        if line.startswith("diff --git "):
+            in_hunk = False
+        if line.startswith("@@ "):
+            in_hunk = True
+        if in_hunk:
+            continue
         if line.startswith(
-            ("new file mode 120000", "new file mode 160000", "Submodule ")
-        ):
+            (
+                "GIT binary patch",
+                "Binary files ",
+                "Submodule ",
+                "rename from ",
+                "rename to ",
+                "copy from ",
+                "copy to ",
+                "old mode ",
+                "new mode ",
+                "deleted file mode ",
+            )
+        ) or (line.startswith("new file mode ") and line != "new file mode 100644"):
             return False
-        if line.startswith(("--- a/", "+++ b/", "diff --git a/")):
-            paths = line.replace("diff --git ", "").split()
-            for path in paths:
-                normalized = path.removeprefix("a/").removeprefix("b/")
-                if not _is_safe_review_path(normalized) or normalized.startswith(
-                    ".git/"
-                ):
-                    return False
     return True
 
 

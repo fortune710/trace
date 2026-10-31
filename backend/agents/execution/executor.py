@@ -19,9 +19,17 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from agents.execution.agent import Agent, RemediationFindingOutput, ReviewTarget
+from agents.execution.agent import (
+    Agent,
+    DiffAgent,
+    ReviewFindingOutput,
+    ReviewOutputInvalid,
+    ReviewTarget,
+)
+from agents.execution.diagnostics import PatchGenerationError
 from agents.execution.orchestrator import OrchestratorAgent
 from agents.execution.redaction import redact_text
+from agents.execution.source import CachedSourceReader, SourceReader, SourceRegistry
 from agents.execution.tools import ToolExecutionContext
 from auth.credential_service import CredentialService, CredentialServiceError
 from auth.errors import (
@@ -34,7 +42,7 @@ from auth.uuids import uuid7
 from credentials.models import CredentialProvider
 from db.rls import principal_transaction
 from db.types import RepositorySource
-from external_repositories.service import RepositoryService, ReviewGitHubSourceAccess
+from external_repositories.service import RepositoryService
 from findings.models import Finding
 from notifications.models import NotificationEventType
 from notifications.service import create_notification
@@ -42,8 +50,8 @@ from projects.models import Project
 from remediations.models import (
     Remediation,
     RemediationPullRequestOutboxJob,
-    RemediationStatus,
 )
+from remediations.patch_store import PatchStore
 from reviews.config import AgentExecutionSettings
 from reviews.models import (
     Review,
@@ -121,6 +129,7 @@ class ReviewExecutionService:
                 hide_outputs=True,
             )
         self._orchestrator = OrchestratorAgent()
+        self._patch_store = PatchStore(engine)
 
     def execute(self, *, owner_id: UUID, review_id: UUID, dispatch_id: UUID) -> None:
         review_claimed = self._claim_queued_review(
@@ -169,7 +178,9 @@ class ReviewExecutionService:
                         source_kind=review.source_kind.value,
                         source_identifier=review.source_identifier,
                         source_revision=review.source_revision,
-                        repository_access=repository_access,
+                        repository_access=CachedSourceReader(repository_access)
+                        if repository_access is not None
+                        else None,
                         review_id=review_id,
                         tavily_api_key=self._settings.tavily_api_key,
                     )
@@ -205,7 +216,7 @@ class ReviewExecutionService:
         *,
         owner_id: UUID,
         review: Review,
-    ) -> Iterator[ReviewGitHubSourceAccess | None]:
+    ) -> Iterator[SourceReader | None]:
         """Open a provider reader only for source kinds implemented by execution.
 
         Tools retain responsibility for returning ``source_execution_unsupported``
@@ -213,6 +224,23 @@ class ReviewExecutionService:
         This prevents a local or GitLab review identifier from being validated as a
         GitHub numeric repository ID before the agent starts.
         """
+        if review.source_kind.value == "local":
+            from repository_intelligence.local_source import LocalReviewSourceAccess
+
+            try:
+                reader = LocalReviewSourceAccess.open(
+                    engine=self._engine,
+                    owner_id=owner_id,
+                    review_id=review.id,
+                    revision=review.source_revision,
+                    cipher=self._patch_store.cipher,
+                )
+            except sa.exc.SQLAlchemyError:
+                raise
+            except (ValueError, RuntimeError):
+                raise ExecutionFailure("local_source_snapshot_unavailable") from None
+            yield reader
+            return
         if review.source_kind.value != "github":
             yield None
             return
@@ -318,27 +346,83 @@ class ReviewExecutionService:
                 review_agent=review_agent,
                 credential_snapshot=selected_agent.credential_snapshot,
             )
+            attempt_context = replace(
+                tool_context,
+                review_agent_id=review_agent.id,
+                attempt_id=attempt_id,
+                read_paths=set(),
+                source_registry=SourceRegistry(),
+            )
             finding_batch = self._orchestrator.run(
                 review_target=review_target,
-                tool_context=replace(
-                    tool_context,
-                    review_agent_id=review_agent.id,
-                    attempt_id=attempt_id,
-                ),
+                tool_context=attempt_context,
                 agents=(runtime_agent,),
             )[0]
-            self._persist_findings(
-                owner_id=owner_id,
-                review=review,
-                review_agent=review_agent,
-                finding_outputs=finding_batch.findings,
-            )
+            if any(
+                isinstance(item, ReviewFindingOutput) for item in finding_batch.findings
+            ):
+                staged = self._stage_findings(
+                    owner_id=owner_id,
+                    review=review,
+                    review_agent=review_agent,
+                    findings=finding_batch.findings,
+                )
+                for finding, remediation_id in staged:
+                    self._patch_store.start(
+                        owner_id=owner_id, remediation_id=remediation_id
+                    )
+                    try:
+                        patch = DiffAgent(
+                            provider=runtime_agent.provider,
+                            model=runtime_agent.model,
+                            api_key=runtime_agent.api_key,
+                        ).run(
+                            finding=finding,
+                            review_target=review_target,
+                            tool_context=replace(
+                                attempt_context,
+                                read_paths=set(),
+                                source_registry=SourceRegistry(),
+                            ),
+                            on_submission=lambda remediation_id=remediation_id, **values: (
+                                self._patch_store.record_submission(
+                                    owner_id=owner_id,
+                                    remediation_id=remediation_id,
+                                    review_attempt_id=attempt_id,
+                                    **values,
+                                )
+                            ),
+                        )
+                        self._patch_store.save(
+                            owner_id=owner_id,
+                            remediation_id=remediation_id,
+                            patch=patch,
+                        )
+                    except PatchGenerationError as error:
+                        self._patch_store.fail(
+                            owner_id=owner_id,
+                            remediation_id=remediation_id,
+                            diagnostic=error.diagnostic(),
+                        )
+                        _log(
+                            "remediation_generation_failed",
+                            review_id=review.id,
+                            remediation_id=remediation_id,
+                            diagnostic=error.diagnostic(),
+                        )
+        except sa.exc.SQLAlchemyError:
+            raise  # Database outages must reach delivery recovery, not become provider errors.
         except (CredentialServiceError, ExecutionFailure, ValueError) as error:
+            failure_code = (
+                "review_output_invalid"
+                if isinstance(error, ReviewOutputInvalid)
+                else "model_access_unavailable"
+            )
             self._finish_review_agent_attempt(
                 owner_id=owner_id,
                 review_agent=review_agent,
                 attempt_id=attempt_id,
-                failure_code="model_access_unavailable",
+                failure_code=failure_code,
             )
             _log(
                 "agent_execution_failed",
@@ -346,7 +430,7 @@ class ReviewExecutionService:
                 review_agent_id=review_agent.id,
                 attempt_id=attempt_id,
                 dispatch_id=dispatch_id,
-                failure_code="model_access_unavailable",
+                failure_code=failure_code,
                 error_class=type(error).__name__,
             )
             return
@@ -498,76 +582,30 @@ class ReviewExecutionService:
             )
         return attempt_id
 
-    def _persist_findings(
-        self,
-        *,
-        owner_id: UUID,
-        review: Review,
-        review_agent: ReviewAgent,
-        finding_outputs: list[RemediationFindingOutput],
-    ) -> None:
-        finding_rows: list[dict[str, object]] = []
-        remediation_rows_by_finding_id: dict[UUID, dict[str, object]] = {}
-        for finding in finding_outputs:
-            finding_id = uuid7()
-            normalized = finding.model_dump(
-                mode="json",
-                exclude={"prompt_text", "diff"},
-            )
-            redacted_finding = {
-                key: redact_text(value) if isinstance(value, str) else value
-                for key, value in normalized.items()
-            }
-            digest = hashlib.sha256(
-                json.dumps(
-                    redacted_finding,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).digest()
-            finding_rows.append(
-                {
-                    "id": finding_id,
-                    "owner_id": owner_id,
-                    "review_id": review.id,
-                    "agent_id": review_agent.agent_id,
-                    "content_digest": digest,
-                    "category": review_agent.agent_specialization,
-                    **redacted_finding,
-                }
-            )
-            remediation_rows_by_finding_id[finding_id] = {
-                "id": uuid7(),
-                "owner_id": owner_id,
-                "project_id": review.project_id,
-                "finding_id": finding_id,
-                "prompt_text": redact_text(finding.prompt_text),
-                "proposed_diff": redact_text(finding.diff),
-                "status": RemediationStatus.PROPOSED,
-            }
-        if not finding_rows:
-            return
+    def _stage_findings(self, *, owner_id, review, review_agent, findings):
+        staged = []
         with principal_transaction(self._engine, owner_id) as connection:
-            automatic_pr_enabled = connection.execute(
-                sa.select(User.automatic_pull_requests).where(User.id == owner_id)
-            ).scalar_one_or_none()
-            project = (
-                connection.execute(
-                    sa.select(
-                        Project.source,
-                        Project.external_repository_id,
-                        Project.branch_name,
-                    ).where(
-                        Project.id == review.project_id, Project.owner_id == owner_id
-                    )
+            for finding in findings:
+                normalized = finding.model_dump(mode="json", exclude={"prompt_text"})
+                redacted = {
+                    key: redact_text(value) if isinstance(value, str) else value
+                    for key, value in normalized.items()
+                }
+                digest = hashlib.sha256(
+                    json.dumps(redacted, sort_keys=True, separators=(",", ":")).encode()
+                ).digest()
+                values = dict(
+                    id=uuid7(),
+                    owner_id=owner_id,
+                    review_id=review.id,
+                    agent_id=review_agent.agent_id,
+                    content_digest=digest,
+                    category=review_agent.agent_specialization,
+                    **redacted,
                 )
-                .mappings()
-                .one_or_none()
-            )
-            inserted_ids = (
-                connection.execute(
+                finding_id = connection.execute(
                     pg_insert(Finding)
-                    .values(finding_rows)
+                    .values(**values)
                     .on_conflict_do_nothing(
                         index_elements=[
                             Finding.owner_id,
@@ -578,43 +616,51 @@ class ReviewExecutionService:
                         index_where=Finding.content_digest.is_not(None),
                     )
                     .returning(Finding.id)
-                )
-                .scalars()
-                .all()
-            )
-            remediation_rows = [
-                remediation_rows_by_finding_id[finding_id]
-                for finding_id in inserted_ids
-            ]
-            if remediation_rows:
-                connection.execute(sa.insert(Remediation).values(remediation_rows))
-                automatic_pr_eligible = (
-                    automatic_pr_enabled is True
-                    and project is not None
-                    and project["source"] is RepositorySource.GITHUB
-                    and isinstance(project["external_repository_id"], str)
-                    and bool(project["external_repository_id"])
-                    and isinstance(project["branch_name"], str)
-                    and bool(project["branch_name"])
-                )
-                if automatic_pr_eligible:
-                    connection.execute(
-                        pg_insert(RemediationPullRequestOutboxJob)
-                        .values(
-                            [
-                                {
-                                    "idempotency_id": uuid7(),
-                                    "owner_id": owner_id,
-                                    "remediation_id": remediation["id"],
-                                }
-                                for remediation in remediation_rows
-                            ]
+                ).scalar_one_or_none()
+                if finding_id is None:
+                    finding_id = connection.execute(
+                        sa.select(Finding.id).where(
+                            Finding.owner_id == owner_id,
+                            Finding.review_id == review.id,
+                            Finding.agent_id == review_agent.agent_id,
+                            Finding.content_digest == digest,
                         )
-                        .on_conflict_do_nothing(
-                            constraint="remediation_pr_outbox_owner_remediation_key"
-                        )
+                    ).scalar_one()
+                row = connection.execute(
+                    sa.select(Remediation.id, Remediation.generation_status).where(
+                        Remediation.owner_id == owner_id,
+                        Remediation.finding_id == finding_id,
+                        Remediation.generation_contract_version == 2,
                     )
-            if inserted_ids:
+                ).one_or_none()
+                if row is not None:
+                    # Delivery replay never regenerates finished work, but a worker that
+                    # died mid-generation must not leave "Preparing changes" forever.
+                    if row.generation_status in {"pending", "running"}:
+                        staged.append((finding, row.id))
+                    continue
+                remediation_id = uuid7()
+                inserted = connection.execute(
+                    pg_insert(Remediation)
+                    .values(
+                        id=remediation_id,
+                        owner_id=owner_id,
+                        project_id=review.project_id,
+                        finding_id=finding_id,
+                        prompt_text=redact_text(finding.prompt_text),
+                        proposed_diff="",
+                        generation_status="pending",
+                        generation_contract_version=2,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=[Remediation.owner_id, Remediation.finding_id],
+                        index_where=Remediation.generation_contract_version == 2,
+                    )
+                    .returning(Remediation.id)
+                ).scalar_one_or_none()
+                if inserted is not None:
+                    staged.append((finding, remediation_id))
+            if staged:
                 create_notification(
                     connection,
                     owner_id=owner_id,
@@ -623,12 +669,12 @@ class ReviewExecutionService:
                     review_id=review.id,
                 )
         _log(
-            "findings_persisted",
+            "findings_staged",
             review_id=review.id,
             review_agent_id=review_agent.id,
-            findings_created=len(inserted_ids),
-            remediations_created=len(remediation_rows),
+            findings_count=len(findings),
         )
+        return staged
 
     def _finish_review_agent_attempt(
         self,
@@ -737,6 +783,50 @@ class ReviewExecutionService:
                 .values(status=terminal_status, completed_at=sa.func.now())
             )
             if updated.rowcount == 1:
+                # PR intents become eligible only after all reviewers are terminal.
+                ready_ids = (
+                    connection.execute(
+                        sa.select(Remediation.id)
+                        .join(
+                            Finding,
+                            sa.and_(
+                                Finding.owner_id == Remediation.owner_id,
+                                Finding.id == Remediation.finding_id,
+                            ),
+                        )
+                        .join(
+                            Project,
+                            sa.and_(
+                                Project.owner_id == Remediation.owner_id,
+                                Project.id == Remediation.project_id,
+                            ),
+                        )
+                        .where(
+                            Finding.owner_id == owner_id,
+                            Finding.review_id == review_id,
+                            Remediation.generation_status == "ready",
+                            Project.source == RepositorySource.GITHUB,
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                automatic = connection.execute(
+                    sa.select(User.automatic_pull_requests).where(User.id == owner_id)
+                ).scalar_one_or_none()
+                if terminal_status is ReviewStatus.COMPLETED and automatic:
+                    for remediation_id in ready_ids:
+                        connection.execute(
+                            pg_insert(RemediationPullRequestOutboxJob)
+                            .values(
+                                idempotency_id=uuid7(),
+                                owner_id=owner_id,
+                                remediation_id=remediation_id,
+                            )
+                            .on_conflict_do_nothing(
+                                constraint="remediation_pr_outbox_owner_remediation_key"
+                            )
+                        )
                 create_notification(
                     connection,
                     owner_id=owner_id,

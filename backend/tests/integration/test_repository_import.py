@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import pytest
+import sqlalchemy as sa
 
+from db.rls import principal_transaction
 from integration.github_stub import GithubApiStub
+from repository_intelligence import models as intelligence_models
 
 pytestmark = pytest.mark.integration
 
@@ -124,6 +127,7 @@ def test_branch_listing_and_project_creation_persist_server_resolved_metadata(
     credential_factory,
     external_repository_factory,
     github_stub: GithubApiStub,
+    integration_engine,
 ) -> None:
     owner, _ = account_pair
     credential = credential_factory(owner, access_token="owner-token")
@@ -170,6 +174,14 @@ def test_branch_listing_and_project_creation_persist_server_resolved_metadata(
     assert created.json()["repository_visibility"] == "private"
     assert created.json()["current_revision"] == commit_sha
     assert created.json()["imported_at"] is not None
+    with principal_transaction(integration_engine, owner.user_id) as connection:
+        snapshots = connection.execute(
+            sa.select(
+                intelligence_models.snapshot.c.source_revision,
+                intelligence_models.snapshot.c.status,
+            ).where(intelligence_models.snapshot.c.project_id == created.json()["id"])
+        ).all()
+    assert snapshots == [(commit_sha, "pending")]
 
 
 def test_repository_import_isolation_and_duplicate_rollback(

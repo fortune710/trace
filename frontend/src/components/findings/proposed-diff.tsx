@@ -96,7 +96,25 @@ export function UnifiedDiffRenderer({ diff }: { diff: string }) {
 
 export function ProposedDiff({ findingId }: { findingId: string }) {
   const remediations = useFindingRemediations(findingId)
-  const diff = remediations.data?.[0]?.proposed_diff
+  const remediation = remediations.data?.[0]
+  const diff = remediation?.proposed_diff
+
+  if (remediation?.generation_status === "pending" || remediation?.generation_status === "running") {
+    return (
+      <p className="mt-6 text-sm text-muted-foreground">Preparing changes…</p>
+    )
+  }
+
+  if (remediation?.status === "proposed" && (remediation.generation_failure || remediation.generation_status === "failed" || remediation.generation_status === "legacy_unverified")) {
+    return (
+      <p
+        className="mt-6 text-sm text-muted-foreground"
+        role="status"
+      >
+        The finding is saved. Automated changes are unavailable: {remediation.generation_failure?.message ?? "this patch has not been verified"}.
+      </p>
+    )
+  }
 
   if (!diff) return null
 
@@ -106,6 +124,9 @@ export function ProposedDiff({ findingId }: { findingId: string }) {
         Proposed changes
       </h2>
       <div className="mt-3">
+        {remediation?.preview_is_redacted ? (
+          <p className="mb-2 text-xs text-muted-foreground">Redacted preview — applying changes uses the verified original patch.</p>
+        ) : null}
         <UnifiedDiffRenderer diff={diff} />
       </div>
     </section>

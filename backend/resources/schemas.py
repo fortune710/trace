@@ -245,10 +245,30 @@ class LocalSourceSnapshot(RequestModel):
     digest: HashString
 
 
+class LocalSourceEntry(RequestModel):
+    path: str = Field(min_length=1, max_length=1024)
+    directory: bool
+    content_base64: str | None = Field(default=None, max_length=350_000)
+    # Oversized or binary files carry their content hash instead of their bytes.
+    content_sha256: HashString | None = None
+
+
+class LocalSourceUpload(RequestModel):
+    digest: HashString
+    entries: list[LocalSourceEntry] = Field(max_length=3_000)
+
+    @model_validator(mode="after")
+    def validate_encoded_size(self) -> LocalSourceUpload:
+        if sum(len(entry.content_base64 or "") for entry in self.entries) > 5_400_000:
+            raise ValueError("local snapshot upload exceeds the request budget")
+        return self
+
+
 class ReviewCreate(RequestModel):
     project_id: UUID
     agent_ids: list[UUID] = Field(min_length=1, max_length=100)
     local_source_snapshot: LocalSourceSnapshot | None = None
+    local_source_upload: LocalSourceUpload | None = None
 
     @model_validator(mode="after")
     def validate_unique_values(self) -> ReviewCreate:
@@ -292,6 +312,8 @@ class ReviewResponse(RequestModel):
     created_at: datetime
     updated_at: datetime
     agents: list[ReviewAgentResponse]
+    warnings: list[str] = Field(default_factory=list)
+    remediation_generation_failed_count: int = 0
 
 
 class ReviewPage(RequestModel):
@@ -348,6 +370,25 @@ class RemediationResponse(RequestModel):
     approved_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    generation_status: str = "legacy_unverified"
+    generation_failure: dict[str, object] | None = None
+    patch_available: bool = False
+    preview_is_redacted: bool = True
+
+
+class ExecutablePatchFileResponse(RequestModel):
+    path: str
+    operation: str
+    original_sha256: str | None
+    result_sha256: str
+
+
+class ExecutablePatchResponse(RequestModel):
+    diff: str
+    sha256: str
+    source_snapshot: dict[str, str]
+    files: list[ExecutablePatchFileResponse]
+    warnings: list[str] = Field(default_factory=list)
 
 
 class RemediationPromptResponse(RequestModel):

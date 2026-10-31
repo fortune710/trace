@@ -15,6 +15,13 @@ export type FileDiff = {
 }
 
 function pathFromHeader(path: string) {
+  if (path.startsWith('"')) {
+    try {
+      path = JSON.parse(path) as string
+    } catch {
+      return path
+    }
+  }
   if (path === "/dev/null") return path
   return path.replace(/^[ab]\//, "")
 }
@@ -37,13 +44,20 @@ export function parseUnifiedDiff(diff: string): FileDiff[] {
   let insideHunk = false
 
   for (const line of diff.split("\n")) {
-    const fileHeader = /^diff --git a\/(.+) b\/(.+)$/.exec(line)
-    if (fileHeader) {
+    let filePath: string | null = null
+    const plainHeader = /^diff --git a\/(.+) b\/\1$/.exec(line)
+    const quotedHeader = /^diff --git ("(?:[^"\\]|\\.)*") ("(?:[^"\\]|\\.)*")$/.exec(line)
+    if (plainHeader) {
+      filePath = plainHeader[1]
+    } else if (quotedHeader) {
+      filePath = pathFromHeader(quotedHeader[2])
+    }
+    if (filePath !== null) {
       currentFile = {
         additions: 0,
         deletions: 0,
         lines: [],
-        path: pathFromHeader(fileHeader[2]),
+        path: filePath,
       }
       files.push(currentFile)
       insideHunk = false
@@ -52,9 +66,9 @@ export function parseUnifiedDiff(diff: string): FileDiff[] {
 
     if (!currentFile) continue
 
-    if (line.startsWith("--- ")) continue
+    if (!insideHunk && line.startsWith("--- ")) continue
 
-    if (line.startsWith("+++ ")) {
+    if (!insideHunk && line.startsWith("+++ ")) {
       const newPath = pathFromHeader(line.slice(4).split("\t", 1)[0])
       currentFile.path = newPath === "/dev/null" ? currentFile.path : newPath
       continue
@@ -69,6 +83,7 @@ export function parseUnifiedDiff(diff: string): FileDiff[] {
     }
 
     if (!insideHunk || line.startsWith("\\ No newline at end of file")) continue
+    if (!line || ![" ", "+", "-"].includes(line[0])) continue
 
     if (line.startsWith("+")) {
       currentFile.lines.push({

@@ -408,6 +408,42 @@ services:
     pids_limit: 64
     stop_grace_period: 30s
 
+  repository-intelligence-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["./start-repository-intelligence-worker.sh"]
+    environment:
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD in .env}@postgres:5432/trace
+      AUTH_CREDENTIAL_ENCRYPTION_PROVIDER: ${AUTH_CREDENTIAL_ENCRYPTION_PROVIDER:-vault}
+      AUTH_CREDENTIAL_ENCRYPTION_KEY: ${AUTH_CREDENTIAL_ENCRYPTION_KEY:-}
+      AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION: ${AUTH_CREDENTIAL_ENCRYPTION_KEY_VERSION:-local-v1}
+      AUTH_VAULT_ADDR: ${AUTH_VAULT_ADDR:-http://vault:8200}
+      AUTH_VAULT_TOKEN_FILE: /run/vault/trace-backend-token
+      AUTH_VAULT_TRANSIT_MOUNT: ${AUTH_VAULT_TRANSIT_MOUNT:-transit}
+      AUTH_VAULT_TRANSIT_KEY: ${AUTH_VAULT_TRANSIT_KEY:-trace-provider-credentials}
+    volumes:
+      - ./backend:/app:ro
+      - vault_runtime:/run/vault:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      vault-bootstrap:
+        condition: service_completed_successfully
+    networks:
+      - edge
+      - data
+      - secrets
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+
   review-execution-worker:
     build:
       context: ./backend

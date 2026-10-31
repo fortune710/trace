@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core"
+import type { ExecutablePatch } from "@/lib/api"
 
 export type NativeSourceSnapshot = {
   integrityAlgorithm: "sha256-directory-manifest-v1"
@@ -7,6 +8,15 @@ export type NativeSourceSnapshot = {
 
 export type NativeStoredSourceSnapshot = NativeSourceSnapshot & {
   snapshotId: string
+  upload: {
+    digest: string
+    entries: {
+      path: string
+      directory: boolean
+      content_base64: string | null
+      content_sha256?: string | null
+    }[]
+  }
 }
 
 export type NativeLocalRemediationFile = {
@@ -25,8 +35,8 @@ type NativeSnapshotError = {
 }
 
 export class LocalSourceSnapshotError extends Error {
-  constructor() {
-    super("The local source could not be captured safely.")
+  constructor(message = "The local source could not be captured safely.") {
+    super(message)
     this.name = "LocalSourceSnapshotError"
   }
 }
@@ -56,7 +66,10 @@ export async function createLocalReviewSnapshot(
       canonicalPath,
       snapshotId: crypto.randomUUID(),
     })
-  } catch {
+  } catch (error) {
+    if ((error as NativeSnapshotError | null)?.code === "snapshot_upload_too_large") {
+      throw new LocalSourceSnapshotError("The local snapshot exceeds the upload limits: 3,000 entries, 256 KB per file, and 4 MB total.")
+    }
     throw new LocalSourceSnapshotError()
   }
 }
@@ -64,13 +77,13 @@ export async function createLocalReviewSnapshot(
 export async function applyLocalRemediation(
   canonicalPath: string,
   remediationId: string,
-  diff: string,
+  patch: ExecutablePatch,
 ): Promise<NativeLocalRemediationResult> {
   try {
     return await invoke<NativeLocalRemediationResult>("apply_local_remediation", {
       canonicalPath,
       remediationId,
-      diff,
+      patch,
     })
   } catch (error) {
     const code = (error as NativeSnapshotError | null)?.code

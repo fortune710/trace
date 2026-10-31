@@ -77,7 +77,7 @@ describe("FindingIssueActions", () => {
   it("renders the disabled pull-request action and previews a selected provider", () => {
     const mutate = vi.fn()
     mockedUseFindingRemediations.mockReturnValue({
-      data: [{ id: "remediation-a" }],
+      data: [{ id: "remediation-a", patch_available: true }],
       isLoading: false,
     } as ReturnType<typeof useFindingRemediations>)
     mockedUseCreateRemediationIssue.mockReturnValue({
@@ -119,7 +119,7 @@ describe("FindingIssueActions", () => {
     const createPullRequest = vi.fn()
     const updateAutomaticPullRequests = vi.fn()
     mockedUseFindingRemediations.mockReturnValue({
-      data: [{ id: "remediation-a" }],
+      data: [{ id: "remediation-a", patch_available: true }],
       isLoading: false,
     } as ReturnType<typeof useFindingRemediations>)
     mockedUseUpdateAutomaticPullRequests.mockReturnValue({
@@ -198,7 +198,7 @@ describe("FindingIssueActions", () => {
       isWeb: false,
     })
     mockedUseFindingRemediations.mockReturnValue({
-      data: [{ id: "remediation-a", proposed_diff: "diff --git a/file b/file" }],
+      data: [{ id: "remediation-a", proposed_diff: "diff --git a/file b/file", patch_available: true }],
       isLoading: false,
     } as ReturnType<typeof useFindingRemediations>)
     mockedUseCreateRemediationIssue.mockReturnValue({

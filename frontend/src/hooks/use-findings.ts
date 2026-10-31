@@ -41,9 +41,10 @@ export function useReviewFindings(
   page: number,
   filters: FindingFilters,
   enabled = true,
+  polling = false,
 ) {
   return useQuery({
-    queryKey: [...findingsQueryKey, "review", reviewId, page, filters],
+    queryKey: [...findingsQueryKey, "review", reviewId, page, filters, polling],
     queryFn: () =>
       findingsApi.list({
         reviewId: reviewId!,
@@ -52,6 +53,7 @@ export function useReviewFindings(
         ...filters,
       }),
     enabled: Boolean(reviewId) && enabled,
+    refetchInterval: polling ? 2000 : false,
     placeholderData: keepPreviousData,
     retry: false,
   })
@@ -243,6 +245,9 @@ export function useApplyLocalRemediation(findingId: string) {
 
   return useMutation({
     mutationFn: async (remediation: Remediation) => {
+      if (!remediation.patch_available) {
+        throw new Error("A validated remediation patch is not available.")
+      }
       if (!runtime.isTauri) {
         throw new Error("Local remediation is available in the desktop app only.")
       }
@@ -269,10 +274,11 @@ export function useApplyLocalRemediation(findingId: string) {
       })
       let operation
       try {
+        const patch = await remediationsApi.getPatch(remediation.id)
         operation = await applyLocalRemediation(
           project.source.canonicalPath,
           remediation.id,
-          remediation.proposed_diff,
+          patch,
         )
         await desktopTelemetry.record({
           event: "local_remediation.apply.succeeded",
@@ -354,6 +360,10 @@ export function useFindingRemediations(findingId: string | undefined) {
     queryKey: [...findingsQueryKey, "remediation", findingId],
     queryFn: () => remediationsApi.listForFinding(findingId!),
     enabled: Boolean(findingId),
+    refetchInterval: (query) =>
+      query.state.data?.some((item) => item.generation_status === "pending" || item.generation_status === "running")
+        ? 2000
+        : false,
     retry: false,
   })
 }

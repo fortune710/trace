@@ -63,10 +63,12 @@ export function FindingIssueActions({
   findingId,
   status,
   isLocalProject = false,
+  reviewCompleted = true,
 }: {
   findingId: string
   status: FindingStatus
   isLocalProject?: boolean
+  reviewCompleted?: boolean
 }) {
   const [provider, setProvider] = useState<IssueProviderName | null>(null)
   const [confirmingPullRequest, setConfirmingPullRequest] = useState(false)
@@ -107,7 +109,7 @@ export function FindingIssueActions({
   }, [])
 
   function requestPullRequest() {
-    if (!remediationId || status !== "accepted") return
+    if (!remediationId || !reviewCompleted || !remediation?.patch_available || status !== "accepted") return
     if (appliesLocally && remediation) {
       applyLocalRemediation.mutate(remediation)
       return
@@ -168,6 +170,8 @@ export function FindingIssueActions({
                   disabled={
                     remediations.isLoading ||
                     !remediationId ||
+                    !reviewCompleted ||
+                    !remediation?.patch_available ||
                     status !== "accepted" ||
                     (!appliesLocally && Boolean(remediation?.pull_request)) ||
                     createPullRequest.isPending ||

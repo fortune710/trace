@@ -2,7 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { renderHook, waitFor } from "@testing-library/react"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
   findingsQueryKey,
@@ -47,6 +47,17 @@ const mockedDatabase = vi.mocked(getLocalProjectsDatabase)
 const mockedApply = vi.mocked(applyLocalRemediation)
 const mockedRestore = vi.mocked(restoreLocalRemediation)
 const mockedTelemetry = vi.mocked(desktopTelemetry.record)
+const executablePatch = {
+  diff: "diff --git a/file b/file",
+  sha256: "a".repeat(64),
+  source_snapshot: { source_kind: "local", source_identifier: "source", revision: "b".repeat(64) },
+  files: [],
+  warnings: [],
+}
+
+beforeEach(() => {
+  vi.spyOn(remediationsApi, "getPatch").mockResolvedValue(executablePatch)
+})
 
 function remediation(id: string): Remediation {
   return {
@@ -54,6 +65,10 @@ function remediation(id: string): Remediation {
     project_id: "project-a",
     finding_id: "finding-a",
     proposed_diff: "diff --git a/file b/file",
+    generation_status: "ready",
+    generation_failure: null,
+    patch_available: true,
+    preview_is_redacted: true,
     pull_request: null,
     status: "proposed",
     approved_at: null,
@@ -237,7 +252,7 @@ describe("useApplyLocalRemediation", () => {
     expect(mockedApply).toHaveBeenCalledWith(
       "/private/project",
       "remediation-a",
-      "diff --git a/file b/file",
+      executablePatch,
     )
     expect(complete).toHaveBeenCalledWith("remediation-a", {
       files: [

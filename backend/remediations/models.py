@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import cast
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -87,6 +88,21 @@ class Remediation(Base):
     )
     prompt_text: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     proposed_diff: Mapped[str] = mapped_column(sa.Text(), nullable=False)
+    generation_status: Mapped[str] = mapped_column(
+        sa.Text(), nullable=False, server_default=sa.text("'legacy_unverified'")
+    )
+    generation_contract_version: Mapped[int | None] = mapped_column(
+        sa.Integer(), nullable=True
+    )
+    generation_failure: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    patch_artifact_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), nullable=True
+    )
+    validated_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
     pull_request: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[RemediationStatus] = mapped_column(
         native_enum(RemediationStatus, "remediation_status", "public"),
@@ -109,6 +125,25 @@ class Remediation(Base):
     mutation_version: Mapped[int] = mapped_column(
         sa.Integer(), nullable=False, server_default=sa.text("0")
     )
+
+
+sa.CheckConstraint(
+    "generation_status IN ('pending','running','ready','failed','legacy_unverified')",
+    name="remediations_generation_status_check",
+    table=cast(sa.Table, Remediation.__table__),
+)
+sa.CheckConstraint(
+    "generation_status <> 'ready' OR (patch_artifact_id IS NOT NULL AND validated_at IS NOT NULL)",
+    name="remediations_ready_artifact_check",
+    table=cast(sa.Table, Remediation.__table__),
+)
+sa.Index(
+    "remediations_owner_finding_v2_key",
+    Remediation.owner_id,
+    Remediation.finding_id,
+    unique=True,
+    postgresql_where=Remediation.generation_contract_version == 2,
+)
 
 
 class RemediationPullRequestJob(Base):

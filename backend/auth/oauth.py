@@ -18,11 +18,11 @@ from uuid import UUID
 
 import jwt
 import sqlalchemy as sa
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi import Request as FastAPIRequest
 from fastapi.responses import RedirectResponse
 from jwt import PyJWKClient
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from redis.exceptions import RedisError
 
 from audit.emit import enqueue_audit
@@ -105,6 +105,13 @@ class GitHubConnectionStatusResponse(BaseModel):
     status: GitHubConnectionStatus
 
 
+class DesktopOAuthExchangeRequest(BaseModel):
+    # Unauthenticated input: the ticket is an opaque token and the verifier is an
+    # RFC 7636 code verifier, so neither needs to be larger than these bounds.
+    code: str = Field(min_length=16, max_length=512)
+    verifier: str = Field(min_length=43, max_length=128)
+
+
 @dataclass(frozen=True)
 class OAuthTransaction:
     provider: str
@@ -115,6 +122,7 @@ class OAuthTransaction:
     purpose: OAuthPurpose = OAuthPurpose.LOGIN
     user_id: str | None = None
     session_id: str | None = None
+    desktop: bool = False
 
 
 @dataclass(frozen=True)
@@ -139,6 +147,8 @@ class OAuthStateStore:
         purpose: OAuthPurpose = OAuthPurpose.LOGIN,
         user_id: UUID | None = None,
         session_id: UUID | None = None,
+        verifier: str | None = None,
+        desktop: bool = False,
     ) -> tuple[str, str, str | None]:
         if purpose != OAuthPurpose.LOGIN and (user_id is None or session_id is None):
             raise ValueError("OAuth connection owner and session are required")
@@ -146,8 +156,10 @@ class OAuthStateStore:
             user_id is not None or session_id is not None
         ):
             raise ValueError("OAuth login cannot carry a connection owner")
+        if desktop and purpose != OAuthPurpose.LOGIN:
+            raise ValueError("Desktop OAuth is only supported for login")
         state = generate_opaque_token()
-        verifier = generate_opaque_token()
+        effective_verifier = verifier or generate_opaque_token()
         nonce = (
             generate_opaque_token()
             if provider == IdentityProvider.GOOGLE.value
@@ -155,13 +167,14 @@ class OAuthStateStore:
         )
         transaction = OAuthTransaction(
             provider=provider,
-            verifier=verifier,
+            verifier=effective_verifier,
             nonce=nonce,
             destination=destination,
             user_agent_hash=self._digest(user_agent or ""),
             purpose=purpose,
             user_id=str(user_id) if user_id is not None else None,
             session_id=str(session_id) if session_id is not None else None,
+            desktop=desktop,
         )
         try:
             created = await self._redis.set(
@@ -174,7 +187,7 @@ class OAuthStateStore:
             raise OAuthUnavailable("OAuth state storage is unavailable") from error
         if not created:
             raise OAuthUnavailable("OAuth state storage is unavailable")
-        return state, verifier, nonce
+        return state, effective_verifier, nonce
 
     async def consume(self, state: str) -> OAuthTransaction:
         if not state or len(state) > 512:
@@ -196,6 +209,7 @@ class OAuthStateStore:
                 purpose=OAuthPurpose(decoded.get("purpose", OAuthPurpose.LOGIN)),
                 user_id=decoded.get("user_id"),
                 session_id=decoded.get("session_id"),
+                desktop=bool(decoded.get("desktop", False)),
             )
             if (
                 transaction.provider
@@ -292,6 +306,40 @@ def install_oauth_routes(
             )
         return store
 
+    async def create_desktop_ticket(code: str, transaction: OAuthTransaction) -> str:
+        ticket = generate_opaque_token()
+        try:
+            created = await get_redis_client().set(
+                f"trace:oauth:desktop:{ticket}",
+                json.dumps(
+                    {"code": code, "transaction": asdict(transaction)},
+                    separators=(",", ":"),
+                ),
+                ex=120,
+                nx=True,
+            )
+        except RedisError as error:
+            raise OAuthUnavailable("OAuth state storage is unavailable") from error
+        if not created:
+            raise OAuthUnavailable("OAuth state storage is unavailable")
+        return ticket
+
+    async def consume_desktop_ticket(ticket: str) -> tuple[str, OAuthTransaction]:
+        try:
+            raw = await get_redis_client().getdel(f"trace:oauth:desktop:{ticket}")
+        except RedisError as error:
+            raise OAuthUnavailable("OAuth state storage is unavailable") from error
+        if not raw:
+            raise OAuthRejected("OAuth code is invalid")
+        try:
+            payload = json.loads(raw)
+            transaction = OAuthTransaction(**payload["transaction"])
+            if not transaction.desktop or transaction.purpose != OAuthPurpose.LOGIN:
+                raise ValueError
+            return payload["code"], transaction
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise OAuthRejected("OAuth code is invalid") from error
+
     def audit(
         request: FastAPIRequest,
         *,
@@ -326,6 +374,127 @@ def install_oauth_routes(
                 "status_code": str(status_code),
             },
         )
+
+    @app.get("/auth/oauth/{provider}/desktop/start")
+    async def desktop_oauth_start(
+        request: FastAPIRequest, provider: str, challenge: str
+    ):
+        if (
+            len(challenge) < 43
+            or len(challenge) > 128
+            or any(
+                c
+                not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+                for c in challenge
+            )
+        ):
+            raise _invalid_request()
+        configuration = _provider_configuration(settings, provider)
+        try:
+            await enforce_rate_limit(
+                rate_limiter(),
+                policy=AUTH_RATE_LIMIT_POLICIES["auth.oauth_start.ip"],
+                subject=request.client.host if request.client else "unknown",
+            )
+            state, _, nonce = await state_store().create(
+                provider=provider,
+                destination="trace://oauth/callback",
+                user_agent=request.headers.get("user-agent"),
+                verifier=challenge,
+                desktop=True,
+            )
+        except OAuthUnavailable as error:
+            raise _unavailable() from error
+        except ValueError as error:
+            raise _invalid_request() from error
+        parameters = {
+            "client_id": configuration.client_id,
+            "redirect_uri": configuration.redirect_uri,
+            "response_type": "code",
+            "scope": configuration.scope,
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        }
+        if nonce:
+            parameters["nonce"] = nonce
+        audit(
+            request,
+            event="oauth",
+            outcome="accepted",
+            reason="authorization_started",
+            status_code=302,
+            provider=provider,
+        )
+        return RedirectResponse(
+            f"{configuration.authorize_url}?{urlencode(parameters)}", status_code=302
+        )
+
+    @app.post("/auth/oauth/desktop/exchange")
+    async def desktop_oauth_exchange(
+        request: FastAPIRequest, body: DesktopOAuthExchangeRequest, response: Response
+    ):
+        # The provider is only known once the single-use ticket is consumed.
+        provider = "unknown"
+        try:
+            code, transaction = await consume_desktop_ticket(body.code)
+            provider = transaction.provider
+            if _pkce_challenge(body.verifier) != transaction.verifier:
+                raise OAuthRejected("OAuth verifier is invalid")
+            transaction = OAuthTransaction(
+                **{**asdict(transaction), "verifier": body.verifier}
+            )
+            identity = await asyncio.to_thread(
+                _provider_identity,
+                _provider_configuration(settings, transaction.provider),
+                code,
+                transaction,
+            )
+            result = await asyncio.to_thread(
+                auth_service().oauth_login,
+                provider=IdentityProvider(transaction.provider),
+                subject=identity.subject,
+                email=identity.email,
+                display_name=identity.display_name,
+            )
+            if result.tokens is None:
+                raise OAuthRejected("OAuth account is not eligible")
+            csrf_token = _set_session(
+                response,
+                result.tokens.access_token,
+                result.tokens.refresh_token,
+                result.tokens.session_id,
+                settings,
+            )
+        except (OAuthRejected, ValueError, AuthError) as error:
+            audit(
+                request,
+                event="oauth",
+                outcome="rejected",
+                reason="callback_rejected",
+                status_code=401,
+                provider=provider,
+            )
+            raise _authentication_failed() from error
+        except (OAuthUnavailable, AuthenticationUnavailable) as error:
+            audit(
+                request,
+                event="oauth",
+                outcome="rejected",
+                reason="dependency_unavailable",
+                status_code=503,
+                provider=provider,
+            )
+            raise _unavailable() from error
+        audit(
+            request,
+            event="oauth",
+            outcome="accepted",
+            reason="session_created",
+            status_code=200,
+            provider=provider,
+        )
+        return {"message": "Authenticated.", "csrf_token": csrf_token}
 
     @app.get("/auth/oauth/{provider}/start")
     async def oauth_start(
@@ -545,6 +714,20 @@ def install_oauth_routes(
             configuration = _provider_configuration(
                 settings, provider, purpose=transaction.purpose
             )
+            if transaction.desktop:
+                ticket = await create_desktop_ticket(code, transaction)
+                audit(
+                    request,
+                    event="oauth",
+                    outcome="accepted",
+                    reason="desktop_ticket_issued",
+                    status_code=303,
+                    provider=provider,
+                )
+                return RedirectResponse(
+                    f"trace://oauth/callback?{urlencode({'code': ticket})}",
+                    status_code=303,
+                )
             identity = await asyncio.to_thread(
                 _provider_identity, configuration, code, transaction
             )
@@ -1150,12 +1333,12 @@ def _destination(settings: AuthSettings, requested: str | None) -> str:
 
 
 def _set_session(
-    response: RedirectResponse,
+    response: Response,
     access_token: str,
     refresh_token: str,
     session_id: UUID,
     settings: AuthSettings,
-) -> None:
+) -> str:
     set_auth_cookies(
         response,
         access_token=access_token,
@@ -1166,11 +1349,13 @@ def _set_session(
     csrf_key = decode_base64url_key(
         settings.csrf_hmac_key.get_secret_value(), name="AUTH_CSRF_HMAC_KEY"
     )
+    csrf_token = issue_csrf_token(session_id=session_id, key=csrf_key)
     set_csrf_cookie(
         response,
-        csrf_token=issue_csrf_token(session_id=session_id, key=csrf_key),
+        csrf_token=csrf_token,
         settings=settings,
     )
+    return csrf_token
 
 
 def _oauth_failure_redirect(
@@ -1179,6 +1364,11 @@ def _oauth_failure_redirect(
     *,
     purpose: OAuthPurpose = OAuthPurpose.LOGIN,
 ) -> RedirectResponse:
+    if destination.startswith("trace://oauth/callback"):
+        return RedirectResponse(
+            f"trace://oauth/callback?{urlencode({'error': 'oauth_failed', 'request_id': request_id})}",
+            status_code=303,
+        )
     if purpose != OAuthPurpose.LOGIN:
         return _connection_redirect(
             destination,
@@ -1241,6 +1431,16 @@ def _invalid_request() -> AuthError:
         status_code=400,
         event="request",
         reason="invalid_input",
+    )
+
+
+def _authentication_failed() -> AuthError:
+    return AuthError(
+        code="authentication_failed",
+        message="Authentication failed.",
+        status_code=401,
+        event="authentication",
+        reason="oauth_rejected",
     )
 
 

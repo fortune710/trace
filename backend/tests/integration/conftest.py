@@ -355,7 +355,12 @@ def review_factory():
 @pytest.fixture
 def artifact_graph_factory(integration_engine):
     def create(
-        account: TestAccount, project_id: UUID, agent_id: UUID
+        account: TestAccount,
+        project_id: UUID,
+        agent_id: UUID,
+        *,
+        source_kind=RepositorySource.LOCAL,
+        source_identifier="integration-local-source",
     ) -> dict[str, UUID]:
         review_id = uuid4()
         finding_id = uuid4()
@@ -367,10 +372,13 @@ def artifact_graph_factory(integration_engine):
                     id=review_id,
                     owner_id=account.user_id,
                     project_id=project_id,
-                    source_revision="a" * 64,
-                    source_kind=RepositorySource.LOCAL,
-                    source_identifier="integration-local-source",
-                    integrity_algorithm="sha256-directory-manifest-v1",
+                    source_revision="a"
+                    * (40 if source_kind is RepositorySource.GITHUB else 64),
+                    source_kind=source_kind,
+                    source_identifier=source_identifier,
+                    integrity_algorithm="git-commit-sha1-v1"
+                    if source_kind is RepositorySource.GITHUB
+                    else "sha256-directory-manifest-v1",
                     status=ReviewStatus.COMPLETED,
                 )
             )

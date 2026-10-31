@@ -8,6 +8,8 @@ from threading import Event
 import pytest
 import sqlalchemy as sa
 
+from agents.execution.patches import build_patch
+from auth.credentials import CredentialCipher
 from db.rls import principal_transaction
 from findings.models import Finding, FindingStatus
 from remediations.dispatch import (
@@ -15,10 +17,13 @@ from remediations.dispatch import (
     RemediationPullRequestQueueUnavailable,
 )
 from remediations.models import (
+    Remediation,
     RemediationPullRequestOutboxJob,
     RemediationPullRequestOutboxStatus,
 )
+from remediations.patch_store import PatchStore
 from remediations.queueing import RemediationPullRequestMessageV1
+from reviews.models import Review
 
 pytestmark = pytest.mark.integration
 
@@ -66,6 +71,32 @@ class _BlockingPublisher(_RecordingPublisher):
 
 
 def _insert_outbox(integration_engine, owner_id, remediation_id) -> None:  # type: ignore[no-untyped-def]
+    with principal_transaction(integration_engine, owner_id) as connection:
+        scope = (
+            connection.execute(
+                sa.select(
+                    Review.source_kind, Review.source_identifier, Review.source_revision
+                )
+                .select_from(Remediation)
+                .join(Finding, Finding.id == Remediation.finding_id)
+                .join(Review, Review.id == Finding.review_id)
+                .where(Remediation.id == remediation_id)
+            )
+            .mappings()
+            .one()
+        )
+    patch = build_patch(
+        original={"file": "before\n"},
+        updated={"file": "after\n"},
+        snapshot={
+            "source_kind": scope["source_kind"].value,
+            "source_identifier": scope["source_identifier"],
+            "revision": scope["source_revision"],
+        },
+    )
+    PatchStore(
+        integration_engine, CredentialCipher(key=b"c" * 32, key_version="local-v1")
+    ).save(owner_id=owner_id, remediation_id=remediation_id, patch=patch)
     with principal_transaction(integration_engine, owner_id) as connection:
         connection.execute(
             sa.insert(RemediationPullRequestOutboxJob).values(

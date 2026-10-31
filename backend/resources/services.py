@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -16,6 +17,7 @@ from agents.catalog import supports_model
 from agents.models import Agent
 from artifacts.models import LocalFileBackup
 from audit.outbox import AuditRecorder
+from auth.credentials import CredentialCipher, VaultTransitCredentialCipher
 from auth.errors import (
     AuthorizationDenied,
     PromptRenderFailed,
@@ -32,6 +34,9 @@ from findings.models import Finding, FindingStatus
 from projects.models import Project, ProjectCategory
 from remediations.models import Remediation, RemediationStatus
 from remediations.prompt_template import render_remediation_prompt
+from repository_intelligence import models as intelligence_models
+from repository_intelligence.local_snapshot import decode_snapshot_entries
+from repository_intelligence.service import ensure_pending, persist_analysis
 from reviews.models import (
     Review,
     ReviewAgent,
@@ -350,6 +355,16 @@ class ProjectService:
                         else None,
                     )
                 )
+                if branch_metadata is not None and github_external_id is not None:
+                    ensure_pending(
+                        connection,
+                        owner_id=owner_id,
+                        project_id=project_id,
+                        source_kind=RepositorySource.GITHUB,
+                        source_identifier=github_external_id,
+                        revision=branch_metadata.commit_sha,
+                        integrity_algorithm="git-commit-sha1-v1",
+                    )
                 project = cast(
                     Project,
                     _orm_scalar_one(
@@ -638,8 +653,30 @@ def _review_response(
         .mappings()
         .all()
     )
+    unavailable = connection.execute(
+        sa.select(sa.func.count())
+        .select_from(Remediation)
+        .join(
+            Finding,
+            sa.and_(
+                Finding.owner_id == Remediation.owner_id,
+                Finding.id == Remediation.finding_id,
+            ),
+        )
+        .where(
+            Finding.owner_id == owner_id,
+            Finding.review_id == review_id,
+            sa.or_(
+                Remediation.generation_status.in_(["failed", "legacy_unverified"]),
+                Remediation.generation_failure["code"].astext.is_not(None),
+            ),
+            Remediation.status == RemediationStatus.PROPOSED,
+        )
+    ).scalar_one()
     return {
         "id": review["id"],
+        "warnings": ["remediation_generation_incomplete"] if unavailable else [],
+        "remediation_generation_failed_count": unavailable,
         "project_id": review["project_id"],
         "source_revision": review["source_revision"],
         "source_snapshot": {
@@ -805,9 +842,15 @@ def _resolve_github_review_snapshot(
 
 
 class ReviewService:
-    def __init__(self, engine: Engine, repository_service: Any | None = None) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        repository_service: Any | None = None,
+        snapshot_cipher: CredentialCipher | VaultTransitCredentialCipher | None = None,
+    ) -> None:
         self._engine = engine
         self._repository_service = repository_service
+        self._snapshot_cipher = snapshot_cipher
 
     def create(
         self,
@@ -864,6 +907,18 @@ class ReviewService:
                     ) = _resolve_local_review_snapshot(
                         project, values.get("local_source_snapshot")
                     )
+                    upload = values.get("local_source_upload")
+                    if upload is not None:
+                        if upload.get("digest") != source_revision:
+                            raise ResourceConflict("snapshot_digest_mismatch")
+                        try:
+                            local_files = decode_snapshot_entries(
+                                upload["entries"], source_revision
+                            )
+                        except (ValueError, KeyError, TypeError) as error:
+                            raise ResourceConflict("snapshot_upload_invalid") from error
+                    else:
+                        local_files = None
                 else:
                     if values.get("local_source_snapshot") is not None:
                         raise ResourceConflict("github_source_snapshot_forbidden")
@@ -892,6 +947,15 @@ class ReviewService:
                         raise ResourceConflict("agent_disabled")
                     agents.append(agent)
                 review_id = uuid7()
+                intelligence_snapshot_id = ensure_pending(
+                    connection,
+                    owner_id=owner_id,
+                    project_id=project.id,
+                    source_kind=source_kind,
+                    source_identifier=source_identifier,
+                    revision=source_revision,
+                    integrity_algorithm=integrity_algorithm,
+                )
                 connection.execute(
                     sa.insert(Review).values(
                         id=review_id,
@@ -901,12 +965,50 @@ class ReviewService:
                         source_kind=source_kind,
                         source_identifier=source_identifier,
                         integrity_algorithm=integrity_algorithm,
+                        intelligence_snapshot_id=intelligence_snapshot_id,
                         status=ReviewStatus.QUEUED,
                         idempotency_id=uuid7(),
                         idempotency_key_digest=key_digest,
                         request_digest=request_digest,
                     )
                 )
+                if project.source is RepositorySource.LOCAL and local_files is not None:
+                    if self._snapshot_cipher is None:
+                        raise ResourceUnavailable()
+                    encrypted = self._snapshot_cipher.encrypt_json(
+                        {
+                            "files": {
+                                path: base64.b64encode(data).decode("ascii")
+                                for path, data in local_files.items()
+                            }
+                        },
+                        credential_id=review_id,
+                        owner_id=owner_id,
+                        provider="local",
+                        credential_kind="review_snapshot",
+                    )
+                    connection.execute(
+                        sa.insert(intelligence_models.local_source).values(
+                            review_id=review_id,
+                            owner_id=owner_id,
+                            source_revision=source_revision,
+                            ciphertext=encrypted.ciphertext,
+                            nonce=encrypted.nonce,
+                            key_version=encrypted.key_version,
+                            encryption_provider=encrypted.encryption_provider,
+                            key_reference=encrypted.key_reference,
+                        )
+                    )
+                    persist_analysis(
+                        connection,
+                        owner_id=owner_id,
+                        snapshot_id=intelligence_snapshot_id,
+                        source_kind="local",
+                        source_identifier=source_identifier,
+                        revision=source_revision,
+                        files=local_files,
+                        manifest_digest=source_revision,
+                    )
                 assignments = [
                     {
                         "id": uuid7(),
@@ -1244,8 +1346,59 @@ def _finding_response(finding: Finding, review_agent: ReviewAgent) -> dict[str, 
 
 
 class ArtifactService:
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, patch_store=None) -> None:
         self._engine = engine
+        from remediations.patch_store import PatchStore
+
+        self._patch_store = patch_store or PatchStore(engine)
+
+    def get_executable_patch(self, *, owner_id: UUID, remediation_id: UUID):
+        with principal_transaction(self._engine, owner_id) as connection:
+            self._owned_remediation(connection, owner_id, remediation_id)
+            scope = (
+                connection.execute(
+                    sa.select(
+                        Finding.status.label("finding_status"),
+                        Review.status.label("review_status"),
+                        Review.source_kind,
+                        Review.source_identifier,
+                        Review.source_revision,
+                    )
+                    .select_from(Remediation)
+                    .join(
+                        Finding,
+                        sa.and_(
+                            Finding.owner_id == Remediation.owner_id,
+                            Finding.id == Remediation.finding_id,
+                        ),
+                    )
+                    .join(
+                        Review,
+                        sa.and_(
+                            Review.owner_id == Finding.owner_id,
+                            Review.id == Finding.review_id,
+                        ),
+                    )
+                    .where(
+                        Remediation.owner_id == owner_id,
+                        Remediation.id == remediation_id,
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            if scope["finding_status"] is not FindingStatus.ACCEPTED:
+                raise ResourceConflict("finding_not_accepted")
+            if scope["review_status"] is not ReviewStatus.COMPLETED:
+                raise ResourceConflict("review_not_completed")
+        patch = self._patch_store.load(owner_id=owner_id, remediation_id=remediation_id)
+        if patch.source_snapshot != {
+            "source_kind": scope["source_kind"].value,
+            "source_identifier": scope["source_identifier"],
+            "revision": scope["source_revision"],
+        }:
+            raise ResourceConflict("remediation_patch_revision_mismatch")
+        return patch.model_dump(mode="json")
 
     def list_remediations(
         self, *, owner_id: UUID, finding_id: UUID
@@ -1452,6 +1605,12 @@ def _remediation_response(row: sa.RowMapping) -> dict[str, object]:
         "project_id": row["project_id"],
         "finding_id": row["finding_id"],
         "proposed_diff": row["proposed_diff"],
+        "generation_status": row.get("generation_status", "legacy_unverified"),
+        "generation_failure": row.get("generation_failure"),
+        "patch_available": row.get("generation_status") == "ready"
+        and row.get("patch_artifact_id") is not None
+        and row.get("generation_failure") is None,
+        "preview_is_redacted": True,
         "pull_request": row["pull_request"],
         "status": row["status"],
         "approved_at": row["approved_at"],

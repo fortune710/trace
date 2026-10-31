@@ -57,6 +57,15 @@ class Review(Base):
             name="reviews_owner_project_fkey",
             ondelete="CASCADE",
         ),
+        sa.ForeignKeyConstraint(
+            ["owner_id", "intelligence_snapshot_id"],
+            [
+                "private.repository_intelligence_snapshots.owner_id",
+                "private.repository_intelligence_snapshots.id",
+            ],
+            name="reviews_intelligence_snapshot_fkey",
+            ondelete="RESTRICT",
+        ),
         sa.CheckConstraint(
             "(source_kind = 'github' AND integrity_algorithm = 'git-commit-sha1-v1' "
             "AND source_revision ~ '^[0-9a-f]{40}$') OR "
@@ -90,6 +99,9 @@ class Review(Base):
         sa.DateTime(timezone=True),
         nullable=False,
         server_default=sa.text("CURRENT_TIMESTAMP"),
+    )
+    intelligence_snapshot_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), nullable=True
     )
     status: Mapped[ReviewStatus] = mapped_column(
         native_enum(ReviewStatus, "review_status", "public"),
@@ -275,6 +287,9 @@ class ReviewAgentAttempt(Base):
 
     __tablename__ = "review_agent_attempts"
     __table_args__ = (
+        sa.UniqueConstraint(
+            "owner_id", "id", name="review_agent_attempts_owner_id_key"
+        ),
         sa.UniqueConstraint(
             "owner_id",
             "review_agent_id",

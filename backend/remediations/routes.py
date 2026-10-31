@@ -16,6 +16,7 @@ from auth.tokens import decode_base64url_key
 from db.session import get_engine
 from external_repositories.service import RepositoryService
 from issue_tracking.routes import build_remediation_issue_router
+from remediations.patch_store import PatchStore
 from remediations.service import (
     LocalRemediationApplyService,
     RemediationPullRequestService,
@@ -38,6 +39,7 @@ def build_router(
             "/findings/{finding_id}/remediations",
             "/remediations/{remediation_id}",
             "/remediations/{remediation_id}/prompt",
+            "/remediations/{remediation_id}/patch",
             "/remediations/{remediation_id}/reject",
         ),
     )
@@ -53,12 +55,23 @@ def build_router(
             settings=settings,
         )
         return RemediationPullRequestService(
-            get_engine(), repository_service, audit_recorder
+            get_engine(),
+            repository_service,
+            audit_recorder,
+            patch_store=PatchStore(
+                get_engine(), credential_cipher_from_settings(settings)
+            ),
         )
 
     @lru_cache
     def local_apply_service() -> LocalRemediationApplyService:
-        return LocalRemediationApplyService(get_engine(), audit_recorder)
+        return LocalRemediationApplyService(
+            get_engine(),
+            audit_recorder,
+            patch_store=PatchStore(
+                get_engine(), credential_cipher_from_settings(settings)
+            ),
+        )
 
     @router.post(
         "/remediations/{remediation_id}/apply-local",
