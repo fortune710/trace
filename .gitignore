@@ -1,6 +1,7 @@
 .env
 .env.production
 .env.*
+!frontend/.env.desktop-production
 .ci.env
 production-secrets/
 frontend/.env.*.local

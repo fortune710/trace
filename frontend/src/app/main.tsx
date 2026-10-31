@@ -5,6 +5,7 @@ import './index.css'
 import App from './App.tsx'
 import { Toaster } from '../components/ui/toast.tsx'
 import { TooltipProvider } from '../components/ui/tooltip.tsx'
+import { DesktopOAuthBootstrap } from '../hooks/use-desktop-oauth.ts'
 
 const queryClient = new QueryClient()
 createRoot(document.getElementById('root')!).render(
@@ -12,6 +13,7 @@ createRoot(document.getElementById('root')!).render(
     <TooltipProvider>
       <BrowserRouter>
         <Toaster />
+        <DesktopOAuthBootstrap />
         <App />
       </BrowserRouter>
     </TooltipProvider>

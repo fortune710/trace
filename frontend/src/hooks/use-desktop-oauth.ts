@@ -1,61 +1,107 @@
-import { useCallback, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useQueryClient } from '@tanstack/react-query'
-import { getCurrent, onOpenUrl } from '@tauri-apps/plugin-deep-link'
-import { open } from '@tauri-apps/plugin-shell'
-import { consumeReturnTo } from '@/app/auth/return-to'
-import { sessionQueryKey } from '@/hooks/use-session'
-import { authApi } from '@/lib/api'
-import { isTauri } from '@tauri-apps/api/core'
+import { useQueryClient } from "@tanstack/react-query"
+import { isTauri } from "@tauri-apps/api/core"
+import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link"
+import { open } from "@tauri-apps/plugin-shell"
+import { useCallback, useEffect, useState } from "react"
+import { useNavigate } from "react-router-dom"
 
-type OAuthProvider = 'github' | 'google'
+import { consumeReturnTo } from "@/app/auth/return-to"
+import { sessionQueryKey } from "@/hooks/use-session"
+import { authApi } from "@/lib/api"
+import { toast } from "@/components/ui/toast"
+
+type OAuthProvider = "github" | "google"
 type PendingOAuth = { provider: OAuthProvider; verifier: string }
 
 let pendingOAuth: PendingOAuth | null = null
+let pendingTimeout: number | null = null
 const handledCodes = new Set<string>()
+const oauthFinishedEvent = "trace:desktop-oauth-finished"
+
+function finishPendingOAuth() {
+  pendingOAuth = null
+  if (pendingTimeout !== null) {
+    window.clearTimeout(pendingTimeout)
+    pendingTimeout = null
+  }
+  window.dispatchEvent(new Event(oauthFinishedEvent))
+}
+
+function showDesktopOAuthError(description: string) {
+  finishPendingOAuth()
+  toast.add({
+    type: "error",
+    title: "Desktop sign-in was not completed",
+    description,
+  })
+}
 
 function base64Url(bytes: Uint8Array) {
-  let binary = ''
-  bytes.forEach((byte) => { binary += String.fromCharCode(byte) })
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+  let binary = ""
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte)
+  })
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "")
 }
 
 async function createVerifierAndChallenge() {
   const verifier = base64Url(crypto.getRandomValues(new Uint8Array(32)))
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(verifier),
+  )
   return { verifier, challenge: base64Url(new Uint8Array(digest)) }
 }
 
 export function useDesktopOAuth() {
   const desktop = isTauri()
   const [isPending, setIsPending] = useState(false)
-  const [error, setError] = useState<Error | null>(null)
+
+  useEffect(() => {
+    const resetPending = () => setIsPending(false)
+    window.addEventListener(oauthFinishedEvent, resetPending)
+    return () => window.removeEventListener(oauthFinishedEvent, resetPending)
+  }, [])
 
   const start = useCallback(async (provider: OAuthProvider) => {
     if (!desktop) return
-    setError(null)
     setIsPending(true)
     try {
       const { verifier, challenge } = await createVerifierAndChallenge()
       pendingOAuth = { provider, verifier }
+      pendingTimeout = window.setTimeout(() => {
+        if (pendingOAuth?.verifier !== verifier) return
+        showDesktopOAuthError("Sign-in timed out. Please try again.")
+      }, 5 * 60_000)
       await open(authApi.desktopOAuthUrl(provider, challenge))
     } catch {
-      pendingOAuth = null
-      setIsPending(false)
-      setError(new Error('Unable to open the sign-in browser. Please try again.'))
+      showDesktopOAuthError("Unable to open the sign-in browser. Please try again.")
     }
   }, [desktop])
 
-  return { start, isPending, error }
+  return { start, isPending }
 }
 
 function parseCallback(value: string) {
   let url: URL
-  try { url = new URL(value) } catch { return null }
-  if (url.protocol !== 'trace:' || url.hostname !== 'oauth' || url.pathname !== '/callback') return null
-  const code = url.searchParams.get('code')
-  const error = url.searchParams.get('error')
-  if (error) return { error: 'oauth_failed' as const }
+  try {
+    url = new URL(value)
+  } catch {
+    return null
+  }
+  if (
+    url.protocol !== "trace:" ||
+    url.hostname !== "oauth" ||
+    url.pathname !== "/callback"
+  ) {
+    return null
+  }
+  const code = url.searchParams.get("code")
+  const error = url.searchParams.get("error")
+  if (error) return { error: "oauth_failed" as const }
   if (!code || !/^[A-Za-z0-9_-]{16,512}$/.test(code)) return null
   return { code }
 }
@@ -68,32 +114,35 @@ export function DesktopOAuthBootstrap() {
   useEffect(() => {
     if (!desktop) return
     let disposed = false
+
     const handleUrls = (urls: string[]) => {
       urls.forEach((value) => {
         const callback = parseCallback(value)
         if (!callback) return
-        if ('error' in callback) {
-          pendingOAuth = null
-          navigate('/sign-in?desktop_error=oauth_failed', { replace: true })
+        if ("error" in callback) {
+          showDesktopOAuthError("The provider did not complete sign-in. Please try again.")
+          navigate("/sign-in", { replace: true })
           return
         }
         if (handledCodes.has(callback.code)) return
         handledCodes.add(callback.code)
         const pending = pendingOAuth
         if (!pending) {
-          navigate('/sign-in?desktop_error=expired', { replace: true })
+          showDesktopOAuthError("This sign-in attempt expired. Please try again.")
+          navigate("/sign-in", { replace: true })
           return
         }
         void authApi.exchangeDesktopOAuth(callback.code, pending.verifier)
           .then(async () => {
-            if (disposed) return
-            pendingOAuth = null
+            if (disposed || pendingOAuth !== pending) return
+            finishPendingOAuth()
             await queryClient.invalidateQueries({ queryKey: sessionQueryKey })
             navigate(consumeReturnTo(), { replace: true })
           })
           .catch(() => {
-            pendingOAuth = null
-            navigate('/sign-in?desktop_error=exchange_failed', { replace: true })
+            if (disposed || pendingOAuth !== pending) return
+            showDesktopOAuthError("Unable to finish sign-in. Please try again.")
+            navigate("/sign-in", { replace: true })
           })
       })
     }
@@ -106,8 +155,15 @@ export function DesktopOAuthBootstrap() {
       const current = await getCurrent()
       if (!disposed && current) handleUrls(current)
     }
-    void setup()
-    return () => { disposed = true; unlisten?.() }
+    void setup().catch(() => {
+      if (disposed) return
+      showDesktopOAuthError("Unable to receive the sign-in callback. Please try again.")
+      navigate("/sign-in", { replace: true })
+    })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
   }, [desktop, navigate, queryClient])
 
   return null
