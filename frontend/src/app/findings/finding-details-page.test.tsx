@@ -8,7 +8,7 @@ import { FindingDetailsPage } from "@/app/findings/finding-details-page";
 import { useFinding, useFindingRemediationPrompt } from "@/hooks/use-findings";
 import { useProject } from "@/hooks/use-projects";
 import { useReview } from "@/hooks/use-reviews";
-import type { Finding, Project, Review } from "@/lib/api";
+import type { Finding, FindingStatus, Project, Review } from "@/lib/api";
 
 vi.mock("@/hooks/use-findings", () => ({
   useFinding: vi.fn(),
@@ -142,12 +142,16 @@ describe("FindingDetailsPage", () => {
     expect(severityBadge.className).toContain("bg-red-500/15");
     expect(screen.getByText("Unsafe input").tagName).toBe("STRONG");
     expect(screen.getByText("next", { selector: "code" })).toBeTruthy();
+    const triageBadge = screen.getByText("Open", { selector: "[data-slot=badge]" });
+    expect(triageBadge.className).toContain("bg-white");
+    expect(triageBadge.className).toContain("text-black");
     const sourceLocationBadges = [
       screen.getByText("src/auth/redirect.ts:24"),
       screen.getByText("src/auth/session.ts:41"),
     ];
     for (const badge of sourceLocationBadges) {
       expect(badge.getAttribute("data-slot")).toBe("badge");
+      expect(badge.className).toContain("rounded-sm");
     }
     expect(screen.getByText(/Security Scout/)).toBeTruthy();
     expect(screen.getByText("Coding-agent prompt")).toBeTruthy();
@@ -158,5 +162,24 @@ describe("FindingDetailsPage", () => {
         "Resolve the finding with a focused authorization check.",
       ),
     ).toBeTruthy();
+  });
+
+  it.each([
+    ["open", "Open", "bg-white"],
+    ["accepted", "Accepted", "bg-green-500/15"],
+    ["resolved", "Resolved", "bg-purple-500/15"],
+    ["dismissed", "Dismissed", "bg-red-500/15"],
+  ] as const)("renders the %s triage status badge", (status, label, colorClass) => {
+    mockedUseFinding.mockReturnValue({
+      data: { ...finding, status: status as FindingStatus },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useFinding>);
+
+    renderPage();
+
+    const badge = screen.getByText(label, { selector: "[data-slot=badge]" });
+    expect(badge.className).toContain(colorClass);
   });
 });

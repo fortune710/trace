@@ -22,7 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { useFinding } from "@/hooks/use-findings";
 import { useProject } from "@/hooks/use-projects";
 import { useReview } from "@/hooks/use-reviews";
-import type { FindingSeverity } from "@/lib/api";
+import type { FindingSeverity, FindingStatus } from "@/lib/api";
 
 function truncateBreadcrumbTitle(title: string) {
   const maximumLength = 50;
@@ -44,6 +44,23 @@ function severityBadgeClassName(severity: FindingSeverity) {
     case "info":
       return "bg-blue-500/15 text-blue-700 dark:text-blue-300";
   }
+}
+
+function findingStatusBadgeClassName(status: FindingStatus) {
+  switch (status) {
+    case "open":
+      return "bg-white text-black";
+    case "accepted":
+      return "bg-green-500/15 text-green-700 dark:text-green-300";
+    case "resolved":
+      return "bg-purple-500/15 text-purple-700 dark:text-purple-300";
+    case "dismissed":
+      return "bg-red-500/15 text-red-700 dark:text-red-300";
+  }
+}
+
+function findingStatusLabel(status: FindingStatus) {
+  return `${status.slice(0, 1).toUpperCase()}${status.slice(1)}`;
 }
 
 export function FindingDetailsPage() {
@@ -146,7 +163,13 @@ export function FindingDetailsPage() {
             <dl className="mt-6 grid gap-5 text-sm">
               <div>
                 <dt className="text-muted-foreground">Triage status</dt>
-                <dd className="mt-1 capitalize">{finding.data.status}</dd>
+                <dd className="mt-1">
+                  <Badge
+                    className={`h-auto rounded-sm px-1.5 py-0.5 text-sm font-semibold ${findingStatusBadgeClassName(finding.data.status)}`}
+                  >
+                    {findingStatusLabel(finding.data.status)}
+                  </Badge>
+                </dd>
               </div>
               <div>
                 <dt className="text-muted-foreground">Reviewer</dt>
@@ -173,7 +196,7 @@ export function FindingDetailsPage() {
                       <Badge
                         key={file}
                         variant="outline"
-                        className="max-w-full shrink-0 truncate font-mono text-xs"
+                        className="max-w-full shrink-0 truncate rounded-sm font-mono text-xs"
                         title={file}
                       >
                         {file}
