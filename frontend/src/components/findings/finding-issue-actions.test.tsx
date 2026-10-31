@@ -12,6 +12,7 @@ import {
   useCreateRemediationPullRequest,
   useApplyLocalRemediation,
   useFindingRemediations,
+  useUpdateFindingStatus,
 } from "@/hooks/use-findings"
 import { useRuntimeEnvironment } from "@/hooks/use-runtime-environment"
 import { useSession, useUpdateAutomaticPullRequests } from "@/hooks/use-session"
@@ -24,6 +25,7 @@ vi.mock("@/hooks/use-findings", () => ({
   useCreateRemediationPullRequest: vi.fn(),
   useApplyLocalRemediation: vi.fn(),
   useFindingRemediations: vi.fn(),
+  useUpdateFindingStatus: vi.fn(),
 }))
 vi.mock("@/hooks/use-runtime-environment", () => ({
   useRuntimeEnvironment: vi.fn(),
@@ -44,6 +46,7 @@ const mockedUseCreateRemediationPullRequest = vi.mocked(
   useCreateRemediationPullRequest,
 )
 const mockedUseApplyLocalRemediation = vi.mocked(useApplyLocalRemediation)
+const mockedUseUpdateFindingStatus = vi.mocked(useUpdateFindingStatus)
 const mockedUseRuntimeEnvironment = vi.mocked(useRuntimeEnvironment)
 const mockedUseSession = vi.mocked(useSession)
 const mockedUseUpdateAutomaticPullRequests = vi.mocked(
@@ -72,6 +75,10 @@ describe("FindingIssueActions", () => {
       isError: false,
       mutate: vi.fn(),
     } as unknown as ReturnType<typeof useApplyLocalRemediation>)
+    mockedUseUpdateFindingStatus.mockReturnValue({
+      isPending: false,
+      mutate: vi.fn(),
+    } as unknown as ReturnType<typeof useUpdateFindingStatus>)
   })
 
   it("renders the disabled pull-request action and previews a selected provider", () => {
@@ -95,7 +102,13 @@ describe("FindingIssueActions", () => {
       refetch: vi.fn(),
     } as unknown as ReturnType<typeof useIssuePreview>)
 
-    render(<FindingIssueActions findingId="finding-a" status="open" />)
+    render(
+      <FindingIssueActions
+        findingId="finding-a"
+        status="accepted"
+        reviewCompleted={false}
+      />,
+    )
 
     expect(
       screen
@@ -113,6 +126,45 @@ describe("FindingIssueActions", () => {
       "remediation-a",
       "finding-a",
     )
+  })
+
+  it("renders accept and dismiss actions for an open finding", () => {
+    const mutate = vi.fn()
+    mockedUseFindingRemediations.mockReturnValue({
+      data: [{ id: "remediation-a", patch_available: true }],
+      isLoading: false,
+    } as ReturnType<typeof useFindingRemediations>)
+    mockedUseUpdateFindingStatus.mockReturnValue({
+      isPending: false,
+      mutate,
+    } as unknown as ReturnType<typeof useUpdateFindingStatus>)
+    mockedUseCreateRemediationIssue.mockReturnValue({
+      isPending: false,
+      mutate: vi.fn(),
+    } as unknown as ReturnType<typeof useCreateRemediationIssue>)
+    mockedUseCreateRemediationPullRequest.mockReturnValue({
+      isPending: false,
+      mutate: vi.fn(),
+    } as unknown as ReturnType<typeof useCreateRemediationPullRequest>)
+    mockedUseIssuePreview.mockReturnValue({
+      isLoading: false,
+      isError: false,
+    } as ReturnType<typeof useIssuePreview>)
+
+    render(<FindingIssueActions findingId="finding-a" status="open" />)
+
+    expect(screen.queryByRole("button", { name: /create pull request/i })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }))
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }))
+
+    expect(mutate).toHaveBeenNthCalledWith(1, {
+      findingId: "finding-a",
+      status: "accepted",
+    })
+    expect(mutate).toHaveBeenNthCalledWith(2, {
+      findingId: "finding-a",
+      status: "dismissed",
+    })
   })
 
   it("uses the shadcn checkbox to make future PR creation automatic", () => {

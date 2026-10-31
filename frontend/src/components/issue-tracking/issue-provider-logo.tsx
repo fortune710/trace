@@ -5,9 +5,11 @@ import type { IssueProviderName } from "@/lib/api"
 export function IssueProviderLogo({
   provider,
   className = "size-4",
+  iconClassName = "size-3/5",
 }: {
   provider: IssueProviderName
   className?: string
+  iconClassName?: string
 }) {
   return (
     <span
@@ -17,9 +19,9 @@ export function IssueProviderLogo({
       } ${className}`}
     >
       {provider === "github" ? (
-        <Github className="size-3/5 text-background" />
+        <Github className={`${iconClassName} text-background`} />
       ) : (
-        <Linear className="size-3/5" />
+        <Linear className={iconClassName} />
       )}
     </span>
   )

@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ProjectIssueTracking } from "@/components/projects/project-issue-tracking"
 import {
@@ -11,6 +11,7 @@ import {
   useProjectIssueTracking,
   useUpdateProjectIssueTracking,
 } from "@/hooks/use-issue-tracking"
+import { useGitHubConnection } from "@/hooks/use-github-connection"
 import type { Project } from "@/lib/api"
 
 vi.mock("@/hooks/use-issue-tracking", () => ({
@@ -18,6 +19,9 @@ vi.mock("@/hooks/use-issue-tracking", () => ({
   useLinearTeams: vi.fn(),
   useProjectIssueTracking: vi.fn(),
   useUpdateProjectIssueTracking: vi.fn(),
+}))
+vi.mock("@/hooks/use-github-connection", () => ({
+  useGitHubConnection: vi.fn(),
 }))
 vi.mock("@/components/issue-tracking/issue-tracking-feedback", () => ({
   notifyIssueTrackingError: vi.fn(),
@@ -44,7 +48,9 @@ const project: Project = {
 }
 
 describe("ProjectIssueTracking", () => {
-  it("keeps GitHub read-only and removes only the Linear connection", () => {
+  afterEach(cleanup)
+
+  it("shows connected GitHub and Linear project details", () => {
     const mutate = vi.fn()
     vi.mocked(useProjectIssueTracking).mockReturnValue({
       data: {
@@ -72,6 +78,9 @@ describe("ProjectIssueTracking", () => {
       mutate,
       isPending: false,
     } as unknown as ReturnType<typeof useUpdateProjectIssueTracking>)
+    vi.mocked(useGitHubConnection).mockReturnValue({
+      data: { status: "connected" },
+    } as ReturnType<typeof useGitHubConnection>)
 
     render(
       <MemoryRouter>
@@ -79,12 +88,60 @@ describe("ProjectIssueTracking", () => {
       </MemoryRouter>,
     )
 
-    expect(screen.getByText("acme/trace is the source repository for this project.")).toBeTruthy()
-    expect(screen.getByText(/cannot be changed here/)).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "GitHub Issues" })).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "Linear Issues" })).toBeTruthy()
+    expect(screen.getByText("Repository")).toBeTruthy()
+    expect(screen.getByText("acme/trace", { selector: "dd" })).toBeTruthy()
+    expect(screen.getByText("Project", { selector: "dt" })).toBeTruthy()
+    expect(
+      screen.getByText("Engineering/Trace", { selector: "dd" }),
+    ).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Remove Linear destination" }))
     expect(mutate).toHaveBeenCalledWith(
       { connected_projects: [] },
       expect.any(Object),
+    )
+  })
+
+  it("offers provider-specific connection actions when integrations are unavailable", () => {
+    vi.mocked(useProjectIssueTracking).mockReturnValue({
+      data: { connected_projects: [] },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useProjectIssueTracking>)
+    vi.mocked(useLinearTeams).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      isSuccess: false,
+    } as unknown as ReturnType<typeof useLinearTeams>)
+    vi.mocked(useLinearProjects).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useLinearProjects>)
+    vi.mocked(useUpdateProjectIssueTracking).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    } as unknown as ReturnType<typeof useUpdateProjectIssueTracking>)
+    vi.mocked(useGitHubConnection).mockReturnValue({
+      data: { status: "never_connected" },
+    } as ReturnType<typeof useGitHubConnection>)
+
+    render(
+      <MemoryRouter>
+        <ProjectIssueTracking project={project} />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText("Repository", { selector: "dt" })).toBeTruthy()
+    expect(screen.getByText("Project", { selector: "dt" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Connect to GitHub" }).getAttribute("href")).toBe(
+      "/settings/integrations",
+    )
+    expect(screen.getByRole("button", { name: "Connect to Linear" }).getAttribute("href")).toBe(
+      "/settings/integrations",
     )
   })
 })
