@@ -372,6 +372,91 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
+  remediation-pull-request-worker:
+    <<: [*backend-image, *app-hardening]
+    command: ["./start-remediation-pull-request-worker.sh"]
+    environment:
+      <<: *vault-settings
+      AUTH_ENVIRONMENT: production
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD}@postgres:5432/trace
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: vault_runtime_token
+        target: /run/vault/trace-backend-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    networks:
+      - edge
+      - data
+      - secrets
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    pids_limit: 128
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  remediation-pull-request-outbox-worker:
+    <<: [*backend-image, *app-hardening]
+    command: ["./start-remediation-pull-request-outbox-worker.sh"]
+    environment:
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD}@postgres:5432/trace
+      REMEDIATION_PR_RABBITMQ_URL: ${REMEDIATION_PR_RABBITMQ_URL:-${AUTH_RABBITMQ_URL:?Set AUTH_RABBITMQ_URL}}
+      REMEDIATION_PR_MAX_ATTEMPTS: ${REMEDIATION_PR_MAX_ATTEMPTS:-3}
+      REMEDIATION_PR_RETRY_BASE_SECONDS: ${REMEDIATION_PR_RETRY_BASE_SECONDS:-30}
+      REMEDIATION_PR_RETRY_MAX_SECONDS: ${REMEDIATION_PR_RETRY_MAX_SECONDS:-300}
+      REMEDIATION_PR_POLL_SECONDS: ${REMEDIATION_PR_POLL_SECONDS:-1}
+      REMEDIATION_PR_PROCESSING_TIMEOUT_SECONDS: ${REMEDIATION_PR_PROCESSING_TIMEOUT_SECONDS:-300}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - data
+      - queue
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    pids_limit: 64
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  remediation-pull-request-execution-worker:
+    <<: [*backend-image, *app-hardening]
+    command: ["./start-remediation-pull-request-execution-worker.sh"]
+    environment:
+      <<: *vault-settings
+      AUTH_ENVIRONMENT: production
+      DATABASE_URL: postgresql://trace_internal:${TRACE_INTERNAL_PASSWORD:?Set TRACE_INTERNAL_PASSWORD}@postgres:5432/trace
+      REMEDIATION_PR_RABBITMQ_URL: ${REMEDIATION_PR_RABBITMQ_URL:-${AUTH_RABBITMQ_URL:?Set AUTH_RABBITMQ_URL}}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: vault_runtime_token
+        target: /run/vault/trace-backend-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    networks:
+      - edge
+      - data
+      - queue
+      - secrets
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    pids_limit: 128
+    stop_grace_period: 30s
+    restart: unless-stopped
+
   vault:
     image: hashicorp/vault:1.21.3@sha256:5f244d447c6f90107149c9565da5ffedf847cec673ba0062a82fc3dd83c89e65
     command: ["server"]
