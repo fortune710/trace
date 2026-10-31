@@ -126,6 +126,7 @@ export function useCreateReview() {
               integrity_algorithm: snapshot.integrityAlgorithm,
               digest: snapshot.digest,
             },
+            local_source_upload: snapshot.upload,
           },
           crypto.randomUUID(),
         )

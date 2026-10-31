@@ -136,6 +136,7 @@ export function FindingDetailsPage() {
                   findingId={finding.data.id}
                   status={finding.data.status}
                   isLocalProject={project.data?.source === "local"}
+                  reviewCompleted={review.data?.status === "completed"}
                 />
               </div>
             </div>
@@ -191,7 +192,13 @@ export function FindingDetailsPage() {
               ) : null}
             </dl>
             <ProposedDiff findingId={finding.data.id} />
-            <CodingAgentPrompt findingId={finding.data.id} />
+            {review.data?.status === "completed" ? (
+              <CodingAgentPrompt findingId={finding.data.id} />
+            ) : (
+              <p className="mt-6 text-sm text-muted-foreground">
+                The coding prompt is available when the review completes.
+              </p>
+            )}
             <FindingIssueLinks findingId={finding.data.id} />
           </article>
         ) : null}

@@ -229,12 +229,14 @@ export function ReviewFindings({ review }: { review: Review }) {
   const primaryFilters = filters.status
     ? filters
     : { ...filters, excludeStatus: "dismissed" as const };
-  const findings = useReviewFindings(review.id, page, primaryFilters);
+  const active = review.status === "queued" || review.status === "running";
+  const findings = useReviewFindings(review.id, page, primaryFilters, true, active);
   const dismissedFindings = useReviewFindings(
     review.id,
     dismissedPage,
     { status: "dismissed" },
     dismissedOpen,
+    active,
   );
   const updateStatus = useUpdateFindingStatus();
   const hasFilters = Object.values(filters).some(Boolean);

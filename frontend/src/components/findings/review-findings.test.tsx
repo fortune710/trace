@@ -126,7 +126,7 @@ describe("ReviewFindings", () => {
       status: undefined,
       agentId: undefined,
       excludeStatus: "dismissed",
-    })
+    }, true, false)
     expect(screen.getByText("Missing authorization check")).toBeTruthy()
     expect(screen.getByText("Security Scout")).toBeTruthy()
     expect(
@@ -157,7 +157,7 @@ describe("ReviewFindings", () => {
       status: undefined,
       agentId: "agent-a",
       excludeStatus: "dismissed",
-    })
+    }, true, false)
   })
 
   it("ignores a reviewer filter that is not assigned to the review", () => {
@@ -169,7 +169,7 @@ describe("ReviewFindings", () => {
       status: undefined,
       agentId: undefined,
       excludeStatus: "dismissed",
-    })
+    }, true, false)
     expect(
       screen.getByRole("combobox", { name: "Reviewer" }).textContent,
     ).toContain("All reviewers")
@@ -252,6 +252,8 @@ describe("ReviewFindings", () => {
         status: "resolved",
         agentId: undefined,
       },
+      true,
+      false,
     )
   })
 
@@ -272,6 +274,7 @@ describe("ReviewFindings", () => {
       1,
       { status: "dismissed" },
       true,
+      false,
     )
   })
 })

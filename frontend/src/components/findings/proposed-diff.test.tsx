@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import { ProposedDiff } from "@/components/findings/proposed-diff"
 import { parseUnifiedDiff } from "@/components/findings/unified-diff"
+import reliableFixtures from "@/components/findings/fixtures/reliable-patches.json"
 import { useFindingRemediations } from "@/hooks/use-findings"
 
 vi.mock("@/hooks/use-findings", () => ({ useFindingRemediations: vi.fn() }))
@@ -94,3 +95,11 @@ describe("ProposedDiff", () => {
     expect(document.querySelector("script")).toBeNull()
   })
 })
+it("renders paths and line counts from the shared native patch fixtures", () => {
+  for (const fixture of reliableFixtures) {
+    const files = parseUnifiedDiff(fixture.diff)
+    expect(files).toHaveLength(1)
+    expect(files[0].path).toBe(fixture.path)
+  }
+})
+

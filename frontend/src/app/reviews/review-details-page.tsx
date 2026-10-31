@@ -113,6 +113,15 @@ export function ReviewDetailsPage() {
               </Button>
             </div>
 
+            {review.data.warnings?.includes("remediation_generation_incomplete") ? (
+              <p
+                className="mt-4 text-sm text-muted-foreground"
+                role="status"
+              >
+                Findings are saved. Automated changes are unavailable for {review.data.remediation_generation_failed_count} finding(s); see each finding for details.
+              </p>
+            ) : null}
+
             <dl
               className="mt-8 grid grid-cols-1 gap-x-6 gap-y-5 text-sm sm:grid-cols-2 md:grid-cols-4"
             >

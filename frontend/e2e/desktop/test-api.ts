@@ -43,6 +43,10 @@ export function startDesktopTestApi(): DesktopTestApi {
   const reviewId = "review-desktop-e2e"
   const findingId = "finding-desktop-e2e"
   const remediationId = "remediation-desktop-e2e"
+  const executableDiff = "diff --git a/first.txt b/first.txt\n--- a/first.txt\n+++ b/first.txt\n@@ -1 +1 @@\n-before-one\n+after-one\ndiff --git a/second.txt b/second.txt\n--- a/second.txt\n+++ b/second.txt\n@@ -1 +1 @@\n-before-two\n+after-two\n"
+  function hash(value: string) {
+    return new Bun.CryptoHasher("sha256").update(value).digest("hex")
+  }
   const review = {
     id: reviewId,
     project_id: projectId,
@@ -184,12 +188,31 @@ export function startDesktopTestApi(): DesktopTestApi {
           project_id: projectId,
           finding_id: findingId,
           proposed_diff: "diff --git a/first.txt b/first.txt\n--- a/first.txt\n+++ b/first.txt\n@@ -1 +1 @@\n-before-one\n+after-one\ndiff --git a/second.txt b/second.txt\n--- a/second.txt\n+++ b/second.txt\n@@ -1 +1 @@\n-before-two\n+after-two\n",
+          generation_status: "ready",
+          generation_failure: null,
+          patch_available: true,
+          preview_is_redacted: true,
           pull_request: null,
           status: "proposed",
           approved_at: null,
           created_at: createdAt,
           updated_at: createdAt,
         }])
+      }
+
+      if (url.pathname === `/api/v1/remediations/${remediationId}/patch` && request.method === "GET") {
+        return response(request, {
+          diff: executableDiff,
+          sha256: hash(executableDiff),
+          source_snapshot: review.source_snapshot,
+          files: ["one", "two"].map((name, index) => ({
+            path: index === 0 ? "first.txt" : "second.txt",
+            operation: "replace",
+            original_sha256: hash(`before-${name}\n`),
+            result_sha256: hash(`after-${name}\n`),
+          })),
+          warnings: [],
+        })
       }
 
       if (

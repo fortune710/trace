@@ -53,9 +53,10 @@ describe("local source snapshots", () => {
     ).rejects.toEqual(expect.any(LocalSourceSnapshotError))
   })
 
-  it("creates a private snapshot with only opaque metadata", async () => {
+  it("creates a private snapshot with a bounded relative source upload", async () => {
     mockedInvoke.mockResolvedValueOnce({
       snapshotId: "snapshot-a",
+      upload: { digest: "b".repeat(64), entries: [] },
       integrityAlgorithm: "sha256-directory-manifest-v1",
       digest: "b".repeat(64),
     })
@@ -64,6 +65,7 @@ describe("local source snapshots", () => {
 
     expect(snapshot).toEqual({
       snapshotId: "snapshot-a",
+      upload: { digest: "b".repeat(64), entries: [] },
       integrityAlgorithm: "sha256-directory-manifest-v1",
       digest: "b".repeat(64),
     })
@@ -71,6 +73,11 @@ describe("local source snapshots", () => {
       "create_local_review_snapshot",
       expect.objectContaining({ canonicalPath: "/private/local-project" }),
     )
+  })
+
+  it("explains upload limits before a local review can be queued", async () => {
+    mockedInvoke.mockRejectedValueOnce({ code: "snapshot_upload_too_large" })
+    await expect(createLocalReviewSnapshot("/private/local-project")).rejects.toThrow("256 KB per file")
   })
 
   it("applies and restores a batch of local remediation files through native commands", async () => {
@@ -86,7 +93,7 @@ describe("local source snapshots", () => {
     mockedInvoke.mockResolvedValueOnce(undefined)
 
     await expect(
-      applyLocalRemediation("/private/local-project", "remediation-a", "diff"),
+      applyLocalRemediation("/private/local-project", "remediation-a", { diff: "diff", sha256: "a".repeat(64), source_snapshot: { source_kind: "local", source_identifier: "id", revision: "b".repeat(64) }, files: [], warnings: [] }),
     ).resolves.toEqual({ files })
     await restoreLocalRemediation(
       "/private/local-project",
@@ -97,7 +104,7 @@ describe("local source snapshots", () => {
     expect(mockedInvoke).toHaveBeenNthCalledWith(1, "apply_local_remediation", {
       canonicalPath: "/private/local-project",
       remediationId: "remediation-a",
-      diff: "diff",
+      patch: { diff: "diff", sha256: "a".repeat(64), source_snapshot: { source_kind: "local", source_identifier: "id", revision: "b".repeat(64) }, files: [], warnings: [] },
     })
     expect(mockedInvoke).toHaveBeenNthCalledWith(2, "restore_local_remediation", {
       canonicalPath: "/private/local-project",

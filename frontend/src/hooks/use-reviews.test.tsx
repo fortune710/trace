@@ -145,6 +145,7 @@ describe("useCreateReview", () => {
     mockedIdentityHash.mockResolvedValue("b".repeat(64))
     mockedCapture.mockResolvedValue({
       snapshotId: "snapshot-a",
+      upload: { digest: "a".repeat(64), entries: [] },
       integrityAlgorithm: "sha256-directory-manifest-v1",
       digest: "a".repeat(64),
     })
@@ -175,6 +176,7 @@ describe("useCreateReview", () => {
           integrity_algorithm: "sha256-directory-manifest-v1",
           digest: "a".repeat(64),
         },
+        local_source_upload: { digest: "a".repeat(64), entries: [] },
       },
       expect.any(String),
     )

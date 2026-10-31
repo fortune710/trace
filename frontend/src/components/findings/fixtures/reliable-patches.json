@@ -1,0 +1,7 @@
+[
+  {"path":"my app.txt","before":"old","after":"new","diff":"diff --git a/my app.txt b/my app.txt\n--- a/my app.txt\n+++ b/my app.txt\n@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n"},
+  {"path":"日本語.txt","before":"one\r\ntwo\nlast","after":"one\r\nnew\nlast","diff":"diff --git a/日本語.txt b/日本語.txt\n--- a/日本語.txt\n+++ b/日本語.txt\n@@ -1,3 +1,3 @@\n one\r\n-two\n+new\n last\n\\ No newline at end of file\n"},
+  {"path":"say \"hello\".txt","before":"a\u2028b\n","after":"c\u2028d\n","diff":"diff --git \"a/say \\\"hello\\\".txt\" \"b/say \\\"hello\\\".txt\"\n--- \"a/say \\\"hello\\\".txt\"\n+++ \"b/say \\\"hello\\\".txt\"\n@@ -1 +1 @@\n-a\u2028b\n+c\u2028d\n"},
+  {"path":"new dir/privacy.md","before":null,"after":"# Privacy\r\nDetails","diff":"diff --git a/new dir/privacy.md b/new dir/privacy.md\nnew file mode 100644\n--- /dev/null\n+++ b/new dir/privacy.md\n@@ -0,0 +1,2 @@\n+# Privacy\r\n+Details\n\\ No newline at end of file\n"},
+  {"path":"empty.txt","before":null,"after":"","diff":"diff --git a/empty.txt b/empty.txt\nnew file mode 100644\nindex 0000000..e69de29\n"}
+]

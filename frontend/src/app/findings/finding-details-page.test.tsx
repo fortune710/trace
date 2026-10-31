@@ -67,6 +67,7 @@ const project = {
 const review = {
   id: "review-a",
   project_id: "project-a",
+  status: "completed",
 } as Review;
 
 function renderPage() {
