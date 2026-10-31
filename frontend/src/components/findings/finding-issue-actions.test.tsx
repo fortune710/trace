@@ -167,6 +167,37 @@ describe("FindingIssueActions", () => {
     })
   })
 
+  it("measures the action menu after an accepted status mounts it", () => {
+    const getBoundingClientRect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({ width: 240 } as DOMRect)
+    mockedUseFindingRemediations.mockReturnValue({
+      data: [{ id: "remediation-a", patch_available: true }],
+      isLoading: false,
+    } as ReturnType<typeof useFindingRemediations>)
+    mockedUseCreateRemediationIssue.mockReturnValue({
+      isPending: false,
+      mutate: vi.fn(),
+    } as unknown as ReturnType<typeof useCreateRemediationIssue>)
+    mockedUseCreateRemediationPullRequest.mockReturnValue({
+      isPending: false,
+      mutate: vi.fn(),
+    } as unknown as ReturnType<typeof useCreateRemediationPullRequest>)
+    mockedUseIssuePreview.mockReturnValue({
+      isLoading: false,
+      isError: false,
+    } as ReturnType<typeof useIssuePreview>)
+
+    const view = render(<FindingIssueActions findingId="finding-a" status="open" />)
+
+    getBoundingClientRect.mockClear()
+    view.rerender(<FindingIssueActions findingId="finding-a" status="accepted" />)
+
+    expect(getBoundingClientRect).toHaveBeenCalled()
+    view.unmount()
+    getBoundingClientRect.mockRestore()
+  })
+
   it("uses the shadcn checkbox to make future PR creation automatic", () => {
     const createPullRequest = vi.fn()
     const updateAutomaticPullRequests = vi.fn()

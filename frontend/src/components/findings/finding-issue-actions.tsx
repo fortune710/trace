@@ -111,7 +111,7 @@ export function FindingIssueActions({
     resizeObserver.observe(element)
 
     return () => resizeObserver.disconnect()
-  }, [])
+  }, [status])
 
   function requestPullRequest() {
     if (!remediationId || !reviewCompleted || !remediation?.patch_available || status !== "accepted") return
