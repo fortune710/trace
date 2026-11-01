@@ -1,10 +1,23 @@
 import { cn } from "cn"
 
 import {
-  features,
-  reviewCategories,
+  AgentConfigMockup,
+  EvidenceMockup,
+  HandoffMockup,
+  ReviewAnglesMockup,
+} from "@/components/landing/feature-mockups"
+import {
+  bentoFeatures,
+  type BentoFeature,
 } from "@/components/landing/landing-content"
 import { SectionHeading } from "@/components/landing/section-heading"
+
+const mockups: Record<BentoFeature["id"], () => React.JSX.Element> = {
+  "review-angles": ReviewAnglesMockup,
+  evidence: EvidenceMockup,
+  reviewers: AgentConfigMockup,
+  handoff: HandoffMockup,
+}
 
 export function FeatureGrid() {
   return (
@@ -19,38 +32,32 @@ export function FeatureGrid() {
         title="A review team that reports to you"
         description="Trace finds the risks, explains them in plain language and leaves every decision with you."
       />
-      <ul className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {features.map((feature) => (
-          <li
-            key={feature.title}
-            className={cn(
-              "flex flex-col gap-3 rounded-xl border border-border bg-card p-8",
-              feature.wide && "lg:col-span-2",
-            )}
-          >
-            <h3 className="text-xl font-medium tracking-tight">
-              {feature.title}
-            </h3>
-            <p className="text-base text-pretty text-foreground/70">
-              {feature.description}
-            </p>
-            {feature.wide ? (
-              <ul
-                aria-label="Review categories"
-                className="mt-auto flex flex-wrap gap-2 pt-4"
-              >
-                {reviewCategories.map((category) => (
-                  <li
-                    key={category}
-                    className="rounded-full border border-white/10 bg-popover px-3 py-1 text-xs text-foreground/85"
-                  >
-                    {category}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </li>
-        ))}
+      <ul className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-6">
+        {bentoFeatures.map((feature) => {
+          const Mockup = mockups[feature.id]
+
+          return (
+            <li
+              key={feature.id}
+              className={cn(
+                "flex min-w-0 flex-col gap-6 rounded-xl border border-border bg-card p-6 md:p-8",
+                feature.className,
+              )}
+            >
+              <div className="flex flex-col gap-3">
+                <h3 className="text-xl font-medium tracking-tight">
+                  {feature.title}
+                </h3>
+                <p className="text-base text-pretty text-foreground/70">
+                  {feature.description}
+                </p>
+              </div>
+              <div className="mt-auto">
+                <Mockup />
+              </div>
+            </li>
+          )
+        })}
       </ul>
     </section>
   )
