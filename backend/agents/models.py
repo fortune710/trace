@@ -24,6 +24,11 @@ class Agent(Base):
             name="agents_owner_credential_fkey",
             ondelete="RESTRICT",
         ),
+        sa.CheckConstraint(
+            "avatar_config IS NULL OR (jsonb_typeof(avatar_config) = 'object' "
+            "AND octet_length(avatar_config::text) <= 1024)",
+            name="agents_avatar_config_check",
+        ),
         {"schema": "public"},
     )
 
@@ -45,6 +50,9 @@ class Agent(Base):
     model_provider: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     model_name: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     avatar: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
+    avatar_config: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     default_key: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     credential_id: Mapped[UUID | None] = mapped_column(
         PostgreSQLUUID(as_uuid=True), nullable=True

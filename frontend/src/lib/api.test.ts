@@ -259,3 +259,77 @@ describe("remediationsApi", () => {
     )
   })
 })
+
+describe("agent avatar APIs", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    document.cookie = "trace_csrf=; Max-Age=0"
+  })
+
+  const avatarConfig = {
+    eyes: "variant02",
+    brows: "variant03",
+    nose: "variant04",
+    lips: "variant05",
+    hair: "variant06",
+    body: "variant07",
+    backgroundColor: "#d3d0ff",
+    flip: false,
+  }
+
+  it("sends FormData without forcing a JSON content type", async () => {
+    document.cookie = "trace_csrf=avatar-token"
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "agent/1" }), { status: 200 }),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    const file = new Blob(["png"], { type: "image/png" })
+
+    await agentsApi.uploadAvatar("agent/1", file, avatarConfig)
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "http://localhost:8000/api/v1/agents/agent%2F1/avatar",
+    )
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(init.method).toBe("POST")
+    expect(init.credentials).toBe("include")
+    expect(init.body).toBeInstanceOf(FormData)
+    const headers = new Headers(init.headers)
+    expect(headers.get("Content-Type")).toBeNull()
+    expect(headers.get("X-CSRF-Token")).toBe("avatar-token")
+    const body = init.body as FormData
+    expect(body.get("file")).toBeInstanceOf(Blob)
+    expect(JSON.parse(String(body.get("config")))).toEqual(avatarConfig)
+  })
+
+  it("still sends JSON bodies with a JSON content type", async () => {
+    document.cookie = "trace_csrf=json-token"
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "agent-1" }), { status: 200 }),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await agentsApi.update("agent-1", { name: "Renamed" })
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(new Headers(init.headers).get("Content-Type")).toBe(
+      "application/json",
+    )
+    expect(init.body).toBe(JSON.stringify({ name: "Renamed" }))
+  })
+
+  it("deletes an avatar with CSRF protection", async () => {
+    document.cookie = "trace_csrf=delete-token"
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(agentsApi.deleteAvatar("agent-1")).resolves.toBeUndefined()
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "http://localhost:8000/api/v1/agents/agent-1/avatar",
+    )
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(init.method).toBe("DELETE")
+    expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("delete-token")
+  })
+})

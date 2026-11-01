@@ -30,6 +30,7 @@ def test_resource_routes_register_the_complete_owner_scoped_surface() -> None:
         "/projects/{project_id}/restore",
         "/agents",
         "/agents/{agent_id}",
+        "/agents/{agent_id}/avatar",
         "/reviews",
         "/reviews/{review_id}",
         "/reviews/{review_id}/cancel",
@@ -59,6 +60,10 @@ def test_resource_routes_register_the_complete_owner_scoped_surface() -> None:
         }
         assert {"page", "page_size"} <= query_parameters
         assert not {"limit", "offset"} & query_parameters
+
+    avatar_methods = openapi_paths["/agents/{agent_id}/avatar"]
+    assert set(avatar_methods) == {"get", "post", "delete"}
+    assert "multipart/form-data" in avatar_methods["post"]["requestBody"]["content"]
 
     review_create = openapi_paths["/reviews"]["post"]
     review_schema = review_create["requestBody"]["content"]["application/json"][

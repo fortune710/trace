@@ -209,6 +209,7 @@ class AgentResponse(RequestModel):
     model_provider: ModelProvider
     model_name: str
     avatar: str | None
+    avatar_config: dict[str, str | bool] | None
     skills: list[dict[str, object] | str]
     credential_id: UUID | None
     configuration_version: int

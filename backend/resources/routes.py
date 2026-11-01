@@ -1,10 +1,27 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Query, Request, Response, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 
+from agents.avatar import (
+    AVATAR_CONTENT_TYPE,
+    MAX_AVATAR_BYTES,
+    parse_avatar_config,
+    validate_avatar_png,
+)
 from agents.catalog import model_catalog_response
 from audit.emit import enqueue_audit
 from audit.outbox import AuditRecorder
@@ -155,6 +172,13 @@ def install_resource_routes(
         await enforce_rate_limit(
             resource_rate_limiter(),
             policy=AUTH_RATE_LIMIT_POLICIES["resource.credential_write.user"],
+            subject=str(principal.user_id),
+        )
+
+    async def require_avatar_write_limit(principal: CurrentPrincipal) -> None:
+        await enforce_rate_limit(
+            resource_rate_limiter(),
+            policy=AUTH_RATE_LIMIT_POLICIES["resource.avatar_write.user"],
             subject=str(principal.user_id),
         )
 
@@ -314,6 +338,68 @@ def install_resource_routes(
         agent_service().disable(owner_id=principal.user_id, agent_id=agent_id)
         _audit(request, audit_hasher, audit_recorder, "agent", "disabled")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post(
+        "/agents/{agent_id}/avatar",
+        response_model=AgentResponse,
+        dependencies=[Depends(require_avatar_write_limit)],
+    )
+    def upload_agent_avatar(
+        request: Request,
+        agent_id: UUID,
+        principal: CurrentPrincipal,
+        file: Annotated[UploadFile, File()],
+        config: Annotated[str | None, Form()] = None,
+    ) -> dict[str, object]:
+        _require_csrf(request, principal, settings)
+        # Read one byte past the cap so an oversized body is rejected without
+        # buffering all of it.
+        data = file.file.read(MAX_AVATAR_BYTES + 1)
+        validate_avatar_png(file.content_type, data)
+        avatar_config = parse_avatar_config(config)
+        result = agent_service().set_avatar(
+            owner_id=principal.user_id,
+            agent_id=agent_id,
+            content_type=AVATAR_CONTENT_TYPE,
+            data=data,
+            config=avatar_config,
+        )
+        _audit(request, audit_hasher, audit_recorder, "agent", "avatar_updated")
+        return result
+
+    @app.delete(
+        "/agents/{agent_id}/avatar",
+        status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Depends(require_avatar_write_limit)],
+    )
+    def delete_agent_avatar(
+        request: Request, agent_id: UUID, principal: CurrentPrincipal
+    ) -> Response:
+        _require_csrf(request, principal, settings)
+        agent_service().clear_avatar(owner_id=principal.user_id, agent_id=agent_id)
+        _audit(request, audit_hasher, audit_recorder, "agent", "avatar_removed")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.get("/agents/{agent_id}/avatar", response_model=None)
+    def get_agent_avatar(request: Request, agent_id: UUID) -> Response:
+        # Deliberately unauthenticated: the image is an <img> source. The URL
+        # carries the content hash, so the response is immutable.
+        avatar = agent_service().read_public_avatar(agent_id=agent_id)
+        if avatar is None:
+            raise ResourceNotFound()
+        etag = f'"{avatar.sha256}"'
+        headers = {
+            "ETag": etag,
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
+        }
+        if _etag_matches(request.headers.get("If-None-Match"), etag):
+            return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+        return Response(
+            content=avatar.data,
+            media_type=avatar.content_type,
+            headers=headers,
+        )
 
     @app.post(
         "/reviews",
@@ -667,6 +753,13 @@ def _require_csrf(request: Request, principal, settings: AuthSettings) -> None:
             event="csrf",
             reason="token_invalid",
         )
+
+
+def _etag_matches(header: str | None, etag: str) -> bool:
+    if header is None:
+        return False
+    candidates = {item.strip().removeprefix("W/") for item in header.split(",")}
+    return "*" in candidates or etag in candidates
 
 
 def _audit(

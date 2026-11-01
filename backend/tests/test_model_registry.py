@@ -2,6 +2,7 @@ from db import model_registry
 from db.base import Base
 
 EXPECTED_TABLES = {
+    "private.agent_avatars",
     "private.remediation_patch_artifacts",
     "private.remediation_generation_attempts",
     "auth.email_delivery_jobs",

@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from agents import avatar_storage
 from agents.catalog import supports_model
 from agents.models import Agent
 from artifacts.models import LocalFileBackup
@@ -447,6 +448,7 @@ def _agent_response(agent: Agent) -> dict[str, object]:
         "model_provider": agent.model_provider,
         "model_name": agent.model_name,
         "avatar": agent.avatar,
+        "avatar_config": agent.avatar_config,
         "skills": agent.skills,
         "credential_id": agent.credential_id,
         "configuration_version": agent.configuration_version,
@@ -526,6 +528,13 @@ class AgentService:
                 self._validate_credential(
                     connection, owner_id, credential_id, model_provider
                 )
+                if "avatar" in values and values["avatar"] != agent.avatar:
+                    # The stored image and editor configuration describe the old
+                    # avatar value, so they must not outlive it.
+                    values = {**values, "avatar_config": sa.null()}
+                    avatar_storage.delete(
+                        connection, owner_id=owner_id, agent_id=agent_id
+                    )
                 connection.execute(
                     sa.update(Agent)
                     .where(Agent.id == agent_id, Agent.owner_id == owner_id)
@@ -544,6 +553,76 @@ class AgentService:
         except sa.exc.IntegrityError as error:
             raise ResourceConflict("agent_conflict") from error
         return _agent_response(agent)
+
+    def set_avatar(
+        self,
+        *,
+        owner_id: UUID,
+        agent_id: UUID,
+        content_type: str,
+        data: bytes,
+        config: dict[str, str | bool] | None,
+    ) -> dict[str, object]:
+        with principal_transaction(self._engine, owner_id) as connection:
+            self._owned_agent(connection, owner_id, agent_id)
+            digest = avatar_storage.put(
+                connection,
+                owner_id=owner_id,
+                agent_id=agent_id,
+                content_type=content_type,
+                data=data,
+            )
+            agent = self._write_avatar_columns(
+                connection,
+                owner_id,
+                agent_id,
+                avatar=avatar_storage.avatar_url(agent_id, digest),
+                avatar_config=config,
+            )
+        return _agent_response(agent)
+
+    def clear_avatar(self, *, owner_id: UUID, agent_id: UUID) -> None:
+        with principal_transaction(self._engine, owner_id) as connection:
+            self._owned_agent(connection, owner_id, agent_id)
+            avatar_storage.delete(connection, owner_id=owner_id, agent_id=agent_id)
+            self._write_avatar_columns(
+                connection, owner_id, agent_id, avatar=None, avatar_config=None
+            )
+
+    @staticmethod
+    def _write_avatar_columns(
+        connection: sa.Connection,
+        owner_id: UUID,
+        agent_id: UUID,
+        *,
+        avatar: str | None,
+        avatar_config: dict[str, str | bool] | None,
+    ) -> Agent:
+        connection.execute(
+            sa.update(Agent)
+            .where(Agent.id == agent_id, Agent.owner_id == owner_id)
+            .values(
+                avatar=avatar,
+                # An explicit SQL NULL: a bare None would be stored as JSON null.
+                avatar_config=sa.null() if avatar_config is None else avatar_config,
+                configuration_version=Agent.configuration_version + 1,
+                updated_at=sa.func.current_timestamp(),
+            )
+        )
+        return cast(
+            Agent,
+            _orm_scalar_one(
+                connection,
+                sa.select(Agent).where(
+                    Agent.id == agent_id, Agent.owner_id == owner_id
+                ),
+            ),
+        )
+
+    def read_public_avatar(
+        self, *, agent_id: UUID
+    ) -> avatar_storage.StoredAvatar | None:
+        return avatar_storage.read_public(self._engine, agent_id)
 
     def disable(self, *, owner_id: UUID, agent_id: UUID) -> None:
         with principal_transaction(self._engine, owner_id) as connection:

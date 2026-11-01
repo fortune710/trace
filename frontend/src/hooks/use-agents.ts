@@ -11,6 +11,7 @@ import {
   type Agent,
   type AgentCreate,
   type AgentUpdate,
+  type AvatarConfig,
   type Credential,
   type CredentialCreate,
 } from "@/lib/api"
@@ -96,6 +97,32 @@ export function useDisableAgent() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (agentId: string) => agentsApi.disable(agentId),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+  })
+}
+
+export function useUploadAgentAvatar() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      agentId,
+      file,
+      config,
+    }: {
+      agentId: string
+      file: Blob
+      config: AvatarConfig
+    }) => agentsApi.uploadAvatar(agentId, file, config),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+  })
+}
+
+export function useDeleteAgentAvatar() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (agentId: string) => agentsApi.deleteAvatar(agentId),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
   })

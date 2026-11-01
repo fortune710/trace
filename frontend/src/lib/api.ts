@@ -127,6 +127,19 @@ export type ModelProvider = "openai" | "anthropic" | "google" | "xai"
 
 export type AgentSkill = string | Record<string, object>
 
+export type AvatarConfig = {
+  eyes: string
+  brows: string
+  nose: string
+  lips: string
+  hair: string
+  body: string
+  glasses?: string
+  beard?: string
+  backgroundColor: string
+  flip: boolean
+}
+
 export type Agent = {
   id: string
   name: string
@@ -135,6 +148,7 @@ export type Agent = {
   model_provider: ModelProvider
   model_name: string
   avatar: string | null
+  avatar_config?: AvatarConfig | null
   skills: AgentSkill[]
   credential_id: string | null
   configuration_version: number
@@ -497,7 +511,8 @@ async function request<T>(
 ): Promise<T> {
   const headers = new Headers(init.headers)
 
-  if (init.body) {
+  // FormData needs the browser to set the multipart boundary itself.
+  if (init.body && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json")
   }
 
@@ -698,6 +713,20 @@ export const agentsApi = {
     patch<Agent>(`/api/v1/agents/${encodeURIComponent(agentId)}`, agent),
   disable: (agentId: string) =>
     remove(`/api/v1/agents/${encodeURIComponent(agentId)}`),
+  uploadAvatar: (agentId: string, file: Blob, config: AvatarConfig) => {
+    const body = new FormData()
+    body.append("file", file, "avatar.png")
+    body.append("config", JSON.stringify(config))
+    return request<Agent>(
+      `/api/v1/agents/${encodeURIComponent(agentId)}/avatar`,
+      {
+        method: "POST",
+        body,
+      },
+    )
+  },
+  deleteAvatar: (agentId: string) =>
+    remove(`/api/v1/agents/${encodeURIComponent(agentId)}/avatar`),
 }
 
 export const reviewsApi = {
