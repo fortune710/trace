@@ -103,6 +103,10 @@ describe("LandingPage", () => {
     expect(mockup.getByText("Findings", { selector: "span" })).toBeTruthy()
     expect(mockup.getAllByRole("article", { hidden: true })).toHaveLength(4)
     expect(mockup.getAllByText("Accept")).toHaveLength(3)
+    expect(mockup.getAllByText("Resolve")).toHaveLength(1)
+    expect(
+      mockup.getByText(/accepted findings offer a Resolve action/i),
+    ).toBeTruthy()
     expect(preview?.querySelector("[inert]")).not.toBeNull()
   })
 

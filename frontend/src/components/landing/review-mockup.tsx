@@ -353,8 +353,9 @@ export function ReviewMockup() {
       <p className="sr-only">
         Product preview: the Findings tab of a completed Trace review for a
         project called Trace dashboard. Findings from four reviewers are listed
-        with their severity, category, reviewer and source file, each with
-        Accept and Dismiss actions.
+        with their severity, category, reviewer, source file and status. Open
+        findings offer Accept and Dismiss actions, and accepted findings offer
+        a Resolve action.
       </p>
       <div
         aria-hidden="true"
