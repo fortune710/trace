@@ -111,13 +111,27 @@ class ModelCounter(BaseCallbackHandler):
             self.transcript.append(output)
 
 
+def _wrap_api_key(agent: Agent | DiffAgent) -> None:
+    """Keep model credentials masked wherever the agent is serialized.
+
+    Agents travel through LangGraph state, so tracing serializes every field. A
+    ``SecretStr`` renders as asterisks there, which keeps the key out of traces even
+    when input hiding is turned off for debugging.
+    """
+    if isinstance(agent.api_key, str):
+        object.__setattr__(agent, "api_key", SecretStr(agent.api_key))
+
+
 @dataclass(frozen=True, slots=True)
 class DiffAgent:
     """Same-model specialist that turns one evidence-backed finding into a valid patch."""
 
     provider: str
     model: str
-    api_key: str | None = field(default=None, repr=False)
+    api_key: str | SecretStr | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _wrap_api_key(self)
 
     def run(
         self,
@@ -283,8 +297,11 @@ class Agent:
     model: str
     skills: tuple[object, ...] = ()
     metadata: dict[str, str] = field(default_factory=dict)
-    api_key: str | None = field(default=None, repr=False)
+    api_key: str | SecretStr | None = field(default=None, repr=False)
     tools: tuple[ToolDefinition, ...] = REPOSITORY_REVIEW_TOOLS
+
+    def __post_init__(self) -> None:
+        _wrap_api_key(self)
 
     def run(
         self,
@@ -388,4 +405,8 @@ class Agent:
     def _provider_api_key(self) -> SecretStr:
         if not self.api_key:
             raise ValueError("model_access_unavailable")
-        return SecretStr(self.api_key)
+        return SecretStr(
+            self.api_key.get_secret_value()
+            if isinstance(self.api_key, SecretStr)
+            else self.api_key
+        )

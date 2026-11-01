@@ -61,18 +61,20 @@ export function AgentDialog({ agent, catalog, credentials, open, onOpenChange }:
   const [personality, setPersonality] = useState<string | null>(
     agent ? (agent.personality ?? "") : null,
   )
-  const [category, setCategory] = useState<ReviewCategory>(agent?.review_category ?? "security")
+  // Empty until the user chooses one, because the personality template depends on it.
+  const [category, setCategory] = useState<ReviewCategory | "">(
+    agent?.review_category ?? "",
+  )
   const [provider, setProvider] = useState<ModelProvider>(initialProvider)
   const [model, setModel] = useState(initialModel)
-  const [avatar, setAvatar] = useState(agent?.avatar ?? "")
   const [credentialId, setCredentialId] = useState(agent?.credential_id ?? "")
 
   const categoryOptions =
-    catalog?.categories.map((item) => ({ value: item.id, label: item.label })) ??
+    catalog?.categories?.map((item) => ({ value: item.id, label: item.label })) ??
     categories
   const defaultPersonality =
-    catalog?.categories.find((item) => item.id === category)?.default_personality ??
-    ""
+    catalog?.categories?.find((item) => item.id === category)
+      ?.default_personality ?? ""
   const personalityValue = personality ?? defaultPersonality
   const models = providers.find((item) => item.id === provider)?.models ?? []
   const compatibleCredentials = credentials.filter((credential) => credential.provider === provider)
@@ -92,7 +94,7 @@ export function AgentDialog({ agent, catalog, credentials, open, onOpenChange }:
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!name.trim() || !model) return
+    if (!name.trim() || !model || !category) return
 
     const values = {
       name: name.trim(),
@@ -100,7 +102,6 @@ export function AgentDialog({ agent, catalog, credentials, open, onOpenChange }:
       review_category: category,
       model_provider: provider,
       model_name: model,
-      avatar: avatar.trim() || null,
       credential_id: credentialId || null,
     }
     const callbacks = {
@@ -127,6 +128,28 @@ export function AgentDialog({ agent, catalog, credentials, open, onOpenChange }:
         <form id="agent-form" className="grid gap-4" onSubmit={handleSubmit}>
           <div className="grid gap-2"><Label htmlFor="agent-name">Name</Label><Input id="agent-name" value={name} onChange={(event) => setName(event.target.value)} maxLength={120} required /></div>
           <div className="grid gap-2">
+            <Label htmlFor="agent-category">Review category</Label>
+            <Select
+              value={category}
+              onValueChange={(value) => value && setCategory(value as ReviewCategory)}
+            >
+              <SelectTrigger id="agent-category" className="w-full">
+                <SelectValue>
+                  {category
+                    ? optionLabel(categoryOptions, category)
+                    : "Choose a review category"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {categoryOptions.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-2">
             <Label htmlFor="agent-personality">
               Personality <span className="text-muted-foreground">optional</span>
             </Label>
@@ -135,15 +158,19 @@ export function AgentDialog({ agent, catalog, credentials, open, onOpenChange }:
               value={personalityValue}
               onChange={(event) => setPersonality(event.target.value)}
               maxLength={4000}
-              className="min-h-32 w-full rounded-md border border-white/25 bg-input px-3 py-2 text-sm outline-none transition-colors hover:border-white/40 focus-visible:border-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              disabled={!category}
+              placeholder="Choose a review category first"
+              className="min-h-32 disabled:cursor-not-allowed disabled:opacity-60 w-full rounded-md border border-white/25 bg-input px-3 py-2 text-sm outline-none transition-colors hover:border-white/40 focus-visible:border-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
             />
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs text-muted-foreground">
-                {personality === null && defaultPersonality
-                  ? `Starts from the ${optionLabel(categoryOptions, category)} template. Edit it freely.`
-                  : "Shapes how this reviewer words and orders its findings."}
+                {!category
+                  ? "Choose a review category to fill in a starting personality."
+                  : personality === null && defaultPersonality
+                    ? `Starts from the ${optionLabel(categoryOptions, category)} template. Edit it freely.`
+                    : "Shapes how this reviewer words and orders its findings."}
               </p>
-              {defaultPersonality && personalityValue !== defaultPersonality ? (
+              {category && defaultPersonality && personalityValue !== defaultPersonality ? (
                 <Button
                   type="button"
                   variant="ghost"
@@ -155,7 +182,6 @@ export function AgentDialog({ agent, catalog, credentials, open, onOpenChange }:
               ) : null}
             </div>
           </div>
-          <div className="grid gap-2"><Label htmlFor="agent-category">Review category</Label><Select value={category} onValueChange={(value) => value && setCategory(value as ReviewCategory)}><SelectTrigger id="agent-category" className="w-full"><SelectValue>{optionLabel(categoryOptions, category)}</SelectValue></SelectTrigger><SelectContent>{categoryOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select></div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2"><Label htmlFor="agent-provider">Provider</Label><Select value={provider} onValueChange={handleProviderChange}><SelectTrigger id="agent-provider" className="w-full"><SelectValue><span className="flex items-center gap-2"><ProviderLogo provider={provider} />{providers.find((item) => item.id === provider)?.label ?? provider}</span></SelectValue></SelectTrigger><SelectContent>{providers.map((item) => <SelectItem key={item.id} value={item.id}><span className="flex items-center gap-2"><ProviderLogo provider={item.id} />{item.label}</span></SelectItem>)}</SelectContent></Select></div>
             <div className="grid gap-2"><Label htmlFor="agent-model">Model</Label><Select value={model} onValueChange={(value) => value && setModel(value)} disabled={models.length === 0}><SelectTrigger id="agent-model" className="w-full"><SelectValue>{models.find((item) => item.id === model)?.label ?? "Choose model"}</SelectValue></SelectTrigger><SelectContent>{models.map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectContent></Select></div>
@@ -190,9 +216,25 @@ export function AgentDialog({ agent, catalog, credentials, open, onOpenChange }:
               Compatible keys are managed in Settings → API keys.
             </p>
           </div>
-          <div className="grid gap-2"><Label htmlFor="agent-avatar">Avatar image URL <span className="text-muted-foreground">optional</span></Label><Input id="agent-avatar" type="url" value={avatar} onChange={(event) => setAvatar(event.target.value)} placeholder="https://…" /></div>
         </form>
-        <DialogFooter><Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" form="agent-form" disabled={isPending || !catalog || !name.trim() || !model}>{isPending ? "Saving…" : isEditing ? "Save changes" : "Create agent"}</Button></DialogFooter>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            form="agent-form"
+            disabled={
+              isPending || !catalog || !name.trim() || !model || !category
+            }
+          >
+            {isPending ? "Saving…" : isEditing ? "Save changes" : "Create agent"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

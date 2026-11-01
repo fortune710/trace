@@ -69,6 +69,8 @@ test.describe('isolated authentication stack', () => {
     await page.getByRole('button', { name: 'Create agent' }).first().click()
     const agentDialog = page.getByRole('dialog')
     await agentDialog.getByLabel('Name').fill('E2E key agent')
+    await agentDialog.getByLabel('Review category').click()
+    await page.getByRole('option', { name: 'Security' }).click()
     await agentDialog.getByLabel('Model access').click()
     await page.getByRole('option', { name: 'Your OpenAI API key' }).click()
     await agentDialog.getByRole('button', { name: 'Create agent' }).click()

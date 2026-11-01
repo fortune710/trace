@@ -12,6 +12,7 @@ import agents.execution.agent as execution_agent_module
 import agents.execution.executor as execution_executor_module
 from agents.execution.agent import (
     Agent,
+    DiffAgent,
     FindingBatch,
     RemediationFindingOutput,
     ReviewFindingBatch,
@@ -859,3 +860,14 @@ def test_execution_service_langsmith_redaction_is_opt_out(monkeypatch) -> None:
 
     assert client_arguments["hide_inputs"] is False
     assert client_arguments["hide_outputs"] is False
+
+
+def test_agent_serialization_masks_the_model_api_key() -> None:
+    from langsmith._internal._serde import dumps_json
+
+    secret = "xai-test-secret-value"
+    agent = Agent(provider="xai", model="grok-4.3", api_key=secret)
+    diff_agent = DiffAgent(provider="xai", model="grok-4.3", api_key=secret)
+
+    assert secret.encode() not in dumps_json({"agent": agent, "diff": diff_agent})
+    assert agent._provider_api_key().get_secret_value() == secret
