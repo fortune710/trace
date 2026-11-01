@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react"
+import { PencilEdit02Icon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 import { Link, useParams } from "react-router-dom"
 
+import { AgentAvatar } from "@/components/agents/agent-avatar"
 import { AgentDetailsPageSkeleton } from "@/components/agents/agent-details-page-skeleton"
+import { AvatarEditorDialog } from "@/components/agents/avatar-editor/avatar-editor-dialog"
 import { ProviderLogo } from "@/components/agents/provider-logo"
 import { AppShell } from "@/components/layout/app-shell"
 import {
@@ -413,6 +417,7 @@ export function AgentDetailsPage() {
   const { agentId } = useParams()
   const [activeTab, setActiveTab] = useState<AgentTab>("personality")
   const [isDisableOpen, setIsDisableOpen] = useState(false)
+  const [isAvatarEditorOpen, setIsAvatarEditorOpen] = useState(false)
   const agent = useAgent(agentId)
   const disableAgent = useDisableAgent()
 
@@ -477,13 +482,35 @@ export function AgentDetailsPage() {
         {agent.data ? (
           <>
             <div className="mt-6 flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <h1 className="text-xl font-medium tracking-tight">
-                  {agent.data.name}
-                </h1>
-                <span className="mt-2 inline-flex rounded-sm border border-white/12 px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                  {categoryLabel(agent.data.review_category)}
-                </span>
+              <div className="flex items-center gap-4">
+                <div className="relative shrink-0">
+                  <AgentAvatar
+                    agent={agent.data}
+                    className="size-16"
+                  />
+                  {disabled ? null : (
+                    <button
+                      type="button"
+                      aria-label="Edit avatar"
+                      onClick={() => setIsAvatarEditorOpen(true)}
+                      className="absolute -right-1 -bottom-1 z-10 grid size-7 place-items-center rounded-full border border-white/20 bg-[#101012] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <HugeiconsIcon
+                        icon={PencilEdit02Icon}
+                        size={14}
+                        strokeWidth={2}
+                      />
+                    </button>
+                  )}
+                </div>
+                <div>
+                  <h1 className="text-xl font-medium tracking-tight">
+                    {agent.data.name}
+                  </h1>
+                  <span className="mt-2 inline-flex rounded-sm border border-white/12 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                    {categoryLabel(agent.data.review_category)}
+                  </span>
+                </div>
               </div>
               {disabled ? (
                 <span className="rounded-full border border-white/10 px-2 py-1 text-[11px] text-muted-foreground">
@@ -590,6 +617,14 @@ export function AgentDetailsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {agent.data && !disabled ? (
+        <AvatarEditorDialog
+          agent={agent.data}
+          open={isAvatarEditorOpen}
+          onOpenChange={setIsAvatarEditorOpen}
+        />
+      ) : null}
     </AppShell>
   )
 }

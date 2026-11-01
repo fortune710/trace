@@ -4,6 +4,15 @@ from db.base import Base
 from db.types import RepositorySource, ReviewCategory
 
 EXPECTED_COLUMNS = {
+    "private.agent_avatars": {
+        "owner_id",
+        "agent_id",
+        "content_type",
+        "data",
+        "sha256",
+        "byte_size",
+        "updated_at",
+    },
     "private.remediation_patch_artifacts": {
         "id",
         "owner_id",
@@ -298,6 +307,7 @@ EXPECTED_COLUMNS = {
         "model_provider",
         "model_name",
         "avatar",
+        "avatar_config",
         "default_key",
         "credential_id",
         "skills",

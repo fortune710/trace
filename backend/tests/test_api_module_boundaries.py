@@ -10,6 +10,7 @@ def test_resource_endpoints_are_composed_under_v1_only():
     expected = {
         "/api/v1/projects",
         "/api/v1/agents",
+        "/api/v1/agents/{agent_id}/avatar",
         "/api/v1/reviews",
         "/api/v1/findings/{finding_id}",
         "/api/v1/remediations/{remediation_id}",
@@ -39,6 +40,26 @@ def test_resource_endpoints_are_composed_under_v1_only():
     }
     assert {"source", "page", "page_size"} <= repository_parameters
     assert {"repository_identifier", "source", "page", "page_size"} <= branch_parameters
+
+    avatar = openapi["/api/v1/agents/{agent_id}/avatar"]
+    assert set(avatar) == {"get", "post", "delete"}
+    upload_body = avatar["post"]["requestBody"]["content"]["multipart/form-data"]
+    upload_schema_name = upload_body["schema"]["$ref"].rsplit("/", 1)[-1]
+    upload_schema = app.openapi()["components"]["schemas"][upload_schema_name]
+    assert set(upload_schema["properties"]) == {"file", "config"}
+    assert upload_schema["required"] == ["file"]
+    assert "204" in avatar["delete"]["responses"]
+    assert "200" in avatar["post"]["responses"]
+    agent_properties = app.openapi()["components"]["schemas"]["AgentResponse"][
+        "properties"
+    ]
+    assert "avatar_config" in agent_properties
+    for request_schema in ("AgentCreate", "AgentUpdate"):
+        request_properties = app.openapi()["components"]["schemas"][request_schema][
+            "properties"
+        ]
+        assert "avatar_config" not in request_properties
+    assert "security" not in avatar["get"]
 
     project_create_schema = app.openapi()["components"]["schemas"]["ProjectCreate"]
     assert {

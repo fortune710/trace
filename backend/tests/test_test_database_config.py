@@ -78,5 +78,17 @@ def test_nginx_admits_the_largest_valid_local_source_upload() -> None:
     worst_case = base64_budget + max_entries * (1_024 * 4 + 200)
 
     assert int(limit[1]) * 1024 * 1024 >= worst_case
+    # Avatar uploads get a small explicit cap that still fits the backend's own.
+    from agents.avatar import MAX_AVATAR_BYTES
+
+    avatar_block = re.search(
+        r"location ~ \^/api/v1/agents/\[\^/\]\+/avatar\$ \{(?P<body>[^}]*)\}",
+        https,
+        re.DOTALL,
+    )
+    assert avatar_block is not None
+    avatar_limit = re.search(r"client_max_body_size (\d+)k;", avatar_block["body"])
+    assert avatar_limit is not None
+    assert int(avatar_limit[1]) * 1024 >= MAX_AVATAR_BYTES + 4 * 1024
     # Every other backend route keeps NGINX's default request body limit.
-    assert https.count("client_max_body_size") == 1
+    assert https.count("client_max_body_size") == 2

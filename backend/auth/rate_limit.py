@@ -190,6 +190,12 @@ AUTH_RATE_LIMIT_POLICIES = {
         refill_tokens=20,
         refill_period_seconds=900,
     ),
+    "resource.avatar_write.user": RateLimitPolicy(
+        "resource.avatar_write.user",
+        capacity=20,
+        refill_tokens=20,
+        refill_period_seconds=900,
+    ),
     "resource.repository_read.user": RateLimitPolicy(
         "resource.repository_read.user",
         capacity=60,
