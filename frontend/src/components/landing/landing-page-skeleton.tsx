@@ -43,12 +43,11 @@ export function LandingPageSkeleton() {
         <Skeleton className="h-5 w-24" />
         <Skeleton className="h-5 w-24" />
       </div>
-      <div className="mx-auto grid w-full max-w-6xl gap-4 px-6 pb-24 md:grid-cols-2 md:px-10 lg:grid-cols-3">
-        <Skeleton className="h-48 lg:col-span-2" />
-        <Skeleton className="h-48" />
-        <Skeleton className="h-48" />
-        <Skeleton className="h-48" />
-        <Skeleton className="h-48" />
+      <div className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-4 px-6 pb-24 md:grid-cols-2 md:px-10 lg:grid-cols-6">
+        <Skeleton className="h-72 lg:col-span-3" />
+        <Skeleton className="h-72 lg:col-span-3" />
+        <Skeleton className="h-72 lg:col-span-4" />
+        <Skeleton className="h-72 lg:col-span-2" />
       </div>
     </div>
   )

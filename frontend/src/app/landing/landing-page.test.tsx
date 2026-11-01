@@ -106,6 +106,35 @@ describe("LandingPage", () => {
     expect(preview?.querySelector("[inert]")).not.toBeNull()
   })
 
+  it("lays the features out as a four-card bento grid", () => {
+    mockedSession.mockReturnValue({ data: null } as ReturnType<
+      typeof useSession
+    >)
+
+    renderPage()
+
+    const features = screen.getByRole("region", {
+      name: "A review team that reports to you",
+    })
+    const titles = within(features)
+      .getAllByRole("heading", { level: 3 })
+      .map((heading) => heading.textContent)
+
+    expect(titles).toEqual([
+      "Review from every angle",
+      "Findings that show their work",
+      "Reviewers you configure",
+      "Open a pull request or file an issue",
+    ])
+    expect(
+      within(features).getByText(/open a pull request straight from its proposed diff/i),
+    ).toBeTruthy()
+    expect(within(features).getByText(/GitHub or Linear as an issue/i)).toBeTruthy()
+    expect(within(features).getByText("Create pull request")).toBeTruthy()
+    expect(within(features).getByText("GitHub issue")).toBeTruthy()
+    expect(within(features).getByText("Linear issue")).toBeTruthy()
+  })
+
   it("does not promise capabilities the product lacks", () => {
     mockedSession.mockReturnValue({ data: null } as ReturnType<
       typeof useSession

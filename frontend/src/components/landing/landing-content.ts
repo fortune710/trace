@@ -16,53 +16,41 @@ export const reviewCategories = [
   "Marketing",
 ] as const
 
-export type Feature = {
+export type BentoFeature = {
+  id: "review-angles" | "evidence" | "reviewers" | "handoff"
   title: string
   description: string
-  wide?: boolean
+  className: string
 }
 
-export const features: Feature[] = [
+export const bentoFeatures: BentoFeature[] = [
   {
+    id: "review-angles",
     title: "Review from every angle",
     description:
       "Each reviewer owns one lens, so a security pass never gets diluted by a copy edit. Pick the reviewers for each run and Trace reads your project through all of them.",
-    wide: true,
+    className: "lg:col-span-3",
   },
   {
+    id: "evidence",
     title: "Findings that show their work",
     description:
       "Every finding carries a severity, the affected file, the evidence behind it and a recommendation written in plain language.",
+    className: "lg:col-span-3",
   },
   {
-    title: "Triage without the noise",
-    description:
-      "Filter by category, severity or status. Accept what matters, dismiss what does not, and mark things resolved as you ship.",
-  },
-  {
-    title: "Proposed diffs",
-    description:
-      "When a reviewer recommends a change, Trace shows the explanation, the affected files and the exact diff before anything is produced.",
-  },
-  {
+    id: "reviewers",
     title: "Reviewers you configure",
     description:
-      "Start with Harvey Specter, Mark Zuckerberg and Super PM, or create your own with a name, personality, category and model.",
+      "Start with Harvey Specter, Mark Zuckerberg and Super PM, or create your own with a name, personality, category and model. Use Trace-managed access or bring your own key.",
+    className: "lg:col-span-4",
   },
   {
-    title: "Hand findings to your tracker",
+    id: "handoff",
+    title: "Open a pull request or file an issue",
     description:
-      "Open a GitHub or Linear issue straight from a finding, or copy a ready-made prompt for your coding agent.",
-  },
-  {
-    title: "Pinned to your source",
-    description:
-      "Every review records the commit it read, or a snapshot of your local folder, so a finding always points at the code you reviewed.",
-  },
-  {
-    title: "Your keys stay yours",
-    description:
-      "Use Trace-managed model access, or bring your own OpenAI, Anthropic, Google or xAI key. Saved keys are encrypted and never shown again.",
+      "Accept a finding, then open a pull request straight from its proposed diff on GitHub projects, or hand it to GitHub or Linear as an issue.",
+    className: "lg:col-span-2",
   },
 ]
 
