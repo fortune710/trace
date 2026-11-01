@@ -15,6 +15,7 @@
     "test:desktop:sqlite": "bun ../scripts/ci/desktop-sqlite-integration.ts",
     "test:e2e:desktop": "bun e2e/desktop/local-project.spec.ts",
     "check:privacy": "bun ../scripts/ci/check-local-path-privacy.ts",
+    "og:image": "node scripts/render-og-image.mjs",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },

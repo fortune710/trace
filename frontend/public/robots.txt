@@ -1,0 +1,17 @@
+User-agent: *
+Allow: /
+Disallow: /account
+Disallow: /projects
+Disallow: /reviews
+Disallow: /agents
+Disallow: /settings
+Disallow: /integrations
+Disallow: /notifications
+Disallow: /learn-more
+Disallow: /sign-in
+Disallow: /sign-up
+Disallow: /forgot-password
+Disallow: /reset-password
+Disallow: /auth/
+
+Sitemap: https://trace.fortunealebiosu.dev/sitemap.xml

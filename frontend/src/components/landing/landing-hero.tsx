@@ -8,7 +8,7 @@ export function LandingHero() {
     >
       <div className="flex flex-col items-center gap-8 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-700">
         <p className="rounded-full border border-white/10 bg-popover px-3 py-1 text-xs text-foreground/85">
-          Pre-launch review for builders
+          Pre-launch review for vibe coders
         </p>
         <h1
           id="landing-hero-title"
@@ -17,9 +17,9 @@ export function LandingHero() {
           Review your app before the world does.
         </h1>
         <p className="max-w-2xl text-lg text-pretty text-foreground/70 md:text-xl">
-          Specialist AI reviewers read your code for security, engineering,
-          product, legal and accessibility risks, then propose fixes you approve
-          before anything changes.
+          AI got you to a working app fast. Specialist AI reviewers go through
+          the code it wrote and flag what could cost you and your users, so you
+          can fix it before launch.
         </p>
         <div className="flex flex-col items-center gap-3 self-stretch sm:self-auto">
           <LandingActions />
