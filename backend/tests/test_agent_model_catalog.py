@@ -1,9 +1,11 @@
 from agents.catalog import MODEL_CATALOG, model_catalog_response, supports_model
-from db.types import ModelProvider
+from agents.categories import CATEGORY_DEFAULTS
+from db.types import ModelProvider, ReviewCategory
 
 
 def test_model_catalog_exposes_only_supported_provider_model_pairs() -> None:
     response = model_catalog_response()
+    del response["categories"]
 
     assert response == {
         "providers": [
@@ -81,3 +83,16 @@ def test_model_catalog_accepts_seeded_default_and_rejects_unknown_pairs() -> Non
     assert supports_model("xai", "grok-4.7")
     assert not supports_model(ModelProvider.OPENAI, "unapproved-model")
     assert not supports_model(ModelProvider.XAI, "gpt-5.1")
+
+
+def test_model_catalog_offers_a_default_personality_for_every_review_category() -> None:
+    categories = model_catalog_response()["categories"]
+
+    assert [item["id"] for item in categories] == [
+        category.value for category in ReviewCategory
+    ]
+    assert all(item["label"] and item["default_personality"] for item in categories)
+    assert len({item["default_personality"] for item in categories}) == len(
+        ReviewCategory
+    )
+    assert len(CATEGORY_DEFAULTS) == len(ReviewCategory)

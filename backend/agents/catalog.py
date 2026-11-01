@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from agents.categories import review_category_options
 from db.types import ModelProvider
 
 
@@ -100,7 +101,8 @@ def model_catalog_response() -> dict[str, object]:
                 ],
             }
             for provider in MODEL_CATALOG
-        ]
+        ],
+        "categories": review_category_options(),
     }
 
 

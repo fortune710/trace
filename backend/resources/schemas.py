@@ -233,8 +233,15 @@ class AgentModelProviderOption(RequestModel):
     models: list[AgentModelOption]
 
 
+class AgentReviewCategoryOption(RequestModel):
+    id: ReviewCategory
+    label: str
+    default_personality: str
+
+
 class AgentModelCatalogResponse(RequestModel):
     providers: list[AgentModelProviderOption]
+    categories: list[AgentReviewCategoryOption]
 
 
 class LocalSourceSnapshot(RequestModel):

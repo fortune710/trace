@@ -12,6 +12,7 @@ import agents.execution.agent as execution_agent_module
 import agents.execution.executor as execution_executor_module
 from agents.execution.agent import (
     Agent,
+    DiffAgent,
     FindingBatch,
     RemediationFindingOutput,
     ReviewFindingBatch,
@@ -470,6 +471,11 @@ def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -
     )
     assert "prompt_text" in create_agent_arguments["system_prompt"]
     assert (
+        "Reporting style: Be precise and evidence-led."
+        in create_agent_arguments["system_prompt"]
+    )
+    assert "never narrows what you inspect" in create_agent_arguments["system_prompt"]
+    assert (
         "Do not produce patches or calculate hashes"
         in create_agent_arguments["system_prompt"]
     )
@@ -829,3 +835,39 @@ def test_execution_service_hides_langsmith_inputs_and_outputs(monkeypatch) -> No
     assert client_arguments["api_key"] == "ls-test"
     assert client_arguments["hide_inputs"] is True
     assert client_arguments["hide_outputs"] is True
+
+
+def test_execution_service_langsmith_redaction_is_opt_out(monkeypatch) -> None:
+    monkeypatch.setenv("REVIEW_RABBITMQ_URL", "amqp://guest:guest@localhost/")
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
+    monkeypatch.setenv("LANGSMITH_HIDE_INPUTS", "false")
+    monkeypatch.setenv("LANGSMITH_HIDE_OUTPUTS", "false")
+    client_arguments = {}
+
+    def fake_client(**kwargs):
+        client_arguments.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(execution_executor_module, "Client", fake_client)
+
+    ReviewExecutionService(
+        engine=None,  # type: ignore[arg-type]
+        credential_service=None,  # type: ignore[arg-type]
+        repository_service=None,  # type: ignore[arg-type]
+        settings=AgentExecutionSettings(),
+    )
+
+    assert client_arguments["hide_inputs"] is False
+    assert client_arguments["hide_outputs"] is False
+
+
+def test_agent_serialization_masks_the_model_api_key() -> None:
+    from langsmith._internal._serde import dumps_json
+
+    secret = "xai-test-secret-value"
+    agent = Agent(provider="xai", model="grok-4.3", api_key=secret)
+    diff_agent = DiffAgent(provider="xai", model="grok-4.3", api_key=secret)
+
+    assert secret.encode() not in dumps_json({"agent": agent, "diff": diff_agent})
+    assert agent._provider_api_key().get_secret_value() == secret

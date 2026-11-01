@@ -125,8 +125,8 @@ class ReviewExecutionService:
             self._langsmith = Client(
                 api_key=langsmith_api_key.get_secret_value(),
                 api_url=self._settings.langsmith_endpoint,
-                hide_inputs=True,
-                hide_outputs=True,
+                hide_inputs=self._settings.langsmith_hide_inputs,
+                hide_outputs=self._settings.langsmith_hide_outputs,
             )
         self._orchestrator = OrchestratorAgent()
         self._patch_store = PatchStore(engine)

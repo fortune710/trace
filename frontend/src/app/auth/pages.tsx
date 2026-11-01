@@ -73,11 +73,6 @@ function OAuthButtons() {
         <Google aria-hidden="true" className="size-4" />
         Continue with Google
       </Button>
-      {desktopOAuth.error ? (
-        <p className="text-sm text-destructive" role="alert">
-          {desktopOAuth.error.message}
-        </p>
-      ) : null}
     </div>
   )
 }
@@ -103,7 +98,6 @@ function emailField(email: string, setEmail: (value: string) => void) {
 export function SignInPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
-  const [params] = useSearchParams()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const login = useMutation({
@@ -114,15 +108,9 @@ export function SignInPage() {
       navigate(consumeReturnTo(), { replace: true })
     },
   })
-  const desktopError = params.get("desktop_error")
   return (
     <AuthShell>
       <Title title="Welcome back">Sign in to continue to Trace.</Title>
-      {desktopError ? (
-        <p className="mt-4 text-sm text-destructive" role="alert">
-          Desktop sign-in was not completed. Please try again.
-        </p>
-      ) : null}
       <form
         className="mt-6 grid gap-4"
         onSubmit={(event) => {

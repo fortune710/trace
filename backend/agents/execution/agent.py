@@ -31,6 +31,7 @@ from agents.execution.patches import (
     PatchIntentBatch,
     generate_patch,
 )
+from agents.execution.review_focus import coverage_instructions
 from agents.execution.tools import (
     FINDING_EVIDENCE_MARKDOWN_INSTRUCTIONS,
     REPOSITORY_REVIEW_TOOLS,
@@ -110,13 +111,27 @@ class ModelCounter(BaseCallbackHandler):
             self.transcript.append(output)
 
 
+def _wrap_api_key(agent: Agent | DiffAgent) -> None:
+    """Keep model credentials masked wherever the agent is serialized.
+
+    Agents travel through LangGraph state, so tracing serializes every field. A
+    ``SecretStr`` renders as asterisks there, which keeps the key out of traces even
+    when input hiding is turned off for debugging.
+    """
+    if isinstance(agent.api_key, str):
+        object.__setattr__(agent, "api_key", SecretStr(agent.api_key))
+
+
 @dataclass(frozen=True, slots=True)
 class DiffAgent:
     """Same-model specialist that turns one evidence-backed finding into a valid patch."""
 
     provider: str
     model: str
-    api_key: str | None = field(default=None, repr=False)
+    api_key: str | SecretStr | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _wrap_api_key(self)
 
     def run(
         self,
@@ -282,8 +297,11 @@ class Agent:
     model: str
     skills: tuple[object, ...] = ()
     metadata: dict[str, str] = field(default_factory=dict)
-    api_key: str | None = field(default=None, repr=False)
+    api_key: str | SecretStr | None = field(default=None, repr=False)
     tools: tuple[ToolDefinition, ...] = REPOSITORY_REVIEW_TOOLS
+
+    def __post_init__(self) -> None:
+        _wrap_api_key(self)
 
     def run(
         self,
@@ -295,7 +313,11 @@ class Agent:
         category = self.metadata.get("category", "engineering")
         personality = self.metadata.get("personality") or "Be precise and evidence-led."
         system_prompt = (
-            f"You are Trace's {category} review agent. {personality}\n"
+            f"You are Trace's {category} review agent.\n"
+            f"Reporting style: {personality}\n"
+            "The reporting style only shapes how you word, order, and explain "
+            "findings. It never narrows what you inspect or what you report; your "
+            "scope and coverage requirements below always take precedence.\n"
             "Repository intelligence and AST signals, when provided, are candidate "
             "navigation hints only. Use them to prioritize surfaces, but do not treat "
             "a fact or rule hit as evidence, a completed finding, or a required conclusion. "
@@ -317,6 +339,7 @@ class Agent:
             "external precedent from this project's verified behavior and include "
             "the supporting result URL when it materially informs the finding. "
             "Return only concrete launch risks. "
+            f"{coverage_instructions(category)}"
             "Each finding must include evidence and a repository-relative source "
             f"location when available. {FINDING_EVIDENCE_MARKDOWN_INSTRUCTIONS}"
             "For every finding, also "
@@ -325,7 +348,8 @@ class Agent:
             "agent to resolve the finding in this exact repository revision.\n"
             "A same-model specialist will independently generate remediation edits after "
             "your findings are saved. Do not produce patches or calculate hashes.\n"
-            "Return no finding when there is no risk."
+            "Return no finding only after that coverage pass finds no risk, and never "
+            "to end the review early."
         )
         human_message = (
             "Review target:\n"
@@ -381,4 +405,8 @@ class Agent:
     def _provider_api_key(self) -> SecretStr:
         if not self.api_key:
             raise ValueError("model_access_unavailable")
-        return SecretStr(self.api_key)
+        return SecretStr(
+            self.api_key.get_secret_value()
+            if isinstance(self.api_key, SecretStr)
+            else self.api_key
+        )
