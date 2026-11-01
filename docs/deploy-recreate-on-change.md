@@ -26,7 +26,12 @@ repository root:
    - **Images:** whether a service's image ID changed after the build.
 4. Inspects the running containers and flags any that run an image other than the
    one just built, or that lack or differ on a configured environment variable.
-   This works even when there is no earlier record.
+   This works even when there is no earlier record. Services named with
+   `--service-file SERVICE=PATH` (the deploy passes `nginx=config/nginx`) are also
+   flagged when those files changed after the container started. nginx copies
+   `https.conf` into a temporary `default.conf` at startup, so a reload never
+   applies an edited file and its healthcheck reports the stale copy unhealthy.
+   Only recreating the container fixes that.
 5. Force-recreates the affected services, then brings up the whole stack.
 6. Verifies that nothing is stale. If a service still is, the deploy fails and the
    record is not updated, so the next run re-checks everything.

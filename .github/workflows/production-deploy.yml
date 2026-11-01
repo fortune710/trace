@@ -209,6 +209,7 @@ jobs:
           python3 scripts/deploy/recreate-changed-services.py \
             --env-file .env.production \
             -f compose.production.yaml \
+            --service-file nginx=config/nginx \
             --state-dir /var/lib/trace/deploy-state
           docker compose --env-file .env.production -f compose.production.yaml exec -T nginx nginx -t
           docker compose --env-file .env.production -f compose.production.yaml exec -T nginx nginx -s reload

@@ -10,6 +10,10 @@ configuration changes.  This script adds what that does not give a deploy:
 * It inspects the running containers and recreates any that drifted from the
   image that was just built or from the environment that is configured now,
   even when no earlier record exists.
+* With ``--service-file SERVICE=PATH`` it also recreates a service whose config
+  files changed after its container started.  nginx copies ``https.conf`` into a
+  temporary ``default.conf`` at startup, so ``nginx -s reload`` never picks up an
+  edited file and its healthcheck reports the stale copy as unhealthy.
 * It verifies afterwards that every service is running the current image and
   carries the configured environment, and fails the deploy if one does not.
 
@@ -215,6 +219,42 @@ class ContainerState:
     service: str
     image_id: str
     environment: dict[str, str]
+    # Epoch seconds when the container last started; None when unknown.
+    started_at: float | None = None
+
+
+def parse_started_at(value: str | None) -> float | None:
+    """Parse Docker's RFC 3339 ``State.StartedAt`` (nanosecond precision) to epoch seconds."""
+
+    if not value or value.startswith("0001-"):
+        return None
+    text = value.rstrip("Z")
+    whole, _, fraction = text.partition(".")
+    try:
+        moment = datetime.strptime(whole, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    microseconds = int((fraction[:6] or "0").ljust(6, "0")) if fraction.isdigit() else 0
+    return moment.timestamp() + microseconds / 1_000_000
+
+
+def newest_mtime(root: Path, paths: Sequence[str]) -> float | None:
+    """Return the newest modification time among files, or files under directories."""
+
+    newest: float | None = None
+    for relative in paths:
+        target = root / relative
+        if target.is_dir():
+            candidates = [item for item in target.rglob("*") if item.is_file()]
+        elif target.is_file():
+            candidates = [target]
+        else:
+            candidates = []
+        for item in candidates:
+            modified = item.stat().st_mtime
+            if newest is None or modified > newest:
+                newest = modified
+    return newest
 
 
 @dataclass
@@ -253,17 +293,31 @@ def find_drift(
     services: dict[str, Any],
     containers: dict[str, list[ContainerState]],
     image_ids: dict[str, str],
+    config_mtimes: dict[str, float] | None = None,
 ) -> dict[str, list[str]]:
-    """Map each service to why its running containers differ from what is configured."""
+    """Map each service to why its running containers differ from what is configured.
 
+    ``config_mtimes`` maps a service to the newest modification time of the config
+    files it copies or reads at startup (for example nginx's ``default.conf`` copy).
+    A container that started before that time runs a stale copy.
+    """
+
+    config_mtimes = config_mtimes or {}
     drift: dict[str, list[str]] = {}
     for name, definition in services.items():
         wanted = configured_environment(definition)
         wanted_image = image_ids.get(name)
+        config_changed_at = config_mtimes.get(name)
         for container in containers.get(name, []):
             problems: list[str] = []
             if wanted_image and container.image_id != wanted_image:
                 problems.append("running a stale image")
+            if (
+                config_changed_at is not None
+                and container.started_at is not None
+                and container.started_at < config_changed_at
+            ):
+                problems.append("running stale config files (changed after it started)")
             missing = sorted(key for key in wanted if key not in container.environment)
             if missing:
                 problems.append("missing environment " + ", ".join(missing))
@@ -410,6 +464,7 @@ def inspect_containers(
                     service=service,
                     image_id=details.get("Image", ""),
                     environment=environment,
+                    started_at=parse_started_at(details.get("State", {}).get("StartedAt")),
                 )
             )
     return containers
@@ -432,6 +487,29 @@ def resolve_images(run: Runner, services: dict[str, Any]) -> dict[str, str]:
     return resolved
 
 
+def watched_config_mtimes(
+    root: Path, service_files: dict[str, list[str]], services: dict[str, Any]
+) -> dict[str, float]:
+    mtimes: dict[str, float] = {}
+    for service, paths in service_files.items():
+        if service not in services:
+            raise DeployError(f"--service-file names unknown service {service!r}.")
+        newest = newest_mtime(root, paths)
+        if newest is not None:
+            mtimes[service] = newest
+    return mtimes
+
+
+def parse_service_files(entries: Sequence[str]) -> dict[str, list[str]]:
+    parsed: dict[str, list[str]] = {}
+    for entry in entries:
+        service, separator, path = entry.partition("=")
+        if not separator or not service or not path:
+            raise DeployError(f"--service-file expects SERVICE=PATH, got {entry!r}.")
+        parsed.setdefault(service, []).append(path)
+    return parsed
+
+
 def deploy(
     *,
     root: Path,
@@ -442,6 +520,7 @@ def deploy(
     dry_run: bool,
     skip_build: bool,
     wait_timeout: int,
+    service_files: dict[str, list[str]] | None = None,
     run: Runner = run_command,
     compose: Compose | None = None,
 ) -> int:
@@ -469,7 +548,10 @@ def deploy(
         images=image_ids,
     )
 
-    drift = find_drift(services, inspect_containers(compose, run, services), image_ids)
+    config_mtimes = watched_config_mtimes(root, service_files or {}, services)
+    drift = find_drift(
+        services, inspect_containers(compose, run, services), image_ids, config_mtimes
+    )
     plan = make_plan(previous, current, services, drift)
 
     if previous is None:
@@ -494,7 +576,9 @@ def deploy(
 
     # Re-resolve images in case the build produced new IDs after the plan was made.
     image_ids = resolve_images(run, services)
-    remaining = find_drift(services, inspect_containers(compose, run, services), image_ids)
+    remaining = find_drift(
+        services, inspect_containers(compose, run, services), image_ids, config_mtimes
+    )
     if remaining:
         for service, problems in sorted(remaining.items()):
             for problem in problems:
@@ -531,6 +615,17 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
         dest="dependency_files",
         help="Repeatable. Defaults to the backend lockfile, pyproject and Dockerfile.",
     )
+    parser.add_argument(
+        "--service-file",
+        action="append",
+        default=[],
+        metavar="SERVICE=PATH",
+        help=(
+            "Repeatable. A file or directory a service copies or reads at startup, "
+            "for example nginx=config/nginx. The service is recreated when these "
+            "files changed after its container started."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--wait-timeout", type=int, default=300)
@@ -552,6 +647,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             dry_run=arguments.dry_run,
             skip_build=arguments.skip_build,
             wait_timeout=arguments.wait_timeout,
+            service_files=parse_service_files(arguments.service_file),
         )
     except DeployError as error:
         print(f"[deploy] ERROR: {error}", file=sys.stderr)
