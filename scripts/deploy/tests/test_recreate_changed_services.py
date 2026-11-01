@@ -2,10 +2,13 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import stat
 import sys
 import tempfile
+import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "recreate-changed-services.py"
@@ -118,6 +121,81 @@ class DriftTests(unittest.TestCase):
         self.assertEqual(recreate.find_drift(services, containers, {}), {})
 
 
+class ConfigDriftTests(unittest.TestCase):
+    def stale_check(self, started_at, changed_at):
+        services = {"nginx": {"image": "nginx:1", "environment": {}}}
+        containers = {
+            "nginx": [
+                recreate.ContainerState(
+                    service="nginx", image_id="x", environment={}, started_at=started_at
+                )
+            ]
+        }
+        return recreate.find_drift(services, containers, {}, {"nginx": changed_at})
+
+    def test_container_started_before_a_config_change_is_stale(self):
+        drift = self.stale_check(started_at=100.0, changed_at=200.0)
+        self.assertEqual(
+            drift, {"nginx": ["running stale config files (changed after it started)"]}
+        )
+
+    def test_container_started_after_the_config_change_is_current(self):
+        self.assertEqual(self.stale_check(started_at=300.0, changed_at=200.0), {})
+
+    def test_unknown_start_time_is_ignored(self):
+        self.assertEqual(self.stale_check(started_at=None, changed_at=200.0), {})
+
+
+class StartedAtTests(unittest.TestCase):
+    def test_parses_docker_nanosecond_timestamps(self):
+        parsed = recreate.parse_started_at("2026-11-01T07:09:46.123456789Z")
+        self.assertAlmostEqual(parsed, 1793516986.123456, places=3)
+
+    def test_parses_timestamps_without_a_fraction(self):
+        self.assertEqual(recreate.parse_started_at("2026-11-01T07:09:46Z"), 1793516986.0)
+
+    def test_never_started_or_invalid_values_are_unknown(self):
+        self.assertIsNone(recreate.parse_started_at("0001-01-01T00:00:00Z"))
+        self.assertIsNone(recreate.parse_started_at("not a time"))
+        self.assertIsNone(recreate.parse_started_at(None))
+
+
+class WatchedFilesTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+
+    def touch(self, relative, modified):
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x")
+        os.utime(path, (modified, modified))
+
+    def test_newest_mtime_covers_directories_and_files(self):
+        self.touch("config/nginx/https.conf", 500.0)
+        self.touch("config/nginx/sub/start.sh", 900.0)
+        self.touch("other.conf", 700.0)
+        self.assertEqual(recreate.newest_mtime(self.root, ["config/nginx"]), 900.0)
+        self.assertEqual(recreate.newest_mtime(self.root, ["other.conf"]), 700.0)
+
+    def test_missing_paths_are_ignored(self):
+        self.assertIsNone(recreate.newest_mtime(self.root, ["nope", "also/nope"]))
+
+    def test_service_file_arguments_are_parsed(self):
+        parsed = recreate.parse_service_files(["nginx=config/nginx", "nginx=extra.conf"])
+        self.assertEqual(parsed, {"nginx": ["config/nginx", "extra.conf"]})
+
+    def test_malformed_service_file_arguments_are_rejected(self):
+        for entry in ("nginx", "=path", "nginx="):
+            with self.assertRaises(recreate.DeployError):
+                recreate.parse_service_files([entry])
+
+    def test_unknown_service_is_rejected(self):
+        with self.assertRaises(recreate.DeployError):
+            recreate.watched_config_mtimes(self.root, {"ghost": ["x"]}, {"nginx": {}})
+
+
 class PlanTests(unittest.TestCase):
     def snapshot(self, **overrides):
         base = dict(
@@ -228,7 +306,7 @@ class FakeCompose:
             key: value
             for key, value in recreate.configured_environment(self.services[name]).items()
         }
-        return {"image": "sha256:new", "env": environment}
+        return {"image": "sha256:new", "env": environment, "started_at": time.time() + 5}
 
     def container_ids(self, service):
         return [service] if service in self.running else []
@@ -248,7 +326,7 @@ class DeployFlowTests(unittest.TestCase):
         (self.root / "backend/uv.lock").write_text("lock")
         self.addCleanup(self.directory.cleanup)
 
-    def run_deploy(self, compose, *, dry_run=False):
+    def run_deploy(self, compose, *, dry_run=False, service_files=None):
         def fake_run(command):
             if command[:3] == ["docker", "image", "inspect"]:
                 return "sha256:new\n"
@@ -256,7 +334,20 @@ class DeployFlowTests(unittest.TestCase):
                 name = command[2]
                 state = compose.running[name]
                 env = [f"{key}={value}" for key, value in state["env"].items()]
-                return json.dumps([{"Image": state["image"], "Config": {"Env": env}}])
+                started = datetime.fromtimestamp(
+                    state.get("started_at", time.time() + 5), timezone.utc
+                )
+                return json.dumps(
+                    [
+                        {
+                            "Image": state["image"],
+                            "Config": {"Env": env},
+                            "State": {
+                                "StartedAt": started.strftime("%Y-%m-%dT%H:%M:%S.123456789Z")
+                            },
+                        }
+                    ]
+                )
             raise AssertionError(command)
 
         output = io.StringIO()
@@ -270,6 +361,7 @@ class DeployFlowTests(unittest.TestCase):
                 dry_run=dry_run,
                 skip_build=False,
                 wait_timeout=10,
+                service_files=service_files,
                 run=fake_run,
                 compose=compose,
             )
@@ -307,6 +399,33 @@ class DeployFlowTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("Verification failed: worker is running a stale image", output)
         self.assertFalse((self.state_dir / recreate.STATE_FILE_NAME).exists())
+
+    def test_service_with_stale_config_files_is_force_recreated(self):
+        config = self.root / "config/redis"
+        config.mkdir(parents=True)
+        (config / "redis.conf").write_text("maxmemory 1mb")
+        compose = FakeCompose(services_model(), {})
+        compose.running = self.healthy_running(compose)
+        compose.running["redis"]["started_at"] = time.time() - 3600
+        code, output = self.run_deploy(compose, service_files={"redis": ["config/redis"]})
+
+        self.assertEqual(code, 0)
+        self.assertIn(("up", ("redis",), True), compose.calls)
+        self.assertIn("redis: running stale config files", output)
+
+    def test_unchanged_config_files_do_not_recreate_the_service(self):
+        config = self.root / "config/redis"
+        config.mkdir(parents=True)
+        (config / "redis.conf").write_text("maxmemory 1mb")
+        old = time.time() - 7200
+        os.utime(config / "redis.conf", (old, old))
+        compose = FakeCompose(services_model(), {})
+        compose.running = self.healthy_running(compose)
+        compose.running["redis"]["started_at"] = time.time() - 3600
+        code, _ = self.run_deploy(compose, service_files={"redis": ["config/redis"]})
+
+        self.assertEqual(code, 0)
+        self.assertNotIn(("up", ("redis",), True), compose.calls)
 
     def test_dry_run_changes_nothing(self):
         compose = FakeCompose(services_model(), {})
