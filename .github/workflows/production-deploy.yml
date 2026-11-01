@@ -204,7 +204,12 @@ jobs:
           fi
           docker compose --env-file .env.production -f compose.production.yaml run --rm --build migrate \
             uv run --offline --no-sync --locked alembic -c alembic.ini current --check-heads
-          docker compose --env-file .env.production -f compose.production.yaml up --build -d --wait
+          command -v python3 >/dev/null
+          install -d -m 0700 /var/lib/trace/deploy-state
+          python3 scripts/deploy/recreate-changed-services.py \
+            --env-file .env.production \
+            -f compose.production.yaml \
+            --state-dir /var/lib/trace/deploy-state
           docker compose --env-file .env.production -f compose.production.yaml exec -T nginx nginx -t
           docker compose --env-file .env.production -f compose.production.yaml exec -T nginx nginx -s reload
           REMOTE

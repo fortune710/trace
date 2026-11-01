@@ -31,6 +31,8 @@ jobs:
               - 'compose*.yaml'
               - 'scripts/**'
               - '.env.example'
+              - '.github/scripts/**'
+              - '.github/workflows/production-*.yml'
             workflow:
               - '.github/workflows/merge-checks.yml'
 
@@ -167,6 +169,15 @@ jobs:
       - run: docker compose --env-file .ci.env --profile test run --rm --build backend-tests
       - if: always()
         run: docker compose --env-file .ci.env --profile test down --volumes --remove-orphans
+
+  deploy-config:
+    needs: changes
+    if: needs.changes.outputs.compose == 'true' || needs.changes.outputs.workflow == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: python3 .github/scripts/check-production-env-wiring.py
+      - run: python3 -m unittest discover -s scripts/deploy/tests -v
 
   compose-lifecycle:
     needs: changes
