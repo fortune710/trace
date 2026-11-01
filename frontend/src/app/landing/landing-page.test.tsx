@@ -84,6 +84,28 @@ describe("LandingPage", () => {
     expect(screen.getByRole("heading", { level: 1 })).toBeTruthy()
   })
 
+  it("previews the current review findings screen", () => {
+    mockedSession.mockReturnValue({ data: null } as ReturnType<
+      typeof useSession
+    >)
+
+    const { container } = renderPage()
+    const preview = container.querySelector("figure")
+
+    expect(preview).not.toBeNull()
+
+    const mockup = within(preview as HTMLElement)
+
+    for (const item of ["Projects", "Agents", "Notifications", "Settings"]) {
+      expect(mockup.getAllByText(item).length).toBeGreaterThan(0)
+    }
+
+    expect(mockup.getByText("Findings", { selector: "span" })).toBeTruthy()
+    expect(mockup.getAllByRole("article", { hidden: true })).toHaveLength(4)
+    expect(mockup.getAllByText("Accept")).toHaveLength(3)
+    expect(preview?.querySelector("[inert]")).not.toBeNull()
+  })
+
   it("does not promise capabilities the product lacks", () => {
     mockedSession.mockReturnValue({ data: null } as ReturnType<
       typeof useSession

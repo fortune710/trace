@@ -121,7 +121,7 @@ function findingActions(status: FindingStatus) {
   }
 }
 
-function FindingCard({
+export function FindingCard({
   finding,
   onStatusChange,
   pending,

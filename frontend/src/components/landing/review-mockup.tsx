@@ -1,88 +1,175 @@
-import { cn } from "cn"
+import {
+  BotIcon,
+  Folder01Icon,
+  MessageNotification01Icon,
+  Search01Icon,
+  Settings01Icon,
+} from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 
-type Severity = "info" | "low" | "medium" | "high" | "critical"
-
-type MockFinding = {
-  title: string
-  severity: Severity
-  category: string
-  status: "Open" | "Accepted"
-  selected?: boolean
-}
+import { FindingCard } from "@/components/findings/review-findings"
+import { Badge } from "@/components/ui/badge"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
+import { Button } from "@/components/ui/button"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import type { Finding, ReviewCategory } from "@/lib/api"
 
 type MockReviewer = {
   name: string
-  initials: string
-  category: string
-  status: "Completed" | "Running"
-  custom?: boolean
+  category: ReviewCategory
 }
 
-const severityStyles: Record<Severity, string> = {
-  info: "bg-[#3b9eff]/12 text-[#3b9eff]",
-  low: "bg-[#11ff99]/10 text-[#11ff99]",
-  medium: "bg-[#ffc53d]/12 text-[#ffc53d]",
-  high: "bg-[#ff2047]/14 text-[#ff5c78]",
-  critical: "bg-[#ff2047]/14 text-[#ff5c78]",
-}
-
-const reviewers: MockReviewer[] = [
-  {
+const reviewers: Record<string, MockReviewer> = {
+  sentinel: {
     name: "Sentinel",
-    initials: "SE",
-    category: "Security",
-    status: "Completed",
-    custom: true,
+    category: "security",
   },
-  {
+  mark: {
     name: "Mark Zuckerberg",
-    initials: "MZ",
-    category: "Engineering",
-    status: "Completed",
+    category: "engineering",
   },
-  {
+  harvey: {
     name: "Harvey Specter",
-    initials: "HS",
-    category: "Legal",
-    status: "Completed",
+    category: "legal",
   },
-  {
+  pm: {
     name: "Super PM",
-    initials: "PM",
-    category: "Product",
-    status: "Running",
+    category: "product",
   },
-]
+}
 
-const findings: MockFinding[] = [
-  {
-    title: "Live payment key committed in .env.example",
+function mockFinding(
+  id: string,
+  reviewerKey: keyof typeof reviewers,
+  overrides: Pick<
+    Finding,
+    "severity" | "title" | "explanation" | "source_location" | "status"
+  >,
+): Finding {
+  const reviewer = reviewers[reviewerKey]
+
+  return {
+    id,
+    review_id: "mock-review",
+    agent_id: `agent-${reviewerKey}`,
+    reviewing_agent: {
+      assignment_id: `assignment-${reviewerKey}`,
+      agent_id: `agent-${reviewerKey}`,
+      display_name: reviewer.name,
+      specialization: reviewer.category,
+    },
+    category: reviewer.category,
+    evidence: null,
+    recommendation: null,
+    created_at: "2026-10-21T00:00:30Z",
+    updated_at: "2026-10-21T00:00:30Z",
+    ...overrides,
+  }
+}
+
+const findings: Finding[] = [
+  mockFinding("mock-1", "sentinel", {
     severity: "critical",
-    category: "Security",
-    status: "Open",
-    selected: true,
-  },
-  {
-    title: "Webhook handler has no error handling or retry path",
+    title: "Live payment key committed in .env.example",
+    explanation:
+      "A live payment key sits in a file that ships with the repository, so anyone who can read the code can use it.",
+    source_location: ".env.example",
+    status: "open",
+  }),
+  mockFinding("mock-2", "mark", {
     severity: "high",
-    category: "Engineering",
-    status: "Open",
-  },
-  {
-    title: "Analytics script loads before consent is collected",
+    title: "Webhook handler has no error handling or retry path",
+    explanation:
+      "The payment webhook updates the order without catching failures, so a transient database error silently drops the event.",
+    source_location: "src/server/webhooks/payments.ts",
+    status: "open",
+  }),
+  mockFinding("mock-3", "harvey", {
     severity: "medium",
-    category: "Legal",
-    status: "Accepted",
+    title: "Analytics script loads before consent is collected",
+    explanation:
+      "Tracking starts on first paint, before the visitor has accepted or declined cookies.",
+    source_location: "src/app/layout.tsx",
+    status: "accepted",
+  }),
+  mockFinding("mock-4", "pm", {
+    severity: "low",
+    title: "No empty state after a first project import",
+    explanation:
+      "A new account sees a blank table until the first review finishes.",
+    source_location: "src/app/projects/page.tsx",
+    status: "open",
+  }),
+]
+
+const sidebarItems = [
+  {
+    label: "Projects",
+    icon: Folder01Icon,
   },
   {
-    title: "No empty state after a first project import",
-    severity: "low",
-    category: "Product",
-    status: "Open",
+    label: "Agents",
+    icon: BotIcon,
+  },
+  {
+    label: "Notifications",
+    icon: MessageNotification01Icon,
+  },
+  {
+    label: "Settings",
+    icon: Settings01Icon,
   },
 ]
 
-const sidebarItems = ["Projects", "Agents", "Integrations"]
+const summaryFields = [
+  {
+    label: "Source",
+    value: "GitHub",
+  },
+  {
+    label: "Source identifier",
+    value: "812094336",
+    mono: true,
+  },
+  {
+    label: "Captured",
+    value: "10/20/2026, 8:00:00 PM",
+  },
+]
+
+const filters = [
+  {
+    id: "mock-finding-category",
+    label: "Category",
+    value: "All categories",
+  },
+  {
+    id: "mock-finding-severity",
+    label: "Severity",
+    value: "All severities",
+  },
+  {
+    id: "mock-finding-status",
+    label: "Status",
+    value: "All statuses",
+  },
+  {
+    id: "mock-finding-reviewer",
+    label: "Reviewer",
+    value: "All reviewers",
+  },
+]
 
 function TrafficLights() {
   return (
@@ -94,22 +181,169 @@ function TrafficLights() {
   )
 }
 
-function SeverityLabel({
-  severity,
-  category,
-}: Pick<MockFinding, "severity" | "category">) {
+function MockSidebar() {
   return (
-    <span className="flex items-center gap-1.5 text-[10px] font-medium tracking-wide uppercase">
-      <span
-        className={cn(
-          "rounded px-1.5 py-0.5",
-          severityStyles[severity],
-        )}
-      >
-        {severity}
-      </span>
-      <span className="text-muted-foreground">{category}</span>
-    </span>
+    <aside className="hidden w-64 shrink-0 flex-col justify-between border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
+      <div className="flex flex-col gap-2 px-3 py-4">
+        <div className="flex items-center justify-between">
+          <span className="font-mono text-sm tracking-tight">trace</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            tabIndex={-1}
+            className="text-muted-foreground"
+          >
+            <HugeiconsIcon
+              icon={Search01Icon}
+              size={17}
+              strokeWidth={2}
+            />
+          </Button>
+        </div>
+        <ul className="flex flex-col gap-1 pt-2">
+          {sidebarItems.map((item) => (
+            <li
+              key={item.label}
+              className="flex h-9 items-center gap-2 rounded-sm px-3 py-2 text-sm"
+            >
+              <HugeiconsIcon
+                icon={item.icon}
+                size={17}
+                strokeWidth={2}
+              />
+              <span>{item.label}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div className="px-3 pb-4">
+        <div className="flex items-center gap-3 px-2 py-2">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-sidebar-accent text-xs font-medium">
+            AL
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium">
+              Ada Lovelace
+            </span>
+            <span className="block truncate text-xs text-muted-foreground">
+              ada@example.com
+            </span>
+          </span>
+        </div>
+      </div>
+    </aside>
+  )
+}
+
+function MockReviewPage() {
+  return (
+    <div className="min-w-0 flex-1 px-6 py-8 md:px-10 md:py-10">
+      <Breadcrumb className="hidden md:block">
+        <BreadcrumbList>
+          <BreadcrumbItem>Projects</BreadcrumbItem>
+          <BreadcrumbSeparator />
+          <BreadcrumbItem>Trace dashboard</BreadcrumbItem>
+          <BreadcrumbSeparator />
+          <BreadcrumbItem>
+            <BreadcrumbPage>Review 5f2c9d1e</BreadcrumbPage>
+          </BreadcrumbItem>
+        </BreadcrumbList>
+      </Breadcrumb>
+
+      <div className="md:mt-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xl font-medium tracking-tight">
+              Review 5f2c9d1e
+            </p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              The selected reviewers have finished this review.
+            </p>
+          </div>
+          <Button
+            type="button"
+            tabIndex={-1}
+          >
+            Start another review
+          </Button>
+        </div>
+
+        <dl className="mt-8 hidden grid-cols-2 gap-x-6 gap-y-5 text-sm md:grid lg:grid-cols-4">
+          <div className="min-w-0">
+            <dt className="text-muted-foreground">Status</dt>
+            <dd className="mt-1">
+              <Badge className="h-auto rounded-sm bg-green-500/15 px-1.5 py-0.5 text-sm font-semibold text-green-300">
+                Completed
+              </Badge>
+            </dd>
+          </div>
+          {summaryFields.map((field) => (
+            <div
+              key={field.label}
+              className="min-w-0"
+            >
+              <dt className="text-muted-foreground">{field.label}</dt>
+              <dd
+                className={
+                  field.mono
+                    ? "mt-1 font-mono break-all text-foreground"
+                    : "mt-1 text-foreground"
+                }
+              >
+                {field.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+
+        <div className="mt-8 border-b border-border">
+          <span className="mr-5 inline-block border-b-2 border-transparent px-1 pb-3 text-sm text-muted-foreground">
+            Overview
+          </span>
+          <span className="inline-block border-b-2 border-foreground px-1 pb-3 text-sm text-foreground">
+            Findings
+          </span>
+        </div>
+
+        <div className="mt-8">
+          <p className="text-base font-medium">Findings</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Risks reported by the reviewers selected for this snapshot.
+          </p>
+          <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {filters.map((filter) => (
+              <div
+                key={filter.id}
+                className="grid gap-1"
+              >
+                <Label htmlFor={filter.id}>{filter.label}</Label>
+                <Select value="all">
+                  <SelectTrigger
+                    id={filter.id}
+                    className="w-full rounded-sm"
+                    tabIndex={-1}
+                  >
+                    <SelectValue>{filter.value}</SelectValue>
+                  </SelectTrigger>
+                </Select>
+              </div>
+            ))}
+          </div>
+          <div className="mt-6 grid gap-3">
+            {findings.map((finding) => (
+              <FindingCard
+                key={finding.id}
+                finding={finding}
+                onStatusChange={() => undefined}
+                pending={false}
+                error={null}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -117,154 +351,27 @@ export function ReviewMockup() {
   return (
     <figure className="mx-auto w-full max-w-6xl px-6 md:px-10">
       <p className="sr-only">
-        Product preview: a completed Trace review of a project called Trace
-        dashboard. Four reviewers report findings sorted by severity, including
-        a critical security finding with evidence, a recommendation and a
-        proposed change that is waiting for approval.
+        Product preview: the Findings tab of a completed Trace review for a
+        project called Trace dashboard. Findings from four reviewers are listed
+        with their severity, category, reviewer and source file, each with
+        Accept and Dismiss actions.
       </p>
       <div
         aria-hidden="true"
-        className="overflow-hidden rounded-xl border border-border bg-[#06060a] text-left"
+        inert
+        className="overflow-hidden rounded-xl border border-border bg-background text-left"
       >
         <div className="flex items-center justify-between border-b border-white/6 px-4 py-3">
           <TrafficLights />
-          <span className="font-code text-xs text-muted-foreground">
-            trace · Trace dashboard
+          <span className="font-mono text-xs text-muted-foreground">
+            Trace
           </span>
           <span className="w-12" />
         </div>
-        <div className="grid md:grid-cols-[200px_1fr]">
-          <aside className="hidden flex-col gap-1 border-r border-white/6 bg-card p-3 md:flex">
-            <span className="px-2 py-2 font-mono text-sm">trace</span>
-            {sidebarItems.map((item, index) => (
-              <span
-                key={item}
-                className={cn(
-                  "rounded-md px-2 py-1.5 text-sm text-muted-foreground",
-                  index === 0 && "bg-popover text-foreground",
-                )}
-              >
-                {item}
-              </span>
-            ))}
-          </aside>
-          <div className="flex min-w-0 flex-col gap-6 p-4 md:p-6">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="flex flex-col gap-1">
-                <p className="text-xs text-muted-foreground">
-                  Projects / Trace dashboard
-                </p>
-                <p className="text-lg font-medium">Review</p>
-                <p className="font-code text-xs text-muted-foreground">
-                  main · a1b2c3d4e5f6
-                </p>
-              </div>
-              <span className="rounded-md bg-[#ffc53d]/12 px-2 py-0.5 text-xs font-medium text-[#ffc53d]">
-                Running
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-              {reviewers.map((reviewer) => (
-                <div
-                  key={reviewer.name}
-                  className="flex items-center gap-2.5 rounded-lg border border-white/8 bg-card p-2.5"
-                >
-                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-popover text-[10px] font-medium">
-                    {reviewer.initials}
-                  </span>
-                  <span className="flex min-w-0 flex-col">
-                    <span className="truncate text-xs font-medium">
-                      {reviewer.name}
-                    </span>
-                    <span className="truncate text-[11px] text-muted-foreground">
-                      {reviewer.category}
-                      {reviewer.custom ? " · Custom" : ""}
-                    </span>
-                  </span>
-                  <span
-                    title={reviewer.status}
-                    className={cn(
-                      "ml-auto size-2 shrink-0 rounded-full",
-                      reviewer.status === "Completed"
-                        ? "bg-[#11ff99]"
-                        : "bg-[#ffc53d]",
-                    )}
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="grid gap-4 lg:grid-cols-[1fr_1.1fr]">
-              <ul className="flex flex-col gap-2">
-                {findings.map((finding) => (
-                  <li
-                    key={finding.title}
-                    className={cn(
-                      "flex flex-col gap-2 rounded-lg border border-white/8 bg-card p-3",
-                      finding.selected && "border-white/25 bg-popover",
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <SeverityLabel
-                        severity={finding.severity}
-                        category={finding.category}
-                      />
-                      <span
-                        className={cn(
-                          "rounded-full px-2 py-0.5 text-[10px] font-medium",
-                          finding.status === "Open"
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-[#11ff99]/12 text-[#11ff99]",
-                        )}
-                      >
-                        {finding.status}
-                      </span>
-                    </div>
-                    <p className="text-sm leading-snug">{finding.title}</p>
-                  </li>
-                ))}
-              </ul>
-              <div className="hidden flex-col gap-4 rounded-lg border border-white/8 bg-card p-4 lg:flex">
-                <div className="flex flex-col gap-1">
-                  <SeverityLabel
-                    severity="critical"
-                    category="Security"
-                  />
-                  <p className="text-base font-medium">
-                    Live payment key committed in .env.example
-                  </p>
-                  <p className="font-code text-xs text-muted-foreground">
-                    .env.example:3
-                  </p>
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <p className="text-xs text-muted-foreground">Evidence</p>
-                  <pre className="overflow-hidden rounded-md border border-white/8 bg-[#06060a] p-3 font-code text-xs text-foreground/85">
-                    PAYMENTS_SECRET_KEY=sk_live_••••••••••••
-                  </pre>
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <p className="text-xs text-muted-foreground">
-                    Recommendation
-                  </p>
-                  <p className="text-sm text-foreground/80">
-                    Remove the key from the repository, rotate it, and load it
-                    from your host&apos;s secret store.
-                  </p>
-                </div>
-                <div className="flex gap-2">
-                  <span className="rounded-md border border-[#11ff99]/30 bg-[#11ff99]/10 px-3 py-1.5 text-xs font-medium text-[#11ff99]">
-                    Accept
-                  </span>
-                  <span className="rounded-md border border-border px-3 py-1.5 text-xs text-foreground/70">
-                    Dismiss
-                  </span>
-                  <span className="rounded-md border border-border px-3 py-1.5 text-xs text-foreground/40">
-                    Create pull request
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
+        <div className="relative flex max-h-[620px] overflow-hidden md:max-h-[940px]">
+          <MockSidebar />
+          <MockReviewPage />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-linear-to-t from-background to-transparent" />
         </div>
       </div>
     </figure>
