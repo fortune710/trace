@@ -490,6 +490,54 @@ def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -
     )
 
 
+@pytest.mark.parametrize(
+    ("category", "research_required"),
+    [
+        ("security", True),
+        ("legal", True),
+        ("accessibility", True),
+        ("engineering", False),
+        ("product", False),
+        ("marketing", False),
+    ],
+)
+def test_agent_prompt_requires_web_research_only_for_risk_categories(
+    monkeypatch, category: str, research_required: bool
+) -> None:
+    create_agent_arguments = {}
+
+    class LangChainAgent:
+        def invoke(self, inputs, *, context):
+            return {"structured_response": ReviewFindingBatch()}
+
+    def fake_create_agent(**kwargs):
+        create_agent_arguments.update(kwargs)
+        return LangChainAgent()
+
+    monkeypatch.setattr(Agent, "_model", lambda _agent: object())
+    monkeypatch.setattr(execution_agent_module, "create_agent", fake_create_agent)
+
+    Agent(
+        provider="openai",
+        model="test-model",
+        metadata={"category": category},
+    ).run(
+        review_target=ReviewTarget(
+            source_kind="gitlab",
+            source_identifier="group/project",
+            source_revision="b" * 40,
+        ),
+        tool_context=_tool_context(),
+    )
+
+    system_prompt = create_agent_arguments["system_prompt"]
+    assert ("Web research is required for this role" in system_prompt) is (
+        research_required
+    )
+    assert "web_search" in system_prompt
+    assert "Never include repository source text" in system_prompt
+
+
 def test_review_saves_output_without_requiring_a_patch(monkeypatch) -> None:
     class Runtime:
         def invoke(self, inputs, *, context):
