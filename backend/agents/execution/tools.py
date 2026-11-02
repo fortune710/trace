@@ -45,6 +45,22 @@ FINDING_EVIDENCE_MARKDOWN_INSTRUCTIONS = (
     "external context. "
 )
 
+# Findings are read by the product's owner, who knows nothing about how the
+# review ran. Keep this list in step with REPOSITORY_REVIEW_TOOLS; a test fails
+# when a tool is added without being named here.
+FINDING_PLAIN_LANGUAGE_INSTRUCTIONS = (
+    "Write every finding field (title, explanation, evidence, recommendation, "
+    "and prompt_text) for the owner of this product, not for the developers of "
+    "this review system. Never write the names of your own tools (list_paths, "
+    "read_file, search_code, web_search) and never describe how you ran the "
+    "review, such as which tool you called. Describe the source itself instead. "
+    'Write "the file `app/error.tsx`" and not "read_file output"; write '
+    '"a search of the repository for `consent` found no matches" and not '
+    '"search_code returned nothing"; write "public sources such as '
+    '[title](url)" and not "web_search results". Findings about the '
+    "reviewed product's own tools or functions are fine. "
+)
+
 
 class ListPathsInput(BaseModel):
     """Arguments the model may supply to ``list_paths``."""
