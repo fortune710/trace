@@ -6,6 +6,7 @@ import {
   setDesktopCsrfToken,
 } from "@/lib/desktop-auth-state"
 import { desktopTelemetry } from "@/lib/desktop-telemetry"
+import { desktopRequest } from "@/lib/desktop-http"
 import { runtimeConfig } from "@/lib/runtime-config"
 
 export type Session = {
@@ -527,11 +528,22 @@ async function request<T>(
     }
   }
 
-  const response = await fetch(`${runtimeConfig.apiBaseUrl}${path}`, {
-    ...init,
-    credentials: "include",
-    headers,
-  })
+  const response = isTauri()
+    ? await (async () => {
+        const result = await desktopRequest(path, { ...init, headers })
+        return new Response(result.status === 204 ? null : result.body, {
+          status: result.status,
+          headers: {
+            ...(result.retryAfter ? { "Retry-After": result.retryAfter } : {}),
+            ...(result.requestId ? { "X-Request-ID": result.requestId } : {}),
+          },
+        })
+      })()
+    : await fetch(`${runtimeConfig.apiBaseUrl}${path}`, {
+        ...init,
+        credentials: "include",
+        headers,
+      })
 
   if (response.status === 204) {
     return undefined as T

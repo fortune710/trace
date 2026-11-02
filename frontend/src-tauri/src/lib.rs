@@ -1,3 +1,4 @@
+mod desktop_http;
 mod folder_picker;
 mod telemetry;
 
@@ -43,7 +44,9 @@ pub fn run() {
     ];
 
     tauri::Builder::default()
+        .manage(desktop_http::DesktopHttp::new().expect("desktop HTTP client"))
         .invoke_handler(tauri::generate_handler![
+            desktop_http::desktop_http_request,
             folder_picker::pick_local_folder,
             folder_picker::validate_local_folder,
             folder_picker::capture_local_source_snapshot,

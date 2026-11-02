@@ -1,6 +1,6 @@
 [package]
 name = "trace-desktop"
-version = "0.1.0"
+version = "0.1.0-alpha"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
@@ -33,3 +33,4 @@ tauri-plugin-sql = { version = "2.6.0", features = ["sqlite"] }
 tauri-plugin-log = "2"
 sha2 = "0.10"
 walkdir = "2"
+reqwest = { version = "0.13.5", default-features = false, features = ["cookies", "json", "multipart", "rustls"] }
