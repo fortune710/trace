@@ -21,6 +21,9 @@ class ReviewFocus:
     searches: tuple[str, ...]
     absence_checks: tuple[str, ...] = ()
     out_of_scope: str = ""
+    # Generic public research topics. A category that lists any must run
+    # web_search for every finding; see ``_research_requirement``.
+    research: tuple[str, ...] = ()
 
 
 REVIEW_FOCUS: dict[ReviewCategory, ReviewFocus] = {
@@ -58,6 +61,14 @@ REVIEW_FOCUS: dict[ReviewCategory, ReviewFocus] = {
             "Do not report generic code security bugs unless they create concrete "
             "legal exposure, such as unprotected personal data."
         ),
+        research=(
+            (
+                "regulatory fines or enforcement actions for the exposure, such as "
+                "GDPR or CCPA penalties for missing consent or retention limits"
+            ),
+            "regulator guidance on the kind of claim or data practice you found",
+            "the obligations of a named open-source license",
+        ),
     ),
     ReviewCategory.SECURITY: ReviewFocus(
         mandate="exploitable weaknesses an attacker could use against this product",
@@ -83,6 +94,17 @@ REVIEW_FOCUS: dict[ReviewCategory, ReviewFocus] = {
         ),
         out_of_scope=(
             "Leave pure legal, product, and marketing concerns to other reviewers."
+        ),
+        research=(
+            (
+                "CVEs and vendor advisories for a dependency, using its public "
+                "package name and version from a manifest"
+            ),
+            (
+                "documented attacks and advisories for the weakness type, such as "
+                "missing authorization checks or server-side request forgery"
+            ),
+            "OWASP or vendor guidance on the weakness type",
         ),
     ),
     ReviewCategory.ENGINEERING: ReviewFocus(
@@ -143,6 +165,14 @@ REVIEW_FOCUS: dict[ReviewCategory, ReviewFocus] = {
             "an accessibility statement when the product serves the public",
         ),
         out_of_scope="Do not report backend or security issues.",
+        research=(
+            "the WCAG 2.2 success criterion that applies to the barrier",
+            (
+                "documented ADA or European Accessibility Act lawsuits and "
+                "enforcement for the same kind of barrier"
+            ),
+            "W3C WAI guidance for the pattern",
+        ),
     ),
     ReviewCategory.MARKETING: ReviewFocus(
         mandate="claims, messaging, and discoverability risks at launch",
@@ -175,6 +205,30 @@ GENERIC_FOCUS = ReviewFocus(
 )
 
 
+def _research_requirement(topics: tuple[str, ...]) -> str:
+    """Make web research a mandatory step instead of an optional extra.
+
+    The queries web_search accepts are limited to plain public text, so the
+    wording tells the model how to phrase one that will not be rejected.
+    """
+    return (
+        "Web research is required for this role; it is not optional, and it "
+        "replaces the optional wording above. Before you return, call web_search "
+        "at least once for every finding you report. One search may cover findings "
+        "of the same class. Research: "
+        + "; ".join(topics)
+        + ". Write each query as one line of plain English about a public "
+        "concept, with no code, braces, semicolons, file paths, or programming "
+        "keywords such as select, insert, import, function, or class, because the "
+        "tool rejects those. Cite what you find: put the result URL in the "
+        "finding's evidence as a Markdown link and say what that source shows. If "
+        "web_search returns an error, retry once with a shorter query. If it is "
+        "still unavailable, say in the finding's evidence that external research "
+        "could not be completed, and never invent a source, citation, or URL. "
+        "If you report no findings, no search is required."
+    )
+
+
 def coverage_instructions(category: str) -> str:
     """Prompt text that makes the agent finish a role-specific coverage pass."""
     try:
@@ -203,5 +257,7 @@ def coverage_instructions(category: str) -> str:
         )
     if focus.out_of_scope:
         lines.append(focus.out_of_scope)
+    if focus.research:
+        lines.append(_research_requirement(focus.research))
     lines.append("A short inspection is not enough to conclude that there is no risk.")
     return "\n".join(lines) + "\n"
