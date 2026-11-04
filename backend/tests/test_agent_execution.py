@@ -577,6 +577,25 @@ def test_plain_language_instructions_name_every_repository_tool() -> None:
         assert repository_tool.name in FINDING_PLAIN_LANGUAGE_INSTRUCTIONS  # type: ignore[union-attr]
 
 
+def test_plain_language_instructions_qualify_partial_search_coverage() -> None:
+    import inspect
+
+    import agents.execution.tools as tools_module
+    from agents.execution.tools import FINDING_PLAIN_LANGUAGE_INSTRUCTIONS
+
+    assert "a partial search of the repository" in FINDING_PLAIN_LANGUAGE_INSTRUCTIONS
+    assert (
+        "never claim that the whole repository has no match"
+        in FINDING_PLAIN_LANGUAGE_INSTRUCTIONS
+    )
+    # The rule names the result fields search_code reports for partial coverage.
+    # Fail here if they are renamed so the instruction does not go stale.
+    source = inspect.getsource(tools_module)
+    for field_name in ("files_truncated", "skipped_files"):
+        assert field_name in FINDING_PLAIN_LANGUAGE_INSTRUCTIONS
+        assert f'"{field_name}"' in source
+
+
 def test_evidence_schema_description_tells_the_model_not_to_name_tools() -> None:
     description = ReviewFindingOutput.model_fields["evidence"].description
 

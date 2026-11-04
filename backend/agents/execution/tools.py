@@ -52,12 +52,18 @@ FINDING_PLAIN_LANGUAGE_INSTRUCTIONS = (
     "Write every finding field (title, explanation, evidence, recommendation, "
     "and prompt_text) for the owner of this product, not for the developers of "
     "this review system. Never write the names of your own tools (list_paths, "
-    "read_file, search_code, web_search) and never describe how you ran the "
-    "review, such as which tool you called. Describe the source itself instead. "
+    "read_file, search_code, web_search), the names of their result fields "
+    "(such as files_truncated or skipped_files), or which tool you called. "
+    "Describe the source itself instead. "
     'Write "the file `app/error.tsx`" and not "read_file output"; write '
-    '"a search of the repository for `consent` found no matches" and not '
-    '"search_code returned nothing"; write "public sources such as '
-    '[title](url)" and not "web_search results". Findings about the '
+    '"public sources such as [title](url)" and not "web_search results". '
+    "A search that covered every file may be described as "
+    '"a search of the repository for `consent` found no matches", not '
+    '"search_code returned nothing". When a search result says it was cut off '
+    "or skipped files, it covered only part of the repository: say so, for "
+    'example "a partial search of the repository for `consent` found no matches '
+    'in the files it covered", and never claim that the whole repository has '
+    "no match or that something is absent from it. Findings about the "
     "reviewed product's own tools or functions are fine. "
 )
 
