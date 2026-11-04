@@ -538,6 +538,74 @@ def test_agent_prompt_requires_web_research_only_for_risk_categories(
     assert "Never include repository source text" in system_prompt
 
 
+def test_agent_prompt_keeps_internal_tool_names_out_of_findings(monkeypatch) -> None:
+    from agents.execution.tools import FINDING_PLAIN_LANGUAGE_INSTRUCTIONS
+
+    create_agent_arguments = {}
+
+    class LangChainAgent:
+        def invoke(self, inputs, *, context):
+            return {"structured_response": ReviewFindingBatch()}
+
+    def fake_create_agent(**kwargs):
+        create_agent_arguments.update(kwargs)
+        return LangChainAgent()
+
+    monkeypatch.setattr(Agent, "_model", lambda _agent: object())
+    monkeypatch.setattr(execution_agent_module, "create_agent", fake_create_agent)
+
+    Agent(provider="openai", model="test-model").run(
+        review_target=ReviewTarget(
+            source_kind="gitlab",
+            source_identifier="group/project",
+            source_revision="b" * 40,
+        ),
+        tool_context=_tool_context(),
+    )
+
+    system_prompt = create_agent_arguments["system_prompt"]
+    assert FINDING_PLAIN_LANGUAGE_INSTRUCTIONS in system_prompt
+    assert "for the owner of this product" in system_prompt
+    assert "the file `app/error.tsx`" in system_prompt
+    assert "Findings about the reviewed product's own tools" in system_prompt
+
+
+def test_plain_language_instructions_name_every_repository_tool() -> None:
+    from agents.execution.tools import FINDING_PLAIN_LANGUAGE_INSTRUCTIONS
+
+    for repository_tool in REPOSITORY_REVIEW_TOOLS:
+        assert repository_tool.name in FINDING_PLAIN_LANGUAGE_INSTRUCTIONS  # type: ignore[union-attr]
+
+
+def test_plain_language_instructions_qualify_partial_search_coverage() -> None:
+    import inspect
+
+    import agents.execution.tools as tools_module
+    from agents.execution.tools import FINDING_PLAIN_LANGUAGE_INSTRUCTIONS
+
+    assert "a partial search of the repository" in FINDING_PLAIN_LANGUAGE_INSTRUCTIONS
+    assert (
+        "never claim that the whole repository has no match"
+        in FINDING_PLAIN_LANGUAGE_INSTRUCTIONS
+    )
+    # The rule names the result fields search_code reports for partial coverage.
+    # Fail here if they are renamed so the instruction does not go stale.
+    source = inspect.getsource(tools_module)
+    for field_name in ("files_truncated", "skipped_files"):
+        assert field_name in FINDING_PLAIN_LANGUAGE_INSTRUCTIONS
+        assert f'"{field_name}"' in source
+
+
+def test_evidence_schema_description_tells_the_model_not_to_name_tools() -> None:
+    description = ReviewFindingOutput.model_fields["evidence"].description
+
+    assert description is not None
+    assert "never name the internal tools" in description
+    assert "never name the internal tools" in str(
+        ReviewFindingBatch.model_json_schema()
+    )
+
+
 def test_review_saves_output_without_requiring_a_patch(monkeypatch) -> None:
     class Runtime:
         def invoke(self, inputs, *, context):
