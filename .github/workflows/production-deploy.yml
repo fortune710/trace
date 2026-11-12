@@ -210,6 +210,7 @@ jobs:
             --env-file .env.production \
             -f compose.production.yaml \
             --service-file nginx=config/nginx \
+            --service-file ingress=config/haproxy \
             --state-dir /var/lib/trace/deploy-state
           docker compose --env-file .env.production -f compose.production.yaml exec -T nginx nginx -t
           docker compose --env-file .env.production -f compose.production.yaml exec -T nginx nginx -s reload
