@@ -34,6 +34,7 @@ from agents.execution.patches import (
 from agents.execution.review_focus import coverage_instructions
 from agents.execution.tools import (
     FINDING_EVIDENCE_MARKDOWN_INSTRUCTIONS,
+    FINDING_PLAIN_LANGUAGE_INSTRUCTIONS,
     REPOSITORY_REVIEW_TOOLS,
     ToolExecutionContext,
 )
@@ -57,7 +58,9 @@ class FindingOutput(BaseModel):
         max_length=10_000,
         description=(
             "Repository evidence in GitHub-Flavored Markdown. Include repository "
-            "paths and line references, and use Markdown links for public-web sources."
+            "paths and line references, and use Markdown links for public-web sources. "
+            "Write for the product's owner: never name the internal tools you used "
+            "(such as read_file or search_code); describe the file or search instead."
         ),
     )
     source_location: str | None = Field(default=None, max_length=2_000)
@@ -342,6 +345,7 @@ class Agent:
             f"{coverage_instructions(category)}"
             "Each finding must include evidence and a repository-relative source "
             f"location when available. {FINDING_EVIDENCE_MARKDOWN_INSTRUCTIONS}"
+            f"{FINDING_PLAIN_LANGUAGE_INSTRUCTIONS}"
             "For every finding, also "
             "return:\n"
             "- prompt_text: a concise, implementation-ready prompt for a coding "
