@@ -13,23 +13,22 @@ Trace API hostname:
 | --- | --- | --- |
 | `traceapi.fortunealebiosu.dev` | `127.0.0.1:18080` | `127.0.0.1:18443` |
 
-The production deployment workflow runs
-`scripts/deploy/verify-shared-ingress.sh` before it writes the production
-environment to the VPS or recreates any service. The gate requires the HTTPS
-ingress to return an HTTP response and HTTP to return a redirect for each
-hostname; it does not require either application's health endpoint to be
-healthy. After Trace is recreated, the workflow verifies its local HTTPS
-`/health` endpoint returns `200`. This lets a deployment repair a currently
-unhealthy Trace instance while still failing the run if the refreshed instance
-does not become healthy.
+The production deployment validates HAProxy's configuration before changing
+the stack. It then recreates Trace NGINX with its loopback bindings, validates
+the local HTTPS `/health` endpoint returns `200`, and reloads HAProxy. Only
+after that handoff does `scripts/deploy/verify-shared-ingress.sh` check the
+public HTTPS route and HTTP-to-HTTPS redirect. This lets a deployment repair a
+currently unhealthy Trace instance without mistaking Trace's former direct
+port bindings for shared-ingress readiness.
 
 ## Cutover checks
 
-Before merging the loopback binding change, confirm that the external ingress
-owns public TCP ports 80 and 443, then run the same checks as the workflow
-from a network outside the VPS. Both hostnames must complete the HTTP redirect
-and return an HTTPS response. Do not remove Trace's public port bindings until
-these checks succeed.
+Before deploying the loopback binding change, ensure `/etc/haproxy/haproxy.cfg`
+routes `traceapi.fortunealebiosu.dev` to `127.0.0.1:18080` for HTTP and
+`127.0.0.1:18443` for HTTPS. HAProxy must be enabled, but it cannot bind public
+ports until Trace NGINX releases them during this deployment. The workflow
+validates its configuration before the handoff, then reloads it immediately
+after NGINX is recreated.
 
 ## Rollback
 
@@ -51,7 +50,15 @@ docker compose --env-file .env.production -f compose.production.yaml \
   up -d --force-recreate nginx
 ```
 
-Finally, verify NGINX's configuration and the public Trace health endpoint.
-The deployment gate intentionally remains blocked until shared ingress routing
-for the Trace API hostname is restored, but does not block a deployment solely
-because the existing Trace instance is unhealthy.
+Finally, validate NGINX and reload HAProxy:
+
+```sh
+docker compose --env-file .env.production -f compose.production.yaml exec -T nginx nginx -t
+systemctl reload haproxy
+curl --fail --resolve traceapi.fortunealebiosu.dev:18443:127.0.0.1 \
+  https://traceapi.fortunealebiosu.dev:18443/health
+```
+
+Then verify the public Trace route. The workflow does not block an attempted
+repair because the pre-existing Trace instance is unhealthy; it does fail when
+the refreshed instance or public routing fails.
