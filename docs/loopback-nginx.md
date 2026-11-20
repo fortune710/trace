@@ -6,13 +6,12 @@ to serve its own hostname, ACME challenges, and TLS certificate in the
 existing NGINX configuration.
 
 Public ports 80 and 443 must be owned by a separately managed host ingress
-before this change is deployed. That ingress must route both protocols for
-both API hostnames:
+before this change is deployed. That ingress must route both protocols for the
+Trace API hostname:
 
 | API hostname | HTTP target | HTTPS target |
 | --- | --- | --- |
 | `traceapi.fortunealebiosu.dev` | `127.0.0.1:18080` | `127.0.0.1:18443` |
-| `keepsafeapi.fortunealebiosu.dev` | `127.0.0.1:28080` | `127.0.0.1:28443` |
 
 The production deployment workflow runs
 `scripts/deploy/verify-shared-ingress.sh` before it writes the production
@@ -54,5 +53,5 @@ docker compose --env-file .env.production -f compose.production.yaml \
 
 Finally, verify NGINX's configuration and the public Trace health endpoint.
 The deployment gate intentionally remains blocked until shared ingress routing
-for both API hostnames is restored, but does not block a deployment solely
+for the Trace API hostname is restored, but does not block a deployment solely
 because the existing Trace instance is unhealthy.

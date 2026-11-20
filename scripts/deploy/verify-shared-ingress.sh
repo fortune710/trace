@@ -6,7 +6,6 @@ readonly CONNECT_TIMEOUT_SECONDS=5
 readonly REQUEST_TIMEOUT_SECONDS=15
 readonly API_HOSTS=(
   traceapi.fortunealebiosu.dev
-  keepsafeapi.fortunealebiosu.dev
 )
 
 check_https() {
