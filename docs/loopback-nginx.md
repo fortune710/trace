@@ -16,18 +16,21 @@ both API hostnames:
 
 The production deployment workflow runs
 `scripts/deploy/verify-shared-ingress.sh` before it writes the production
-environment to the VPS or recreates any service. The gate requires an HTTPS
-`/health` response and an HTTP request that successfully follows an HTTPS
-redirect for each hostname. A failure blocks the deployment; fix the external
-ingress, DNS, certificate, or upstream routing and rerun the workflow.
+environment to the VPS or recreates any service. The gate requires the HTTPS
+ingress to return an HTTP response and HTTP to return a redirect for each
+hostname; it does not require either application's health endpoint to be
+healthy. After Trace is recreated, the workflow verifies its local HTTPS
+`/health` endpoint returns `200`. This lets a deployment repair a currently
+unhealthy Trace instance while still failing the run if the refreshed instance
+does not become healthy.
 
 ## Cutover checks
 
 Before merging the loopback binding change, confirm that the external ingress
 owns public TCP ports 80 and 443, then run the same checks as the workflow
 from a network outside the VPS. Both hostnames must complete the HTTP redirect
-and return a successful HTTPS `/health` response. Do not remove Trace's public
-port bindings until these checks succeed.
+and return an HTTPS response. Do not remove Trace's public port bindings until
+these checks succeed.
 
 ## Rollback
 
@@ -51,4 +54,5 @@ docker compose --env-file .env.production -f compose.production.yaml \
 
 Finally, verify NGINX's configuration and the public Trace health endpoint.
 The deployment gate intentionally remains blocked until shared ingress routing
-for both API hostnames is restored.
+for both API hostnames is restored, but does not block a deployment solely
+because the existing Trace instance is unhealthy.
