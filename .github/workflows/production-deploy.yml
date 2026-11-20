@@ -82,6 +82,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Verify shared public ingress
+        run: scripts/deploy/verify-shared-ingress.sh
+
       - name: Prepare production environment
         env:
           AUDIT_DATABASE: ${{ secrets.AUDIT_DATABASE }}
