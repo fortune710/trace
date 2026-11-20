@@ -216,4 +216,12 @@ jobs:
             --state-dir /var/lib/trace/deploy-state
           docker compose --env-file .env.production -f compose.production.yaml exec -T nginx nginx -t
           docker compose --env-file .env.production -f compose.production.yaml exec -T nginx nginx -s reload
+          if ! curl --fail --silent --show-error \
+            --connect-timeout 5 --max-time 15 --noproxy '*' \
+            --resolve traceapi.fortunealebiosu.dev:18443:127.0.0.1 \
+            --output /dev/null \
+            https://traceapi.fortunealebiosu.dev:18443/health; then
+            echo 'Trace health check failed after recreation; the refreshed stack remains running for diagnosis or retry.' >&2
+            exit 1
+          fi
           REMOTE

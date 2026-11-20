@@ -11,16 +11,27 @@ readonly API_HOSTS=(
 
 check_https() {
   local host="$1"
+  local status
 
-  curl \
-    --fail \
-    --silent \
-    --show-error \
-    --connect-timeout "$CONNECT_TIMEOUT_SECONDS" \
-    --max-time "$REQUEST_TIMEOUT_SECONDS" \
-    --proto '=https' \
-    --output /dev/null \
-    "https://${host}/health"
+  status="$(
+    curl \
+      --silent \
+      --show-error \
+      --connect-timeout "$CONNECT_TIMEOUT_SECONDS" \
+      --max-time "$REQUEST_TIMEOUT_SECONDS" \
+      --proto '=https' \
+      --output /dev/null \
+      --write-out '%{http_code}' \
+      "https://${host}/"
+  )"
+
+  case "$status" in
+    [1-5][0-9][0-9]) ;;
+    *)
+      echo "Expected HTTPS ingress at ${host} to return an HTTP status, received ${status}" >&2
+      return 1
+      ;;
+  esac
 }
 
 check_http_redirect() {
@@ -36,7 +47,7 @@ check_http_redirect() {
       --proto '=http,https' \
       --output /dev/null \
       --write-out '%{http_code}' \
-      "http://${host}/health"
+      "http://${host}/"
   )"
 
   case "$status" in
@@ -47,17 +58,6 @@ check_http_redirect() {
       ;;
   esac
 
-  curl \
-    --fail \
-    --silent \
-    --show-error \
-    --location \
-    --connect-timeout "$CONNECT_TIMEOUT_SECONDS" \
-    --max-time "$REQUEST_TIMEOUT_SECONDS" \
-    --proto '=http,https' \
-    --proto-redir '=https' \
-    --output /dev/null \
-    "http://${host}/health"
 }
 
 for host in "${API_HOSTS[@]}"; do
