@@ -1,10 +1,9 @@
-import { useEffect, type ReactNode } from "react"
+import { useEffect, useRef, type ReactNode } from "react"
 import { PostHogProvider } from "@posthog/react"
 import posthog from "posthog-js"
 import { useLocation } from "react-router-dom"
 
 import {
-  getAnalyticsStatus,
   identifyUser,
   registerRouteContext,
   resetAnalytics,
@@ -13,9 +12,11 @@ import { useSession } from "@/hooks/use-session"
 
 function AnalyticsIdentity() {
   const session = useSession()
+  const clearedAnonymousSession = useRef(false)
 
   useEffect(() => {
     if (session.data?.user_id) {
+      clearedAnonymousSession.current = false
       identifyUser(session.data.user_id, {
         email: session.data.email,
         display_name: session.data.display_name,
@@ -24,11 +25,11 @@ function AnalyticsIdentity() {
       return
     }
 
-    if (session.isSuccess && !session.data) {
-      const status = getAnalyticsStatus()
-      if (status.identifiedUserId) {
-        resetAnalytics()
-      }
+    // Session resolved to logged-out. Always clear any identity the SDK may
+    // have restored from persistence (identifiedUserId is null after reload).
+    if (session.isSuccess && !session.data && !clearedAnonymousSession.current) {
+      clearedAnonymousSession.current = true
+      resetAnalytics()
     }
   }, [session.data, session.isSuccess])
 

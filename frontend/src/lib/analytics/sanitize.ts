@@ -48,7 +48,7 @@ const SENSITIVE_PROPERTY_KEYS = new Set([
 ])
 
 const SECRET_PATTERN =
-  /(password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|bearer\s+[a-z0-9._-]+|sk-[a-z0-9]+|phc_[a-z0-9]+)/gi
+  /(?:(?:password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]\s*\S+)|(?:bearer\s+[a-z0-9._-]+)|(?:sk-[a-z0-9]+)|(?:phc_[a-z0-9]+)/gi
 
 export const REDACTED = "[redacted]"
 

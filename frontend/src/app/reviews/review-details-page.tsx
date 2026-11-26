@@ -1,7 +1,7 @@
-import { useEffect } from "react"
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { trackEvent } from "@/lib/analytics"
+import { useTrackEntityOpened } from "@/hooks/use-track-entity-opened"
 
 import { ReviewFindings } from "@/components/findings/review-findings"
 import { AppShell } from "@/components/layout/app-shell"
@@ -73,13 +73,13 @@ export function ReviewDetailsPage() {
     : null
 
   const openedReview = review.data
-  useEffect(() => {
+  useTrackEntityOpened(openedReview?.id, () => {
     if (!openedReview) return
     trackEvent("review_opened", {
       review_id: openedReview.id,
       status: openedReview.status,
     })
-  }, [openedReview])
+  })
 
   return (
     <AppShell>

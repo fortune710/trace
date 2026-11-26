@@ -40,6 +40,18 @@ function client(): PostHog | null {
   return posthog
 }
 
+function appSuperProperties() {
+  return {
+    app_surface: state.config.appSurface,
+    app_environment: state.config.environment,
+    app_version: import.meta.env.VITE_APP_VERSION ?? "0.0.0",
+  }
+}
+
+function registerAppProperties(instance: Pick<PostHog, "register">) {
+  instance.register(appSuperProperties())
+}
+
 function enrichPageProperties(properties: Properties | undefined): Properties {
   const pathname =
     typeof window !== "undefined" ? window.location.pathname : "/"
@@ -54,22 +66,32 @@ function enrichPageProperties(properties: Properties | undefined): Properties {
 function beforeSend(event: CaptureResult | null): CaptureResult | null {
   if (!event) return null
 
-  const properties = sanitizeProperties(
-    (event.properties ?? {}) as Record<string, unknown>,
-  ) as Properties
+  const raw = { ...((event.properties ?? {}) as Record<string, unknown>) }
 
-  if (typeof properties.$current_url === "string") {
-    properties.$current_url = sanitizeUrl(properties.$current_url)
+  // Sanitize URLs by query-param name first, and keep them out of the generic
+  // string scrubber so already-redacted values are not mangled again.
+  const currentUrl =
+    typeof raw.$current_url === "string" ? sanitizeUrl(raw.$current_url) : undefined
+  const referrer =
+    typeof raw.$referrer === "string" ? sanitizeUrl(raw.$referrer) : undefined
+  delete raw.$current_url
+  delete raw.$referrer
+
+  const properties = sanitizeProperties(raw) as Properties
+  if (currentUrl !== undefined) {
+    properties.$current_url = currentUrl
   }
-  if (typeof properties.$referrer === "string") {
-    properties.$referrer = sanitizeUrl(properties.$referrer)
+  if (referrer !== undefined) {
+    properties.$referrer = referrer
   }
+
+  // Always derive route_pattern from the event pathname. Super-property
+  // registration from the previous route can lag behind history_change
+  // pageviews, so never keep a stale registered pattern.
   if (typeof properties.$pathname === "string") {
-    properties.route_pattern =
-      properties.route_pattern ?? normalizeRoutePattern(properties.$pathname)
+    properties.route_pattern = normalizeRoutePattern(properties.$pathname)
   } else if (typeof window !== "undefined") {
-    properties.route_pattern =
-      properties.route_pattern ?? normalizeRoutePattern(window.location.pathname)
+    properties.route_pattern = normalizeRoutePattern(window.location.pathname)
   }
 
   event.properties = properties
@@ -120,11 +142,7 @@ export function initAnalytics(
       },
     },
     loaded: (instance) => {
-      instance.register({
-        app_surface: state.config.appSurface,
-        app_environment: state.config.environment,
-        app_version: import.meta.env.VITE_APP_VERSION ?? "0.0.0",
-      })
+      registerAppProperties(instance)
     },
   })
 
@@ -171,6 +189,9 @@ export function resetAnalytics() {
   const instance = client()
   state.identifiedUserId = null
   instance?.reset()
+  if (instance) {
+    registerAppProperties(instance)
+  }
 }
 
 export function trackEvent<T extends AnalyticsEventName>(
@@ -269,4 +290,9 @@ export function __setAnalyticsStateForTests(
   next: Partial<AnalyticsClientState>,
 ) {
   Object.assign(state, next)
+}
+
+/** Exported for unit tests of before_send behavior */
+export function __beforeSendForTests(event: CaptureResult | null) {
+  return beforeSend(event)
 }

@@ -11,6 +11,12 @@ type State = {
   hasError: boolean
 }
 
+function normalizeCaughtError(error: unknown): Error {
+  if (error instanceof Error) return error
+  if (typeof error === "string") return new Error(error)
+  return new Error("Unknown render error")
+}
+
 export class AnalyticsErrorBoundary extends Component<Props, State> {
   state: State = { hasError: false }
 
@@ -18,13 +24,14 @@ export class AnalyticsErrorBoundary extends Component<Props, State> {
     return { hasError: true }
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    captureAnalyticsException(error, {
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    const normalized = normalizeCaughtError(error)
+    captureAnalyticsException(normalized, {
       component_stack: info.componentStack?.slice(0, 2000),
       source: "react_error_boundary",
     })
     logAnalytics("error", "react_error_boundary", {
-      message: error.message.slice(0, 200),
+      message: normalized.message.slice(0, 200),
       source: "react_error_boundary",
     })
   }

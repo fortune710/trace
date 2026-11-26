@@ -327,8 +327,17 @@ export function CallbackPage() {
   const sessionCheckStarted = useRef(false)
   const failed = params.get("error")
   useEffect(() => {
-    if (failed || sessionCheckStarted.current) return
+    if (sessionCheckStarted.current) return
     sessionCheckStarted.current = true
+
+    if (failed) {
+      trackEvent("auth_sign_in_failed", {
+        method: "oauth",
+        error_code: failed,
+      })
+      return
+    }
+
     void queryClient
       .fetchQuery({
         queryKey: sessionQueryKey,

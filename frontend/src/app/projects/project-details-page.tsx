@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { trackEvent } from "@/lib/analytics"
+import { useTrackEntityOpened } from "@/hooks/use-track-entity-opened"
 
 import { ReviewSubmissionDialog } from "@/components/reviews/review-submission-dialog"
 import { clearFindingSearchParams } from "@/components/findings/finding-search-params"
@@ -263,13 +264,13 @@ export function ProjectDetailsPage() {
   const [activeTab, setActiveTab] = useState<ProjectTab>("reviews")
 
   const openedProject = project.data
-  useEffect(() => {
+  useTrackEntityOpened(openedProject?.id, () => {
     if (!openedProject) return
     trackEvent("project_opened", {
       project_id: openedProject.id,
       source: openedProject.source,
     })
-  }, [openedProject])
+  })
 
   function handleReviewDialogChange(open: boolean) {
     setReviewDialogOpen(open)

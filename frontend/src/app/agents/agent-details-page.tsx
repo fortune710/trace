@@ -47,6 +47,7 @@ import {
   useUpdateAgent,
 } from "@/hooks/use-agents"
 import { trackEvent } from "@/lib/analytics"
+import { useTrackEntityOpened } from "@/hooks/use-track-entity-opened"
 import type { Agent, AgentSkill, AgentUpdate, ModelProvider } from "@/lib/api"
 
 type AgentTab = "personality" | "skills" | "model"
@@ -423,10 +424,9 @@ export function AgentDetailsPage() {
   const disableAgent = useDisableAgent()
 
   const openedAgent = agent.data
-  useEffect(() => {
-    if (!openedAgent) return
-    trackEvent("agent_opened", { agent_id: openedAgent.id })
-  }, [openedAgent])
+  useTrackEntityOpened(openedAgent?.id, (agentId) => {
+    trackEvent("agent_opened", { agent_id: agentId })
+  })
 
   function disable() {
     if (!agent.data) {

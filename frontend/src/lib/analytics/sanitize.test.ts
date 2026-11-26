@@ -17,8 +17,14 @@ describe("analytics sanitize", () => {
     )
   })
 
-  it("scrubs secret-looking substrings", () => {
+  it("scrubs secret-looking substrings including credential assignments", () => {
     expect(scrubString("Authorization Bearer sk-live-secret")).toContain(REDACTED)
+    expect(scrubString("password=hunter2")).toBe(REDACTED)
+    expect(scrubString("api_key=abc123")).toBe(REDACTED)
+    expect(scrubString("access_token: secret-value")).toBe(REDACTED)
+    expect(scrubString("prefix password=hunter2 suffix")).toBe(
+      `prefix ${REDACTED} suffix`,
+    )
   })
 
   it("redacts sensitive property keys and nested values", () => {
@@ -27,11 +33,13 @@ describe("analytics sanitize", () => {
         project_id: "proj_1",
         api_key: "should-not-leak",
         nested: { password: "hunter2", count: 2 },
+        message: "password=hunter2",
       }),
     ).toEqual({
       project_id: "proj_1",
       api_key: REDACTED,
       nested: { password: REDACTED, count: 2 },
+      message: REDACTED,
     })
   })
 

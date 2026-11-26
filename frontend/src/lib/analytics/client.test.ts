@@ -23,6 +23,7 @@ vi.mock("posthog-js", () => ({
 }))
 
 import {
+  __beforeSendForTests,
   __resetAnalyticsForTests,
   __setAnalyticsStateForTests,
   captureAnalyticsException,
@@ -107,6 +108,41 @@ describe("analytics client", () => {
     resetAnalytics()
     expect(posthogMocks.reset).toHaveBeenCalledOnce()
     expect(getAnalyticsStatus().identifiedUserId).toBeNull()
+    expect(posthogMocks.register).toHaveBeenCalledWith(
+      expect.objectContaining({
+        app_surface: "web",
+        app_environment: "production",
+      }),
+    )
+  })
+
+  it("derives route_pattern from pathname and sanitizes URLs in before_send", () => {
+    initAnalytics({
+      key: "phc_test",
+      environment: "production",
+    })
+    __setAnalyticsStateForTests({ initialized: true })
+
+    const result = __beforeSendForTests({
+      event: "$pageview",
+      properties: {
+        $pathname: "/projects/abc-123",
+        $current_url: "https://trace.local/projects/abc-123?access_token=abc123",
+        $referrer: "https://evil.example/?token=leak",
+        route_pattern: "/agents/:id",
+        message: "password=hunter2",
+      },
+    } as never)
+
+    expect(result?.properties?.route_pattern).toBe("/projects/:projectId")
+    expect(result?.properties?.$current_url).toContain(
+      `access_token=${encodeURIComponent(REDACTED)}`,
+    )
+    expect(result?.properties?.$current_url).not.toContain("abc123")
+    expect(result?.properties?.$referrer).toContain(
+      `token=${encodeURIComponent(REDACTED)}`,
+    )
+    expect(result?.properties?.message).toBe(REDACTED)
   })
 
   it("tracks typed events with sanitized properties", () => {

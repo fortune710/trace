@@ -1,9 +1,9 @@
-import { useEffect } from "react";
 import { Link, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { trackEvent } from "@/lib/analytics";
+import { useTrackEntityOpened } from "@/hooks/use-track-entity-opened";
 
 import { FindingDetailsPageSkeleton } from "@/components/findings/finding-details-page-skeleton";
 import { CodingAgentPrompt } from "@/components/findings/coding-agent-prompt";
@@ -83,7 +83,7 @@ export function FindingDetailsPage() {
     : [];
 
   const openedFinding = finding.data;
-  useEffect(() => {
+  useTrackEntityOpened(openedFinding?.id, () => {
     if (!openedFinding) return;
     trackEvent("finding_opened", {
       finding_id: openedFinding.id,
@@ -91,7 +91,7 @@ export function FindingDetailsPage() {
       severity: openedFinding.severity,
       status: openedFinding.status,
     });
-  }, [openedFinding]);
+  });
 
   return (
     <AppShell>
