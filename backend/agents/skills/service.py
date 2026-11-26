@@ -7,6 +7,7 @@ from uuid import UUID
 
 import sqlalchemy as sa
 from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.orm import Session
 
 from agents.models import Agent
 from agents.skill_models import AgentSkill
@@ -37,11 +38,18 @@ from db.rls import principal_transaction
 
 
 def _orm_scalars_all(connection: Connection, statement: Any) -> list[Any]:
-    return list(connection.scalars(statement).all())
+    with Session(bind=connection, expire_on_commit=False) as session:
+        return list(session.execute(statement).scalars().all())
 
 
 def _orm_scalar_one(connection: Connection, statement: Any) -> Any:
-    return connection.scalars(statement).one()
+    with Session(bind=connection, expire_on_commit=False) as session:
+        return session.execute(statement).scalar_one()
+
+
+def _orm_scalar_one_or_none(connection: Connection, statement: Any) -> Any:
+    with Session(bind=connection, expire_on_commit=False) as session:
+        return session.execute(statement).scalar_one_or_none()
 
 
 def _raise_access(connection: Connection, resource_id: UUID) -> None:
@@ -52,6 +60,18 @@ def _raise_access(connection: Connection, resource_id: UUID) -> None:
     if bool(exists):
         raise AuthorizationDenied()
     raise ResourceNotFound()
+
+
+def _lock_owned_agent(connection: Connection, owner_id: UUID, agent_id: UUID) -> Agent:
+    agent = _orm_scalar_one_or_none(
+        connection,
+        sa.select(Agent)
+        .where(Agent.id == agent_id, Agent.owner_id == owner_id)
+        .with_for_update(),
+    )
+    if agent is None:
+        _raise_access(connection, agent_id)
+    return cast(Agent, agent)
 
 
 class AgentSkillService:
@@ -144,7 +164,7 @@ class AgentSkillService:
 
         try:
             with principal_transaction(self._engine, owner_id) as connection:
-                agent = self._owned_agent(connection, owner_id, agent_id)
+                agent = _lock_owned_agent(connection, owner_id, agent_id)
                 if agent.disabled_at is not None:
                     raise ResourceConflict("agent_disabled")
                 existing = cast(
@@ -233,7 +253,7 @@ class AgentSkillService:
             raise RepositoryInvalidRequest() from error
 
         with principal_transaction(self._engine, owner_id) as connection:
-            self._owned_agent(connection, owner_id, agent_id)
+            _lock_owned_agent(connection, owner_id, agent_id)
             result = connection.execute(
                 sa.delete(AgentSkill).where(
                     AgentSkill.owner_id == owner_id,
@@ -294,6 +314,7 @@ class AgentSkillService:
             if skill_id not in unique_ids:
                 unique_ids.append(skill_id)
 
+        _lock_owned_agent(connection, owner_id, agent_id)
         connection.execute(
             sa.delete(AgentSkill).where(
                 AgentSkill.owner_id == owner_id,
@@ -419,9 +440,10 @@ class AgentSkillService:
     def _owned_agent(
         self, connection: Connection, owner_id: UUID, agent_id: UUID
     ) -> Agent:
-        agent = connection.scalars(
-            sa.select(Agent).where(Agent.id == agent_id, Agent.owner_id == owner_id)
-        ).one_or_none()
+        agent = _orm_scalar_one_or_none(
+            connection,
+            sa.select(Agent).where(Agent.id == agent_id, Agent.owner_id == owner_id),
+        )
         if agent is None:
             _raise_access(connection, agent_id)
         return cast(Agent, agent)

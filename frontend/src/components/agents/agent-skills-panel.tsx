@@ -54,7 +54,11 @@ function skillSource(skill: AgentSkill) {
 }
 
 function skillId(skill: AgentSkill) {
-  if (typeof skill === "object" && typeof skill.id === "string") {
+  if (
+    typeof skill === "object" &&
+    skill.provider === "skills.sh" &&
+    typeof skill.id === "string"
+  ) {
     return skill.id
   }
   return null
@@ -228,13 +232,14 @@ export function AgentSkillsPanel({
                 Loading curated skills…
               </p>
             ) : null}
-            {(search.isError || curated.isError) && catalogSkills.length === 0 ? (
+            {(deferredQuery.length >= 2 ? search.isError : curated.isError) &&
+            catalogSkills.length === 0 ? (
               <p className="px-4 py-6 text-sm text-muted-foreground">
                 The skills catalog is temporarily unavailable.
               </p>
             ) : null}
-            {!search.isLoading &&
-            !curated.isLoading &&
+            {!(deferredQuery.length >= 2 ? search.isLoading : curated.isLoading) &&
+            !(deferredQuery.length >= 2 ? search.isError : curated.isError) &&
             catalogSkills.length === 0 ? (
               <p className="px-4 py-6 text-sm text-muted-foreground">
                 {deferredQuery.length >= 2

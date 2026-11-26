@@ -6,6 +6,7 @@ from agents.skills.validation import is_skills_sh_skill, skill_display_name
 
 _MAX_PROMPT_SKILLS = 16
 _MAX_PROMPT_CHARS = 120_000
+_MAX_SKILL_BODY_CHARS = 8_000
 
 
 def format_skills_for_prompt(skills: tuple[object, ...] | list[object]) -> str:
@@ -27,9 +28,14 @@ def format_skills_for_prompt(skills: tuple[object, ...] | list[object]) -> str:
         if not body:
             continue
         name = skill_display_name(skill, index)
-        block = f"### Skill: {name}\n<skill_content>\n{body}\n</skill_content>"
-        if total + len(block) > _MAX_PROMPT_CHARS:
+        remaining = _MAX_PROMPT_CHARS - total
+        if remaining <= 0:
             break
+        block = f"### Skill: {name}\n<skill_content>\n{body}\n</skill_content>"
+        if len(block) > remaining:
+            # Skip this block and keep scanning later skills instead of ending
+            # the loop early (which would drop every remaining attachment).
+            continue
         sections.append(block)
         total += len(block)
 
@@ -51,13 +57,13 @@ def format_skills_for_prompt(skills: tuple[object, ...] | list[object]) -> str:
 def _skill_body(skill: object) -> str:
     if isinstance(skill, str):
         text = skill.strip()
-        return text[:8_000] if text else ""
+        return text[:_MAX_SKILL_BODY_CHARS] if text else ""
     if not isinstance(skill, dict):
         return ""
     if is_skills_sh_skill(skill):
         skill_md = skill.get("skill_md")
         if isinstance(skill_md, str) and skill_md.strip():
-            return skill_md.strip()
+            return skill_md.strip()[:_MAX_SKILL_BODY_CHARS]
     # Legacy structured skills without markdown content contribute only a label.
     name = skill.get("name") if isinstance(skill.get("name"), str) else None
     skill_id = skill.get("id") if isinstance(skill.get("id"), str) else None
