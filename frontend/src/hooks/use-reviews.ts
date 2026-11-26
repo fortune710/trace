@@ -8,11 +8,13 @@ import {
 } from "@/lib/local-source-snapshot"
 import { getLocalProjectsDatabase } from "@/lib/local-projects-database"
 import {
+  ApiError,
   projectsApi,
   reviewsApi,
   type Project,
   type Review,
 } from "@/lib/api"
+import { trackEvent } from "@/lib/analytics"
 
 export type { Review }
 
@@ -102,6 +104,11 @@ export function useCreateReview() {
 
   return useMutation({
     mutationFn: async ({ project, agentIds }: CreateReviewInput) => {
+      trackEvent("review_create_submitted", {
+        project_id: project.id,
+        source: project.source,
+        agent_count: agentIds.length,
+      })
       if (project.source === "local") {
         if (!runtime.isTauri) {
           throw new Error("Local source reviews are available in the desktop app only.")
@@ -140,8 +147,21 @@ export function useCreateReview() {
         crypto.randomUUID(),
       )
     },
-    onSuccess: async () => {
+    onSuccess: async (review, { project, agentIds }) => {
+      trackEvent("review_create_succeeded", {
+        project_id: project.id,
+        review_id: review.id,
+        source: project.source,
+        agent_count: agentIds.length,
+      })
       await queryClient.invalidateQueries({ queryKey: reviewsQueryKey })
+    },
+    onError: (error, { project }) => {
+      trackEvent("review_create_failed", {
+        project_id: project.id,
+        source: project.source,
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
     },
   })
 }

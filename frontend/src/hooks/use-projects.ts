@@ -7,11 +7,13 @@ import {
 } from "@tanstack/react-query"
 
 import {
+  ApiError,
   projectsApi,
   repositoriesApi,
   type Project,
   type ProjectCategory,
 } from "@/lib/api"
+import { trackEvent } from "@/lib/analytics"
 import { toProjectResponse, type DesktopProjectRecord } from "@/lib/desktop-projects"
 import { getLocalProjectsDatabase } from "@/lib/local-projects-database"
 import { useDesktopProjectSync } from "@/hooks/use-desktop-project-sync"
@@ -109,18 +111,33 @@ export function useCreateProject() {
   const sync = useDesktopProjectSync()
 
   return useMutation({
-    mutationFn: (input: CreateProjectInput) =>
-      projectsApi.create({
+    mutationFn: (input: CreateProjectInput) => {
+      trackEvent("project_create_submitted", {
+        source: "github",
+        category: input.category,
+      })
+      return projectsApi.create({
         name: input.name,
         source: "github",
         repository_id: input.repositoryId,
         branch_name: input.branchName,
         category: input.category,
         auto_create_pull_requests: false,
-    }),
-    onSuccess: async () => {
+      })
+    },
+    onSuccess: async (_project, input) => {
+      trackEvent("project_create_succeeded", {
+        source: "github",
+        category: input.category,
+      })
       void queryClient.invalidateQueries({ queryKey: projectsQueryKey })
       if (runtime.isTauri) await sync.syncNow()
+    },
+    onError: (error) => {
+      trackEvent("project_create_failed", {
+        source: "github",
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
     },
   })
 }
@@ -132,6 +149,10 @@ export function useCreateLocalProject() {
 
   return useMutation({
     mutationFn: async (input: CreateLocalProjectInput) => {
+      trackEvent("project_create_submitted", {
+        source: "local",
+        category: input.category,
+      })
       if (!runtime.isTauri) throw new Error("Local projects are available in the desktop app only")
       const accountId = session.data?.user_id
       if (!accountId) throw new Error("Sign in before creating a local project")
@@ -155,8 +176,18 @@ export function useCreateLocalProject() {
       await database.insertLocal(project)
       return toProjectResponse(project)
     },
-    onSuccess: async () => {
+    onSuccess: async (project) => {
+      trackEvent("project_create_succeeded", {
+        source: "local",
+        category: project.category,
+      })
       await queryClient.invalidateQueries({ queryKey: projectsQueryKey })
+    },
+    onError: (error) => {
+      trackEvent("project_create_failed", {
+        source: "local",
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
     },
   })
 }

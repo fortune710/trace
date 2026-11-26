@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { SessionBoundaryContext } from '@/components/auth/session-boundary-context'
+import { trackEvent } from '@/lib/analytics'
 
 function isGuestRoute(pathname: string) {
   return pathname === '/sign-in'
@@ -51,6 +52,12 @@ export function SessionBoundary({ children }: { children: ReactNode }) {
     && hadAuthenticatedSession
     && !intentionalLogout
     && !isGuestRoute(location.pathname)
+
+  useEffect(() => {
+    if (isSessionExpired) {
+      trackEvent('auth_session_expired_shown')
+    }
+  }, [isSessionExpired])
 
   const contextValue = useMemo(() => ({
     isSessionExpired,

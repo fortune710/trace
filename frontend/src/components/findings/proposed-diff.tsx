@@ -119,7 +119,11 @@ export function ProposedDiff({ findingId }: { findingId: string }) {
   if (!diff) return null
 
   return (
-    <section className="mt-6" aria-labelledby="proposed-changes-heading">
+    <section
+      className="ph-no-capture mt-6"
+      aria-labelledby="proposed-changes-heading"
+      data-ph-mask
+    >
       <h2 id="proposed-changes-heading" className="text-sm font-medium">
         Proposed changes
       </h2>

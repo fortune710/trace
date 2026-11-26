@@ -1,4 +1,7 @@
+import { useEffect } from "react"
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
+
+import { trackEvent } from "@/lib/analytics"
 
 import { ReviewFindings } from "@/components/findings/review-findings"
 import { AppShell } from "@/components/layout/app-shell"
@@ -68,6 +71,15 @@ export function ReviewDetailsPage() {
   const projectPath = review.data
     ? `/projects/${encodeURIComponent(review.data.project_id)}`
     : null
+
+  const openedReview = review.data
+  useEffect(() => {
+    if (!openedReview) return
+    trackEvent("review_opened", {
+      review_id: openedReview.id,
+      status: openedReview.status,
+    })
+  }, [openedReview])
 
   return (
     <AppShell>

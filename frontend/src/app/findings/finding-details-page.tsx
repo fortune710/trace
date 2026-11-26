@@ -1,6 +1,9 @@
+import { useEffect } from "react";
 import { Link, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+import { trackEvent } from "@/lib/analytics";
 
 import { FindingDetailsPageSkeleton } from "@/components/findings/finding-details-page-skeleton";
 import { CodingAgentPrompt } from "@/components/findings/coding-agent-prompt";
@@ -78,6 +81,17 @@ export function FindingDetailsPage() {
   const sourceFilesForFinding = finding.data?.source_location
     ? sourceFiles(finding.data.source_location)
     : [];
+
+  const openedFinding = finding.data;
+  useEffect(() => {
+    if (!openedFinding) return;
+    trackEvent("finding_opened", {
+      finding_id: openedFinding.id,
+      review_id: openedFinding.review_id,
+      severity: openedFinding.severity,
+      status: openedFinding.status,
+    });
+  }, [openedFinding]);
 
   return (
     <AppShell>

@@ -16,6 +16,7 @@ import {
   type Remediation,
   type ReviewCategory,
 } from "@/lib/api"
+import { trackEvent } from "@/lib/analytics"
 import {
   applyLocalRemediation,
   restoreLocalRemediation,
@@ -186,6 +187,10 @@ export function useUpdateFindingStatus() {
       return { previous }
     },
     onSuccess: (finding) => {
+      trackEvent("finding_status_updated", {
+        finding_id: finding.id,
+        status: finding.status,
+      })
       queryClient
         .getQueriesData({ queryKey: findingsQueryKey })
         .forEach(([queryKey, value]) => {
@@ -228,11 +233,21 @@ export function useCreateRemediationPullRequest(
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: () => remediationsApi.createPullRequest(remediationId!),
+    mutationFn: () => {
+      trackEvent("finding_pr_create_submitted", { finding_id: findingId })
+      return remediationsApi.createPullRequest(remediationId!)
+    },
     onSuccess: () => {
+      trackEvent("finding_pr_create_succeeded", { finding_id: findingId })
       void queryClient.invalidateQueries({ queryKey: findingsQueryKey })
       void queryClient.invalidateQueries({
         queryKey: [...findingsQueryKey, "remediations", findingId],
+      })
+    },
+    onError: (error) => {
+      trackEvent("finding_pr_create_failed", {
+        finding_id: findingId,
+        error_code: error instanceof ApiError ? error.code : undefined,
       })
     },
   })
@@ -284,11 +299,19 @@ export function useApplyLocalRemediation(findingId: string) {
           event: "local_remediation.apply.succeeded",
           userId: accountId,
         })
+        trackEvent("finding_local_remediation_applied", {
+          finding_id: findingId,
+          outcome: "succeeded",
+        })
       } catch (error) {
         await desktopTelemetry.record({
           event: "local_remediation.apply.failed",
           userId: accountId,
           errorCode: "local_apply_failed",
+        })
+        trackEvent("finding_local_remediation_applied", {
+          finding_id: findingId,
+          outcome: "failed",
         })
         throw error
       }

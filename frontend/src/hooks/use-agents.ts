@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-query"
 
 import {
+  ApiError,
   agentsApi,
   credentialsApi,
   type Agent,
@@ -15,6 +16,7 @@ import {
   type Credential,
   type CredentialCreate,
 } from "@/lib/api"
+import { trackEvent } from "@/lib/analytics"
 
 export type { Agent, AgentCreate, AgentUpdate, Credential }
 
@@ -77,9 +79,28 @@ export function useProviderCredentials() {
 export function useCreateAgent() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (agent: AgentCreate) => agentsApi.create(agent),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+    mutationFn: (agent: AgentCreate) => {
+      trackEvent("agent_create_submitted", {
+        review_category: agent.review_category,
+        model_provider: agent.model_provider,
+      })
+      return agentsApi.create(agent)
+    },
+    onSuccess: (created, agent) => {
+      trackEvent("agent_create_succeeded", {
+        agent_id: created.id,
+        review_category: agent.review_category,
+        model_provider: agent.model_provider,
+      })
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey })
+    },
+    onError: (error, agent) => {
+      trackEvent("agent_create_failed", {
+        review_category: agent.review_category,
+        model_provider: agent.model_provider,
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
+    },
   })
 }
 
@@ -88,8 +109,13 @@ export function useUpdateAgent() {
   return useMutation({
     mutationFn: ({ agentId, agent }: { agentId: string; agent: AgentUpdate }) =>
       agentsApi.update(agentId, agent),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+    onSuccess: (_updated, { agentId, agent }) => {
+      trackEvent("agent_updated", {
+        agent_id: agentId,
+        fields: Object.keys(agent),
+      })
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey })
+    },
   })
 }
 
@@ -97,8 +123,10 @@ export function useDisableAgent() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (agentId: string) => agentsApi.disable(agentId),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+    onSuccess: (_result, agentId) => {
+      trackEvent("agent_disabled", { agent_id: agentId })
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey })
+    },
   })
 }
 
@@ -114,8 +142,10 @@ export function useUploadAgentAvatar() {
       file: Blob
       config: AvatarConfig
     }) => agentsApi.uploadAvatar(agentId, file, config),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+    onSuccess: (_result, { agentId }) => {
+      trackEvent("agent_avatar_uploaded", { agent_id: agentId })
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey })
+    },
   })
 }
 
@@ -123,8 +153,10 @@ export function useDeleteAgentAvatar() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (agentId: string) => agentsApi.deleteAvatar(agentId),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+    onSuccess: (_result, agentId) => {
+      trackEvent("agent_avatar_deleted", { agent_id: agentId })
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey })
+    },
   })
 }
 
@@ -132,8 +164,20 @@ export function useCreateProviderCredential() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: credentialsApi.create,
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: credentialsQueryKey }),
+    onSuccess: (_created, credential) => {
+      trackEvent("settings_api_key_saved", {
+        provider: credential.provider,
+        action: "create",
+      })
+      queryClient.invalidateQueries({ queryKey: credentialsQueryKey })
+    },
+    onError: (error, credential) => {
+      trackEvent("settings_api_key_save_failed", {
+        provider: credential.provider,
+        action: "create",
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
+    },
   })
 }
 
@@ -156,7 +200,19 @@ export function useRotateProviderCredential() {
       credentialId: string
       credential: CredentialCreate
     }) => credentialsApi.rotate(credentialId, credential),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: credentialsQueryKey }),
+    onSuccess: (_rotated, { credential }) => {
+      trackEvent("settings_api_key_saved", {
+        provider: credential.provider,
+        action: "rotate",
+      })
+      queryClient.invalidateQueries({ queryKey: credentialsQueryKey })
+    },
+    onError: (error, { credential }) => {
+      trackEvent("settings_api_key_save_failed", {
+        provider: credential.provider,
+        action: "rotate",
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
+    },
   })
 }

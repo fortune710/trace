@@ -5,6 +5,7 @@ import { IntegrationCardSkeleton } from "@/components/integrations/integrations-
 import { Button } from "@/components/ui/button"
 import { toast } from "@/components/ui/toast"
 import { useGitHubConnection } from "@/hooks/use-github-connection"
+import { trackEvent } from "@/lib/analytics"
 import { ApiError, authApi, type GitHubConnectionStatus } from "@/lib/api"
 
 const statusCopy: Record<
@@ -37,11 +38,18 @@ function errorMessage(error: unknown) {
 export function GitHubIntegrationCard() {
   const connection = useGitHubConnection()
   const connect = useMutation({
-    mutationFn: authApi.beginGitHubConnection,
+    mutationFn: () => {
+      trackEvent("integration_connect_started", { provider: "github" })
+      return authApi.beginGitHubConnection()
+    },
     onSuccess: ({ authorization_url }) => {
       window.location.assign(authorization_url)
     },
     onError: (error) => {
+      trackEvent("integration_connect_failed", {
+        provider: "github",
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
       toast.add({
         type: "error",
         title: "GitHub connection could not start",
