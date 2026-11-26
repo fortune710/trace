@@ -5,6 +5,7 @@ import { Link, useParams } from "react-router-dom"
 
 import { AgentAvatar } from "@/components/agents/agent-avatar"
 import { AgentDetailsPageSkeleton } from "@/components/agents/agent-details-page-skeleton"
+import { AgentSkillsPanel } from "@/components/agents/agent-skills-panel"
 import { AvatarEditorDialog } from "@/components/agents/avatar-editor/avatar-editor-dialog"
 import { ProviderLogo } from "@/components/agents/provider-logo"
 import { AppShell } from "@/components/layout/app-shell"
@@ -26,12 +27,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@/components/ui/empty"
-import {
   Select,
   SelectContent,
   SelectItem,
@@ -46,7 +41,7 @@ import {
   useProviderCredentials,
   useUpdateAgent,
 } from "@/hooks/use-agents"
-import type { Agent, AgentSkill, AgentUpdate, ModelProvider } from "@/lib/api"
+import type { Agent, AgentUpdate, ModelProvider } from "@/lib/api"
 
 type AgentTab = "personality" | "skills" | "model"
 
@@ -85,10 +80,6 @@ function categoryLabel(category: Agent["review_category"]) {
   return category
     .replaceAll("_", " ")
     .replace(/\b\w/g, (character) => character.toUpperCase())
-}
-
-function skillLabel(skill: AgentSkill, index: number) {
-  return typeof skill === "string" ? skill : `Configured skill ${index + 1}`
 }
 
 function useDebouncedAgentSave(agentId: string) {
@@ -146,76 +137,6 @@ function PersonalitySetting({
         placeholder="Add a personality…"
         className="min-h-36 w-full resize-y rounded-md border border-white/20 bg-input p-4 text-sm leading-6 outline-none transition-colors hover:border-white/40 focus-visible:border-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60"
       />
-    </section>
-  )
-}
-
-function SkillsSetting({ agent, disabled }: { agent: Agent; disabled: boolean }) {
-  const [isSkillsDialogOpen, setIsSkillsDialogOpen] = useState(false)
-
-  if (agent.skills.length === 0) {
-    return (
-      <section
-        role="tabpanel"
-        id="agent-skills-panel"
-        aria-labelledby="agent-skills-tab"
-      >
-        <button
-          type="button"
-          onClick={() => setIsSkillsDialogOpen(true)}
-          disabled={disabled}
-          className="w-full text-left disabled:cursor-default"
-        >
-          <Empty className="min-h-56 border-white/14 bg-[#0a0a0c] transition-colors enabled:hover:border-white/25 enabled:hover:bg-[#101012]">
-            <EmptyHeader>
-              <EmptyTitle className="text-base">No skills configured</EmptyTitle>
-              <EmptyDescription>
-                Skills will be available to configure here soon.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        </button>
-        <Dialog open={isSkillsDialogOpen} onOpenChange={setIsSkillsDialogOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Skills are coming soon</DialogTitle>
-              <DialogDescription>
-                Skill configuration has not been integrated yet.
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button type="button" onClick={() => setIsSkillsDialogOpen(false)}>
-                Close
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </section>
-    )
-  }
-
-  return (
-    <section
-      role="tabpanel"
-      id="agent-skills-panel"
-      aria-labelledby="agent-skills-tab"
-      className="overflow-hidden rounded-lg border border-white/14 bg-[#0a0a0c]"
-    >
-      {agent.skills.map((skill, index) => (
-        <div
-          key={`${skillLabel(skill, index)}-${index}`}
-          className={`flex min-h-20 items-center px-5 ${
-            index > 0 ? "border-t border-white/8" : ""
-          }`}
-        >
-          <div>
-            <h3 className="text-sm font-medium">{skillLabel(skill, index)}</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Configured skill
-            </p>
-          </div>
-        </div>
-      ))}
     </section>
   )
 }
@@ -576,7 +497,7 @@ export function AgentDetailsPage() {
                 />
               </div>
               <div hidden={activeTab !== "skills"}>
-                <SkillsSetting
+                <AgentSkillsPanel
                   key={`${agent.data.id}-skills`}
                   agent={agent.data}
                   disabled={disabled}

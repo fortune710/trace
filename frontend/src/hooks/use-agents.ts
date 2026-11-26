@@ -8,12 +8,14 @@ import {
 import {
   agentsApi,
   credentialsApi,
+  skillsApi,
   type Agent,
   type AgentCreate,
   type AgentUpdate,
   type AvatarConfig,
   type Credential,
   type CredentialCreate,
+  type SkillsCatalogSkill,
 } from "@/lib/api"
 
 export type { Agent, AgentCreate, AgentUpdate, Credential }
@@ -160,3 +162,43 @@ export function useRotateProviderCredential() {
       queryClient.invalidateQueries({ queryKey: credentialsQueryKey }),
   })
 }
+
+export function useSkillsSearch(query: string) {
+  const trimmed = query.trim()
+  return useQuery({
+    queryKey: [...agentsQueryKey, "skills-search", trimmed],
+    queryFn: () => skillsApi.search({ query: trimmed, limit: 20 }),
+    enabled: trimmed.length >= 2,
+    retry: false,
+  })
+}
+
+export function useCuratedSkills(enabled: boolean) {
+  return useQuery({
+    queryKey: [...agentsQueryKey, "skills-curated"],
+    queryFn: skillsApi.curated,
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+export function useAttachAgentSkill(agentId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (skillId: string) => agentsApi.attachSkill(agentId, skillId),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+  })
+}
+
+export function useDetachAgentSkill(agentId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (skillId: string) => agentsApi.detachSkill(agentId, skillId),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+  })
+}
+
+export type { SkillsCatalogSkill }

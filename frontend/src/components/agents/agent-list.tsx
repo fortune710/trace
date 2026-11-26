@@ -20,9 +20,17 @@ function label(value: string) {
 
 function skillSummary(skills: Agent["skills"]) {
   if (skills.length === 0) return "No skills configured"
-  const names = skills.filter((skill): skill is string => typeof skill === "string")
-  const structured = skills.length - names.length
-  return [...names, ...(structured ? [`${structured} configured skill${structured === 1 ? "" : "s"}`] : [])].join(" · ")
+  const names = skills.flatMap((skill) => {
+    if (typeof skill === "string") return [skill]
+    if (typeof skill.name === "string" && skill.name.trim()) return [skill.name]
+    if (typeof skill.id === "string" && skill.id.trim()) return [skill.id]
+    return []
+  })
+  const unnamed = skills.length - names.length
+  return [
+    ...names,
+    ...(unnamed ? [`${unnamed} configured skill${unnamed === 1 ? "" : "s"}`] : []),
+  ].join(" · ")
 }
 
 function AgentCard({ agent }: { agent: Agent }) {

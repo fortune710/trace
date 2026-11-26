@@ -62,6 +62,7 @@ def test_all_auth_and_public_tables_match_the_database_contract() -> None:
             "users",
             "external_repositories",
             "agents",
+            "agent_skills",
             "reviews",
             "review_agents",
             "findings",
