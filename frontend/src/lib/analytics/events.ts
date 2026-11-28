@@ -53,6 +53,39 @@ export type AnalyticsEventMap = {
   agent_disabled: { agent_id: string }
   agent_avatar_uploaded: { agent_id: string }
   agent_avatar_deleted: { agent_id: string }
+  agent_skills_picker_opened: { agent_id: string }
+  agent_skill_attach_submitted: {
+    agent_id: string
+    skill_id: string
+    provider: "skills.sh"
+  }
+  agent_skill_attach_succeeded: {
+    agent_id: string
+    skill_id: string
+    provider: "skills.sh"
+  }
+  agent_skill_attach_failed: {
+    agent_id: string
+    skill_id: string
+    provider: "skills.sh"
+    error_code?: string
+  }
+  agent_skill_detach_submitted: {
+    agent_id: string
+    skill_id: string
+    provider: "skills.sh"
+  }
+  agent_skill_detach_succeeded: {
+    agent_id: string
+    skill_id: string
+    provider: "skills.sh"
+  }
+  agent_skill_detach_failed: {
+    agent_id: string
+    skill_id: string
+    provider: "skills.sh"
+    error_code?: string
+  }
 
   // Settings / credentials
   settings_api_key_saved: { provider: string; action: "create" | "rotate" }

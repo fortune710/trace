@@ -9,12 +9,14 @@ import {
   ApiError,
   agentsApi,
   credentialsApi,
+  skillsApi,
   type Agent,
   type AgentCreate,
   type AgentUpdate,
   type AvatarConfig,
   type Credential,
   type CredentialCreate,
+  type SkillsCatalogSkill,
 } from "@/lib/api"
 import { trackEvent } from "@/lib/analytics"
 
@@ -216,3 +218,85 @@ export function useRotateProviderCredential() {
     },
   })
 }
+
+export function useSkillsSearch(query: string) {
+  const trimmed = query.trim()
+  return useQuery({
+    queryKey: [...agentsQueryKey, "skills-search", trimmed],
+    queryFn: () => skillsApi.search({ query: trimmed, limit: 20 }),
+    enabled: trimmed.length >= 2,
+    retry: false,
+  })
+}
+
+export function useCuratedSkills(enabled: boolean) {
+  return useQuery({
+    queryKey: [...agentsQueryKey, "skills-curated"],
+    queryFn: skillsApi.curated,
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+export function useAttachAgentSkill(agentId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (skillId: string) => {
+      trackEvent("agent_skill_attach_submitted", {
+        agent_id: agentId,
+        skill_id: skillId,
+        provider: "skills.sh",
+      })
+      return agentsApi.attachSkill(agentId, skillId)
+    },
+    onSuccess: (_result, skillId) => {
+      trackEvent("agent_skill_attach_succeeded", {
+        agent_id: agentId,
+        skill_id: skillId,
+        provider: "skills.sh",
+      })
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey })
+    },
+    onError: (error, skillId) => {
+      trackEvent("agent_skill_attach_failed", {
+        agent_id: agentId,
+        skill_id: skillId,
+        provider: "skills.sh",
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
+    },
+  })
+}
+
+export function useDetachAgentSkill(agentId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (skillId: string) => {
+      trackEvent("agent_skill_detach_submitted", {
+        agent_id: agentId,
+        skill_id: skillId,
+        provider: "skills.sh",
+      })
+      return agentsApi.detachSkill(agentId, skillId)
+    },
+    onSuccess: (_result, skillId) => {
+      trackEvent("agent_skill_detach_succeeded", {
+        agent_id: agentId,
+        skill_id: skillId,
+        provider: "skills.sh",
+      })
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey })
+    },
+    onError: (error, skillId) => {
+      trackEvent("agent_skill_detach_failed", {
+        agent_id: agentId,
+        skill_id: skillId,
+        provider: "skills.sh",
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
+    },
+  })
+}
+
+export type { SkillsCatalogSkill }

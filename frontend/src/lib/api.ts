@@ -125,7 +125,64 @@ export type ReviewCategory =
 
 export type ModelProvider = "openai" | "anthropic" | "google" | "xai"
 
-export type AgentSkill = string | Record<string, object>
+export type AgentSkill =
+  | string
+  | {
+      provider?: string
+      id?: string
+      slug?: string
+      name?: string
+      source?: string
+      source_type?: string
+      url?: string
+      install_url?: string | null
+      hash?: string | null
+      skill_md?: string
+      [key: string]: unknown
+    }
+
+export type SkillsCatalogSkill = {
+  id: string
+  slug: string
+  name: string
+  source: string
+  installs?: number | null
+  source_type?: string | null
+  install_url?: string | null
+  url?: string | null
+  is_duplicate?: boolean | null
+}
+
+export type SkillsCatalogPage = {
+  data: SkillsCatalogSkill[]
+  pagination?: {
+    page?: number
+    perPage?: number
+    total?: number
+    hasMore?: boolean
+  } | null
+  query?: string | null
+  search_type?: string | null
+  count?: number | null
+  total_owners?: number | null
+  total_skills?: number | null
+}
+
+export type AgentSkillRecord = {
+  id: string
+  agent_id: string
+  skill_id: string
+  slug: string
+  name: string
+  source: string
+  source_type: string
+  install_url: string | null
+  url: string
+  content_hash: string | null
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
 
 export type AvatarConfig = {
   eyes: string
@@ -727,6 +784,65 @@ export const agentsApi = {
   },
   deleteAvatar: (agentId: string) =>
     remove(`/api/v1/agents/${encodeURIComponent(agentId)}/avatar`),
+  listSkills: (agentId: string) =>
+    request<{ items: AgentSkillRecord[] }>(
+      `/api/v1/agents/${encodeURIComponent(agentId)}/skills`,
+    ),
+  attachSkill: (agentId: string, skillId: string) =>
+    post<AgentSkillRecord>(
+      `/api/v1/agents/${encodeURIComponent(agentId)}/skills`,
+      { skill_id: skillId },
+    ),
+  detachSkill: (agentId: string, skillId: string) =>
+    remove(
+      `/api/v1/agents/${encodeURIComponent(agentId)}/skills/${skillId
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/")}`,
+    ),
+}
+
+export const skillsApi = {
+  list: ({
+    view = "all-time",
+    page = 0,
+    perPage = 20,
+    source,
+  }: {
+    view?: "all-time" | "trending" | "hot"
+    page?: number
+    perPage?: number
+    source?: string
+  } = {}) => {
+    const params = new URLSearchParams({
+      view,
+      page: String(page),
+      per_page: String(perPage),
+    })
+    if (source) {
+      params.set("source", source)
+    }
+    return request<SkillsCatalogPage>(`/api/v1/skills?${params}`)
+  },
+  search: ({
+    query,
+    limit = 20,
+    owner,
+  }: {
+    query: string
+    limit?: number
+    owner?: string
+  }) => {
+    const params = new URLSearchParams({
+      q: query,
+      limit: String(limit),
+    })
+    if (owner) {
+      params.set("owner", owner)
+    }
+    return request<SkillsCatalogPage>(`/api/v1/skills/search?${params}`)
+  },
+  curated: () => request<SkillsCatalogPage>("/api/v1/skills/curated"),
 }
 
 export const reviewsApi = {

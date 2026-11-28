@@ -24,7 +24,7 @@ from local_projects.routes import build_router as build_local_projects_router
 from notifications.routes import build_router as build_notifications_router
 from projects.routes import build_router as build_projects_router
 from remediations.routes import build_router as build_remediations_router
-from resources.router import build_resource_router
+from resources.router import build_resource_router, select_routes
 from reviews.routes import build_router as build_reviews_router
 
 # Exported for introspection and for callers that only need the public prefix.
@@ -46,9 +46,11 @@ def build_router(
     )
     version_router = APIRouter(prefix="/api/v1")
 
+    skills_router = select_routes(resource_router, ("/skills",))
     router_tags: list[tuple[APIRouter, list[str | Enum]]] = [
         (build_projects_router(resource_router), ["projects"]),
         (build_agents_router(resource_router), ["agents"]),
+        (skills_router, ["skills"]),
         (build_reviews_router(resource_router), ["reviews"]),
         (build_findings_router(resource_router), ["findings"]),
         (build_issue_tracking_router(settings, audit_recorder), ["issue-tracking"]),

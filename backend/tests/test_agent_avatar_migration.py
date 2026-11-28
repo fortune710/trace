@@ -17,13 +17,15 @@ def _migration_source() -> str:
     return (BACKEND / "alembic/versions/20261101_0056_agent_avatars.py").read_text()
 
 
-def test_avatar_migration_extends_the_single_head() -> None:
+def test_avatar_migration_is_ancestor_of_current_head() -> None:
     config = Config(str(BACKEND / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND / "alembic"))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_heads() == ["20261101_0056"]
     assert script.get_revision("20261101_0056").down_revision == "20261030_0055"
+    assert "20261101_0056" in {
+        revision.revision for revision in script.walk_revisions()
+    }
 
 
 def test_avatar_migration_isolates_owners_and_limits_the_public_function() -> None:

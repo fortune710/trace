@@ -11,6 +11,10 @@ def test_resource_endpoints_are_composed_under_v1_only():
         "/api/v1/projects",
         "/api/v1/agents",
         "/api/v1/agents/{agent_id}/avatar",
+        "/api/v1/agents/{agent_id}/skills",
+        "/api/v1/skills",
+        "/api/v1/skills/search",
+        "/api/v1/skills/curated",
         "/api/v1/reviews",
         "/api/v1/findings/{finding_id}",
         "/api/v1/remediations/{remediation_id}",
@@ -77,6 +81,7 @@ def test_resource_endpoints_are_composed_under_v1_only():
 
 def test_feature_packages_expose_modular_model_imports():
     from agents.models import Agent
+    from agents.skill_models import AgentSkill
     from artifacts.models import LocalFileBackup
     from credentials.models import Credential
     from findings.models import Finding
@@ -88,6 +93,7 @@ def test_feature_packages_expose_modular_model_imports():
         model.__table__.metadata is Project.__table__.metadata
         for model in (
             Agent,
+            AgentSkill,
             Credential,
             Finding,
             Remediation,

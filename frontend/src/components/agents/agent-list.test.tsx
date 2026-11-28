@@ -15,7 +15,7 @@ const activeAgent: Agent = {
   model_provider: "openai",
   model_name: "gpt-5.1",
   avatar: null,
-  skills: ["auth", { id: { value: "structured-skill" } }],
+  skills: ["auth", { id: "owner/repo/structured-skill" }],
   credential_id: null,
   configuration_version: 1,
   created_at: "2026-10-17T00:00:00Z",
@@ -36,7 +36,7 @@ describe("AgentList", () => {
     expect(screen.getByText("Security Scout")).toBeTruthy()
     expect(screen.getByText("Security")).toBeTruthy()
     expect(screen.getByText("openai/gpt-5.1")).toBeTruthy()
-    expect(screen.getByText("auth · 1 configured skill")).toBeTruthy()
+    expect(screen.getByText("auth · owner/repo/structured-skill")).toBeTruthy()
     expect(screen.getByRole("link", { name: /security scout/i }).getAttribute("href")).toBe("/agents/active-agent")
     expect(screen.queryByText("Access")).toBeNull()
     expect(screen.queryByText("Trace-managed")).toBeNull()

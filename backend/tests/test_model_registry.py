@@ -28,6 +28,7 @@ EXPECTED_TABLES = {
     "private.review_agent_attempts",
     "private.review_agent_execution_configs",
     "public.agents",
+    "public.agent_skills",
     "public.external_repositories",
     "public.findings",
     "public.issue_links",
@@ -47,6 +48,7 @@ def test_registry_imports_every_authoritative_table_once() -> None:
     assert len(Base.metadata.tables) == len(EXPECTED_TABLES)
     assert set(model_registry.__all__) == {
         "Agent",
+        "AgentSkill",
         "AuditDeliveryJob",
         "AuthIdentity",
         "AuthSession",

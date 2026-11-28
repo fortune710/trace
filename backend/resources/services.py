@@ -487,8 +487,11 @@ class AgentService:
         return _agent_response(agent)
 
     def create(self, *, owner_id: UUID, values: dict[str, Any]) -> dict[str, object]:
+        from agents.skills.service import AgentSkillService
+
         if not supports_model(values["model_provider"], values["model_name"]):
             raise UnsupportedAgentModel()
+        skills = values.pop("skills", [])
         try:
             with principal_transaction(self._engine, owner_id) as connection:
                 self._validate_credential(
@@ -499,8 +502,20 @@ class AgentService:
                 )
                 agent_id = uuid7()
                 connection.execute(
-                    sa.insert(Agent).values(id=agent_id, owner_id=owner_id, **values)
+                    sa.insert(Agent).values(
+                        id=agent_id,
+                        owner_id=owner_id,
+                        skills=[],
+                        **values,
+                    )
                 )
+                if skills:
+                    AgentSkillService(self._engine).replace_skills_mirror(
+                        connection,
+                        owner_id=owner_id,
+                        agent_id=agent_id,
+                        skills=list(skills),
+                    )
                 agent = cast(
                     Agent,
                     _orm_scalar_one(
@@ -517,6 +532,9 @@ class AgentService:
     def update(
         self, *, owner_id: UUID, agent_id: UUID, values: dict[str, Any]
     ) -> dict[str, object]:
+        from agents.skills.service import AgentSkillService
+
+        skills = values.pop("skills", None)
         try:
             with principal_transaction(self._engine, owner_id) as connection:
                 agent = self._owned_agent(connection, owner_id, agent_id)
@@ -535,15 +553,30 @@ class AgentService:
                     avatar_storage.delete(
                         connection, owner_id=owner_id, agent_id=agent_id
                     )
-                connection.execute(
-                    sa.update(Agent)
-                    .where(Agent.id == agent_id, Agent.owner_id == owner_id)
-                    .values(
-                        **values,
-                        configuration_version=Agent.configuration_version + 1,
-                        updated_at=sa.func.current_timestamp(),
+                if skills is not None:
+                    AgentSkillService(self._engine).replace_skills_mirror(
+                        connection,
+                        owner_id=owner_id,
+                        agent_id=agent_id,
+                        skills=list(skills),
                     )
-                )
+                    # replace_skills_mirror already bumped configuration_version.
+                    if values:
+                        connection.execute(
+                            sa.update(Agent)
+                            .where(Agent.id == agent_id, Agent.owner_id == owner_id)
+                            .values(**values, updated_at=sa.func.current_timestamp())
+                        )
+                elif values:
+                    connection.execute(
+                        sa.update(Agent)
+                        .where(Agent.id == agent_id, Agent.owner_id == owner_id)
+                        .values(
+                            **values,
+                            configuration_version=Agent.configuration_version + 1,
+                            updated_at=sa.func.current_timestamp(),
+                        )
+                    )
                 agent = _orm_scalar_one(
                     connection,
                     sa.select(Agent).where(
