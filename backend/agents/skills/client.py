@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import logging
+import time
 from typing import Any
 from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 
 from agents.skills.config import SkillsSettings, get_skills_settings
+from agents.skills.logging import skills_log, timed_step
 from agents.skills.validation import (
     SkillValidationError,
     normalize_skill_id,
@@ -17,9 +18,13 @@ from agents.skills.validation import (
     validate_search_query,
 )
 
-logger = logging.getLogger(__name__)
-
 ALLOWED_SKILLS_HOSTS = frozenset({"skills.sh", "www.skills.sh"})
+_RATE_LIMIT_HEADERS = (
+    "x-ratelimit-limit",
+    "x-ratelimit-remaining",
+    "x-ratelimit-reset",
+    "retry-after",
+)
 
 
 class SkillsShError(Exception):
@@ -34,6 +39,13 @@ class SkillsShError(Exception):
 class SkillsShAuthError(SkillsShError):
     def __init__(self) -> None:
         super().__init__("skills_auth_failed", status_code=401)
+
+
+class SkillsShConfigError(SkillsShError):
+    """Raised when neither proxy nor direct OIDC transport is usable."""
+
+    def __init__(self, code: str = "skills_transport_unconfigured") -> None:
+        super().__init__(code, status_code=503)
 
 
 class SkillsShNotFoundError(SkillsShError):
@@ -112,73 +124,109 @@ class SkillsShClient:
     def get_skill(self, skill_id: str) -> dict[str, Any]:
         path = skill_detail_path(skill_id)
         payload = self._get_json(path)
+        # Production rewrite without ?path= can collapse nested detail URLs to
+        # /api/v1/skills (catalog list). Catalog list/search then "works" while
+        # attach fails because this payload is not a skill detail.
+        if isinstance(payload.get("data"), list) and "files" not in payload:
+            skills_log(
+                "skills_upstream_normalize",
+                level=40,
+                step="normalize_detail",
+                outcome="error",
+                error_code="skills_proxy_path_mismatch",
+                upstream_path=path,
+                skill_id=skill_id,
+                transport=self._settings.transport_mode(),
+                provider="skills.sh",
+            )
+            raise SkillsShError("skills_proxy_path_mismatch", status_code=502)
         return self._normalize_detail(payload)
 
     def _normalize_detail(self, payload: dict[str, Any]) -> dict[str, Any]:
-        skill_id = normalize_skill_id(str(payload.get("id", "")))
-        source = str(payload.get("source", ""))
-        slug = str(payload.get("slug", ""))
-        if f"{source}/{slug}" != skill_id:
-            raise SkillsShError("skills_payload_invalid", status_code=502)
+        with timed_step("skills_upstream_normalize", "normalize_detail") as step_fields:
+            skill_id = normalize_skill_id(str(payload.get("id", "")))
+            source = str(payload.get("source", ""))
+            slug = str(payload.get("slug", ""))
+            step_fields["skill_id"] = skill_id
+            step_fields["skill_source"] = source
+            step_fields["skill_slug"] = slug
+            if f"{source}/{slug}" != skill_id:
+                step_fields["outcome"] = "error"
+                step_fields["error_code"] = "skills_payload_invalid"
+                raise SkillsShError("skills_payload_invalid", status_code=502)
 
-        files_raw = payload.get("files")
-        files: list[dict[str, str]] = []
-        skill_md = ""
-        if isinstance(files_raw, list):
-            if len(files_raw) > self._settings.max_files:
-                raise SkillsShError("skills_payload_too_large", status_code=502)
-            for entry in files_raw:
-                if not isinstance(entry, dict):
-                    continue
-                path = entry.get("path")
-                contents = entry.get("contents")
-                if not isinstance(path, str) or not isinstance(contents, str):
-                    continue
-                if ".." in path or path.startswith("/") or len(path) > 512:
-                    raise SkillsShError("skills_payload_invalid", status_code=502)
-                if len(contents) > self._settings.max_file_chars:
+            files_raw = payload.get("files")
+            files: list[dict[str, str]] = []
+            skill_md = ""
+            if isinstance(files_raw, list):
+                if len(files_raw) > self._settings.max_files:
+                    step_fields["outcome"] = "error"
+                    step_fields["error_code"] = "skills_payload_too_large"
+                    step_fields["file_count"] = len(files_raw)
                     raise SkillsShError("skills_payload_too_large", status_code=502)
-                files.append({"path": path, "contents": contents})
-                if path == "SKILL.md" or path.endswith("/SKILL.md"):
-                    skill_md = contents
+                for entry in files_raw:
+                    if not isinstance(entry, dict):
+                        continue
+                    path = entry.get("path")
+                    contents = entry.get("contents")
+                    if not isinstance(path, str) or not isinstance(contents, str):
+                        continue
+                    if ".." in path or path.startswith("/") or len(path) > 512:
+                        step_fields["outcome"] = "error"
+                        step_fields["error_code"] = "skills_payload_invalid"
+                        raise SkillsShError("skills_payload_invalid", status_code=502)
+                    if len(contents) > self._settings.max_file_chars:
+                        step_fields["outcome"] = "error"
+                        step_fields["error_code"] = "skills_payload_too_large"
+                        raise SkillsShError("skills_payload_too_large", status_code=502)
+                    files.append({"path": path, "contents": contents})
+                    if path == "SKILL.md" or path.endswith("/SKILL.md"):
+                        skill_md = contents
 
-        if not skill_md:
-            raise SkillsShError("skills_missing_skill_md", status_code=502)
-        if len(skill_md) > self._settings.max_skill_md_chars:
-            raise SkillsShError("skills_payload_too_large", status_code=502)
+            if not skill_md:
+                step_fields["outcome"] = "error"
+                step_fields["error_code"] = "skills_missing_skill_md"
+                raise SkillsShError("skills_missing_skill_md", status_code=502)
+            if len(skill_md) > self._settings.max_skill_md_chars:
+                step_fields["outcome"] = "error"
+                step_fields["error_code"] = "skills_payload_too_large"
+                step_fields["skill_md_chars"] = len(skill_md)
+                raise SkillsShError("skills_payload_too_large", status_code=502)
 
-        install_url = payload.get("installUrl")
-        url = payload.get("url")
-        if not isinstance(url, str):
-            url = f"https://skills.sh/{skill_id}"
-        validate_public_https_url(url, field="url")
-        if install_url is not None:
-            validate_public_https_url(
-                install_url if isinstance(install_url, str) else None,
-                field="install_url",
-            )
+            install_url = payload.get("installUrl")
+            url = payload.get("url")
+            if not isinstance(url, str):
+                url = f"https://skills.sh/{skill_id}"
+            validate_public_https_url(url, field="url")
+            if install_url is not None:
+                validate_public_https_url(
+                    install_url if isinstance(install_url, str) else None,
+                    field="install_url",
+                )
 
-        source_type = payload.get("sourceType")
-        if source_type not in {"github", "well-known"}:
-            source_type = (
-                "well-known" if "." in source and "/" not in source else "github"
-            )
+            source_type = payload.get("sourceType")
+            if source_type not in {"github", "well-known"}:
+                source_type = (
+                    "well-known" if "." in source and "/" not in source else "github"
+                )
 
-        return {
-            "id": skill_id,
-            "slug": slug,
-            "name": str(payload.get("name") or slug),
-            "source": source,
-            "source_type": source_type,
-            "installs": payload.get("installs"),
-            "install_url": install_url if isinstance(install_url, str) else None,
-            "url": url,
-            "hash": payload.get("hash")
-            if isinstance(payload.get("hash"), str)
-            else None,
-            "skill_md": skill_md,
-            "files": files,
-        }
+            step_fields["file_count"] = len(files)
+            step_fields["skill_md_chars"] = len(skill_md)
+            return {
+                "id": skill_id,
+                "slug": slug,
+                "name": str(payload.get("name") or slug),
+                "source": source,
+                "source_type": source_type,
+                "installs": payload.get("installs"),
+                "install_url": install_url if isinstance(install_url, str) else None,
+                "url": url,
+                "hash": payload.get("hash")
+                if isinstance(payload.get("hash"), str)
+                else None,
+                "skill_md": skill_md,
+                "files": files,
+            }
 
     def _get_json(
         self,
@@ -186,9 +234,35 @@ class SkillsShClient:
         *,
         params: dict[str, str | int] | None = None,
     ) -> dict[str, Any]:
-        if self._settings.proxy_url:
+        transport = self._settings.transport_mode()
+        if transport == "proxy":
             return self._get_via_proxy(path, params=params)
-        return self._get_direct(path, params=params)
+        if transport == "proxy_misconfigured":
+            skills_log(
+                "skills_upstream_request",
+                level=40,
+                step="transport_config",
+                outcome="error",
+                error_code="skills_proxy_secret_missing",
+                transport=transport,
+                upstream_path=path,
+            )
+            raise SkillsShConfigError("skills_proxy_secret_missing")
+        if transport == "direct_oidc":
+            return self._get_direct(path, params=params)
+        skills_log(
+            "skills_upstream_request",
+            level=40,
+            step="transport_config",
+            outcome="error",
+            error_code="skills_transport_unconfigured",
+            transport=transport,
+            upstream_path=path,
+            proxy_url_configured=bool(self._settings.proxy_url),
+            proxy_secret_configured=self._settings.proxy_secret is not None,
+            oidc_configured=self._settings.oidc_token is not None,
+        )
+        raise SkillsShConfigError()
 
     def _get_direct(
         self,
@@ -199,16 +273,35 @@ class SkillsShClient:
         base = self._settings.base_url.rstrip("/") + "/"
         parsed = urlparse(base)
         if parsed.scheme != "https" or parsed.hostname not in ALLOWED_SKILLS_HOSTS:
+            skills_log(
+                "skills_upstream_request",
+                level=40,
+                step="transport_config",
+                outcome="error",
+                error_code="skills_base_url_invalid",
+                transport="direct_oidc",
+                upstream_path=path,
+            )
             raise SkillsShError("skills_base_url_invalid")
         token = self._oidc_token()
         if token is None:
-            raise SkillsShAuthError()
+            skills_log(
+                "skills_upstream_request",
+                level=40,
+                step="transport_config",
+                outcome="error",
+                error_code="skills_transport_unconfigured",
+                transport="direct_oidc",
+                upstream_path=path,
+            )
+            raise SkillsShConfigError()
         url = urljoin(base, path.lstrip("/"))
         headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
             "User-Agent": "trace-api/skills-sh",
         }
+        started = time.perf_counter()
         try:
             with httpx.Client(
                 timeout=self._settings.timeout_seconds,
@@ -216,10 +309,25 @@ class SkillsShClient:
                 follow_redirects=False,
             ) as client:
                 response = client.get(url, params=params, headers=headers)
-        except httpx.HTTPError:
-            logger.warning("skills.sh request failed", extra={"path": path})
+        except httpx.HTTPError as error:
+            skills_log(
+                "skills_upstream_request",
+                level=30,
+                step="upstream_fetch",
+                outcome="error",
+                error_code="skills_unavailable",
+                error_type=type(error).__name__,
+                transport="direct_oidc",
+                upstream_path=path,
+                upstream_latency_ms=round((time.perf_counter() - started) * 1000, 3),
+            )
             raise SkillsShUnavailableError() from None
-        return self._parse_response(response)
+        return self._parse_response(
+            response,
+            path=path,
+            transport="direct_oidc",
+            started=started,
+        )
 
     def _get_via_proxy(
         self,
@@ -229,13 +337,22 @@ class SkillsShClient:
     ) -> dict[str, Any]:
         proxy = self._settings.proxy_url
         if not proxy:
-            raise SkillsShAuthError()
+            raise SkillsShConfigError()
         parsed = urlparse(proxy)
         if parsed.scheme != "https" or not parsed.hostname:
+            skills_log(
+                "skills_upstream_request",
+                level=40,
+                step="transport_config",
+                outcome="error",
+                error_code="skills_proxy_url_invalid",
+                transport="proxy",
+                upstream_path=path,
+            )
             raise SkillsShError("skills_proxy_url_invalid")
         secret = self._settings.proxy_secret
         if secret is None:
-            raise SkillsShAuthError()
+            raise SkillsShConfigError("skills_proxy_secret_missing")
         query = ""
         if params:
             query = "?" + "&".join(
@@ -251,6 +368,7 @@ class SkillsShClient:
             "Accept": "application/json",
             "User-Agent": "trace-api/skills-sh-proxy",
         }
+        started = time.perf_counter()
         try:
             with httpx.Client(
                 timeout=self._settings.timeout_seconds,
@@ -258,10 +376,27 @@ class SkillsShClient:
                 follow_redirects=False,
             ) as client:
                 response = client.get(target, headers=headers)
-        except httpx.HTTPError:
-            logger.warning("skills.sh proxy request failed", extra={"path": path})
+        except httpx.HTTPError as error:
+            skills_log(
+                "skills_upstream_request",
+                level=30,
+                step="upstream_fetch",
+                outcome="error",
+                error_code="skills_unavailable",
+                error_type=type(error).__name__,
+                transport="proxy",
+                upstream_path=path,
+                proxy_host=parsed.hostname,
+                upstream_latency_ms=round((time.perf_counter() - started) * 1000, 3),
+            )
             raise SkillsShUnavailableError() from None
-        return self._parse_response(response)
+        return self._parse_response(
+            response,
+            path=path,
+            transport="proxy",
+            started=started,
+            proxy_host=parsed.hostname,
+        )
 
     def _oidc_token(self) -> str | None:
         token = self._settings.oidc_token
@@ -270,27 +405,112 @@ class SkillsShClient:
         value = token.get_secret_value().strip()
         return value or None
 
-    def _parse_response(self, response: httpx.Response) -> dict[str, Any]:
+    def _parse_response(
+        self,
+        response: httpx.Response,
+        *,
+        path: str,
+        transport: str,
+        started: float,
+        proxy_host: str | None = None,
+    ) -> dict[str, Any]:
+        latency_ms = round((time.perf_counter() - started) * 1000, 3)
+        rate_limit_fields = {
+            header.replace("-", "_"): response.headers.get(header)
+            for header in _RATE_LIMIT_HEADERS
+            if response.headers.get(header)
+        }
+        common = {
+            "step": "upstream_fetch",
+            "transport": transport,
+            "upstream_path": path,
+            "upstream_status": response.status_code,
+            "upstream_latency_ms": latency_ms,
+            "provider": "skills.sh",
+            **rate_limit_fields,
+        }
+        if proxy_host:
+            common["proxy_host"] = proxy_host
+
         if response.status_code == 401:
+            skills_log(
+                "skills_upstream_request",
+                level=40,
+                outcome="error",
+                error_code="skills_auth_failed",
+                **common,
+            )
             raise SkillsShAuthError()
         if response.status_code == 404:
+            skills_log(
+                "skills_upstream_request",
+                level=30,
+                outcome="error",
+                error_code="skills_not_found",
+                **common,
+            )
             raise SkillsShNotFoundError()
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
             parsed_retry: int | None = None
             if retry_after and retry_after.isdigit():
                 parsed_retry = int(retry_after)
+            rate_fields = {
+                key: value for key, value in common.items() if key != "retry_after"
+            }
+            skills_log(
+                "skills_upstream_request",
+                level=30,
+                outcome="error",
+                error_code="skills_rate_limited",
+                retry_after=parsed_retry,
+                **rate_fields,
+            )
             raise SkillsShRateLimitError(retry_after=parsed_retry)
         if response.status_code >= 500:
+            skills_log(
+                "skills_upstream_request",
+                level=30,
+                outcome="error",
+                error_code="skills_unavailable",
+                **common,
+            )
             raise SkillsShUnavailableError()
         if response.status_code >= 400:
+            skills_log(
+                "skills_upstream_request",
+                level=40,
+                outcome="error",
+                error_code="skills_request_invalid",
+                **common,
+            )
             raise SkillsShError(
                 "skills_request_invalid", status_code=response.status_code
             )
         try:
             payload = response.json()
         except ValueError as error:
+            skills_log(
+                "skills_upstream_request",
+                level=40,
+                outcome="error",
+                error_code="skills_payload_invalid",
+                error_type=type(error).__name__,
+                **common,
+            )
             raise SkillsShError("skills_payload_invalid", status_code=502) from error
         if not isinstance(payload, dict):
+            skills_log(
+                "skills_upstream_request",
+                level=40,
+                outcome="error",
+                error_code="skills_payload_invalid",
+                **common,
+            )
             raise SkillsShError("skills_payload_invalid", status_code=502)
+        skills_log(
+            "skills_upstream_request",
+            outcome="success",
+            **common,
+        )
         return payload

@@ -14,7 +14,7 @@
     },
     {
       "source": "/api/skills-sh/:path*",
-      "destination": "/api/skills-sh/[...path]"
+      "destination": "/api/skills-sh/[...path]?path=:path*"
     },
     {
       "source": "/((?!api/).*)",

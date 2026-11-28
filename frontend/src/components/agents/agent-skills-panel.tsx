@@ -26,7 +26,7 @@ import {
   useSkillsSearch,
 } from "@/hooks/use-agents"
 import { trackEvent } from "@/lib/analytics"
-import type { Agent, AgentSkill, SkillsCatalogSkill } from "@/lib/api"
+import { ApiError, type Agent, type AgentSkill, type SkillsCatalogSkill } from "@/lib/api"
 
 function skillName(skill: AgentSkill, index: number) {
   if (typeof skill === "string") {
@@ -108,11 +108,14 @@ export function AgentSkillsPanel({
           description: `${skill.name} is available for this agent’s reviews.`,
         })
       },
-      onError: () => {
+      onError: (error) => {
         toast.add({
           type: "error",
           title: "Could not attach skill",
-          description: "Please try again in a moment.",
+          description:
+            error instanceof ApiError
+              ? error.message
+              : "Please try again in a moment.",
         })
       },
     })
