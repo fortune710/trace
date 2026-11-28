@@ -38,6 +38,9 @@ PostgreSQL, Redis, RabbitMQ, Mailpit, and a local Vault Transit service.
 3. Generate a different 32-byte base64url value for each required `AUTH_*_KEY`. Set a development-only value for `VAULT_DEV_ROOT_TOKEN_ID`.
 4. Add the GitHub and Google client credentials when you want to test OAuth.
    Set `TAVILY_API_KEY` to enable public-web research for review agents.
+   For the skills.sh catalog in production, set GitHub Actions secrets
+   `SKILLS_SH_PROXY_URL` and `SKILLS_SH_PROXY_SECRET` (optional locally via
+   `VERCEL_OIDC_TOKEN` from `vercel env pull`).
 5. Start the stack and wait for each health check:
 
    ```bash
