@@ -96,6 +96,37 @@ def test_client_maps_auth_and_rate_limit_errors() -> None:
     assert error.value.retry_after == 12
 
 
+def test_get_skill_detects_catalog_list_shape_from_collapsed_proxy_path() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "/api/v1/skills/vercel-labs/skills/find-skills" in str(request.url)
+        # Mimic a proxy that lost the nested suffix and hit the list endpoint.
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "vercel-labs/skills/find-skills",
+                        "slug": "find-skills",
+                        "name": "find-skills",
+                        "source": "vercel-labs/skills",
+                    }
+                ],
+                "page": 0,
+                "perPage": 20,
+            },
+        )
+
+    client = SkillsShClient(
+        _settings(),
+        transport=httpx.MockTransport(handler),
+    )
+    from agents.skills.client import SkillsShError
+
+    with pytest.raises(SkillsShError) as error:
+        client.get_skill("vercel-labs/skills/find-skills")
+    assert error.value.code == "skills_proxy_path_mismatch"
+
+
 def test_client_rejects_missing_skill_md() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(

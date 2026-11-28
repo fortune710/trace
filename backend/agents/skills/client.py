@@ -124,6 +124,22 @@ class SkillsShClient:
     def get_skill(self, skill_id: str) -> dict[str, Any]:
         path = skill_detail_path(skill_id)
         payload = self._get_json(path)
+        # Production rewrite without ?path= can collapse nested detail URLs to
+        # /api/v1/skills (catalog list). Catalog list/search then "works" while
+        # attach fails because this payload is not a skill detail.
+        if isinstance(payload.get("data"), list) and "files" not in payload:
+            skills_log(
+                "skills_upstream_normalize",
+                level=40,
+                step="normalize_detail",
+                outcome="error",
+                error_code="skills_proxy_path_mismatch",
+                upstream_path=path,
+                skill_id=skill_id,
+                transport=self._settings.transport_mode(),
+                provider="skills.sh",
+            )
+            raise SkillsShError("skills_proxy_path_mismatch", status_code=502)
         return self._normalize_detail(payload)
 
     def _normalize_detail(self, payload: dict[str, Any]) -> dict[str, Any]:
