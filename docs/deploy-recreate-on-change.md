@@ -76,9 +76,12 @@ in workflow logs—only variable names belong in diagnostics.
 
 For skills.sh, both Actions secrets must be present on the VPS API/worker:
 `SKILLS_SH_PROXY_URL` (for example `https://<frontend-host>/api/skills-sh`) and
-`SKILLS_SH_PROXY_SECRET` (same value as the Vercel project env). A Vercel-only
-secret produces zero `/api/skills-sh` hits and attach logs
-`error_code=skills_transport_unconfigured`.
+`SKILLS_SH_PROXY_SECRET` (same value as the Vercel project env). Confirm the
+running containers see them (`docker compose … exec api printenv
+SKILLS_SH_PROXY_URL`), not only `.env.production` on disk — an env added after
+the last recreate leaves the process without a transport and produces zero
+Vercel `/api/skills-sh` hits. After this logging lands, API boot emits
+`skills_transport_status` with `transport` and `proxy_host`.
 
 A variable that is deliberately left to its Compose default goes in
 `EXTERNAL_VARIABLES` in `.github/scripts/check-production-env-wiring.py`, with a

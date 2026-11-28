@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -86,6 +87,8 @@ class SkillsSettings(BaseSettings):
 
     def log_startup_status(self) -> None:
         mode = self.transport_mode()
+        proxy_host = urlparse(self.proxy_url or "").hostname
+        base_host = urlparse(self.base_url).hostname or self.base_url
         skills_log(
             "skills_transport_status",
             level=30 if mode in {"unconfigured", "proxy_misconfigured"} else 20,
@@ -93,7 +96,8 @@ class SkillsSettings(BaseSettings):
             proxy_url_configured=bool(self.proxy_url),
             proxy_secret_configured=self.proxy_secret is not None,
             oidc_configured=self.oidc_token is not None,
-            base_host=self.base_url,
+            proxy_host=proxy_host,
+            base_host=base_host,
         )
 
 
