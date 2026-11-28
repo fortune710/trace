@@ -242,6 +242,9 @@ class SkillsShClient:
                 f"{quote(str(key))}={quote(str(value))}"
                 for key, value in params.items()
             )
+        # Nested path (for example /api/v1/skills/search) is appended to the
+        # proxy base. The Vite Vercel project must route /api/skills-sh/:path*
+        # to frontend/api/skills-sh/[...path].ts so sanitizePath keeps the suffix.
         target = f"{proxy.rstrip('/')}{path}{query}"
         headers = {
             "Authorization": f"Bearer {secret.get_secret_value()}",

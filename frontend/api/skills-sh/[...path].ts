@@ -1,9 +1,10 @@
 /**
  * Vercel serverless OIDC proxy for skills.sh.
  *
- * Optional catch-all covers both `/api/skills-sh` and nested paths such as
- * `/api/skills-sh/api/v1/skills/search` while preserving the pathname that
- * sanitizePath uses to build the upstream skills.sh URL.
+ * Catch-all route covers nested paths such as
+ * `/api/skills-sh/api/v1/skills/search`. Pair with the vercel.json rewrite so
+ * Vite SPA hosting still invokes this function for every nested proxy URL
+ * while preserving the suffix that sanitizePath maps to skills.sh.
  *
  * Trace's FastAPI API runs on a VPS and cannot mint Vercel OIDC tokens.
  * Point SKILLS_SH_PROXY_URL at `/api/skills-sh` and set SKILLS_SH_PROXY_SECRET
@@ -48,6 +49,18 @@ function authorized(request: Request): boolean {
   return mismatch === 0
 }
 
+function resolveProxyPathname(url: URL): string {
+  if (url.pathname.startsWith("/api/skills-sh/")) {
+    return url.pathname
+  }
+  // Vercel splat rewrites may surface the remainder as ?path=a/b/c.
+  const splat = url.searchParams.getAll("path").join("/")
+  if (splat) {
+    return `/api/skills-sh/${splat.replace(/^\/+/, "")}`
+  }
+  return url.pathname
+}
+
 function sanitizePath(pathname: string): string | null {
   if (!pathname.startsWith("/api/skills-sh")) {
     return null
@@ -70,6 +83,13 @@ function sanitizePath(pathname: string): string | null {
   return upstream
 }
 
+function upstreamSearch(url: URL): string {
+  const params = new URLSearchParams(url.search)
+  params.delete("path")
+  const serialized = params.toString()
+  return serialized ? `?${serialized}` : ""
+}
+
 export default {
   async fetch(request: Request): Promise<Response> {
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -86,7 +106,7 @@ export default {
     }
 
     const url = new URL(request.url)
-    const upstreamPath = sanitizePath(url.pathname)
+    const upstreamPath = sanitizePath(resolveProxyPathname(url))
     if (!upstreamPath) {
       return json(400, {
         error: "invalid_path",
@@ -109,7 +129,7 @@ export default {
     }
 
     const upstream = new URL(upstreamPath, SKILLS_SH_ORIGIN)
-    upstream.search = url.search
+    upstream.search = upstreamSearch(url)
 
     let response: Response
     try {
