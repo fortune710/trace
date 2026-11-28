@@ -131,6 +131,41 @@ class NginxAgentsLocationTests(unittest.TestCase):
             "Exact /api/v1/agents must be declared before the agents/ prefix",
         )
 
+    def test_skills_and_agent_skill_paths_proxy_without_collection_redirect(self) -> None:
+        """Attach/list skill URLs already include a path under /agents/ or /api/.
+
+        They match `^~ /api/v1/agents/` or `^~ /api/` and must not depend on the
+        bare `/api/v1/agents` exact-match workaround (that bug was collection-only).
+        """
+
+        agents_prefix = [
+            body
+            for modifier, path, body in self.locations
+            if modifier == "^~" and path == "/api/v1/agents/"
+        ]
+        api_prefix = [
+            body
+            for modifier, path, body in self.locations
+            if modifier == "^~" and path == "/api/"
+        ]
+        self.assertEqual(len(agents_prefix), 1)
+        self.assertEqual(len(api_prefix), 1)
+        self.assertIn(
+            "include /etc/nginx/trace/backend-proxy.conf;",
+            agents_prefix[0],
+        )
+        self.assertIn(
+            "include /etc/nginx/trace/backend-proxy.conf;",
+            api_prefix[0],
+        )
+        # No dedicated trailing-slash trap for /skills — catalog lives under /api/.
+        skills_exact = [
+            path
+            for _modifier, path, _body in self.locations
+            if path in {"/api/v1/skills", "/api/v1/skills/"}
+        ]
+        self.assertEqual(skills_exact, [])
+
 
 if __name__ == "__main__":
     unittest.main()

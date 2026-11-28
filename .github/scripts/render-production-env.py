@@ -117,6 +117,23 @@ def main() -> int:
         {name: os.environ[name] for name in OPTIONAL if os.environ.get(name)}
     )
 
+    # skills.sh attach/catalog needs the Vercel OIDC proxy URL on the VPS. The
+    # proxy secret alone (on Vercel or Actions) does not configure the API client.
+    if values.get("SKILLS_SH_PROXY_SECRET") and not values.get("SKILLS_SH_PROXY_URL"):
+        print(
+            "Warning: SKILLS_SH_PROXY_SECRET is set without SKILLS_SH_PROXY_URL; "
+            "skills.sh catalog/attach will fail until SKILLS_SH_PROXY_URL is set "
+            "(for example https://<frontend-host>/api/skills-sh).",
+            file=sys.stderr,
+        )
+    if not values.get("SKILLS_SH_PROXY_URL") and not os.environ.get("VERCEL_OIDC_TOKEN"):
+        print(
+            "Warning: SKILLS_SH_PROXY_URL is unset; production attach will use "
+            "direct OIDC and fail without VERCEL_OIDC_TOKEN. Set the Actions "
+            "secret SKILLS_SH_PROXY_URL to the Vite project's /api/skills-sh URL.",
+            file=sys.stderr,
+        )
+
     for name, value in values.items():
         if "\n" in value or "\r" in value or "\0" in value:
             print(f"{name} must be a single-line value.", file=sys.stderr)

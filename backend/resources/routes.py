@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import logging
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from functools import lru_cache
 from typing import Annotated
 from uuid import UUID
@@ -23,6 +27,7 @@ from agents.avatar import (
     validate_avatar_png,
 )
 from agents.catalog import model_catalog_response
+from agents.skills.logging import skills_log, skills_log_context
 from agents.skills.service import AgentSkillService
 from agents.skills.validation import SkillValidationError, normalize_skill_id
 from audit.emit import enqueue_audit
@@ -283,18 +288,26 @@ def install_resource_routes(
 
     @app.get("/agents", response_model=AgentPage)
     def list_agents(
+        request: Request,
         principal: CurrentPrincipal,
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=50, ge=1, le=100),
         include_disabled: bool = False,
     ) -> dict[str, object]:
-        items, next_offset = agent_service().list(
+        with _agent_route_log(
+            request,
+            method="GET",
+            route="/api/v1/agents",
             owner_id=principal.user_id,
-            include_disabled=include_disabled,
-            limit=page_size,
-            offset=(page - 1) * page_size,
-        )
-        return {"items": items, "next_offset": next_offset}
+            status_code=status.HTTP_200_OK,
+        ):
+            items, next_offset = agent_service().list(
+                owner_id=principal.user_id,
+                include_disabled=include_disabled,
+                limit=page_size,
+                offset=(page - 1) * page_size,
+            )
+            return {"items": items, "next_offset": next_offset}
 
     @app.get("/agents/catalog", response_model=AgentModelCatalogResponse)
     def get_agent_model_catalog(principal: CurrentPrincipal) -> dict[str, object]:
@@ -307,20 +320,37 @@ def install_resource_routes(
     def create_agent(
         request: Request, body: AgentCreate, principal: CurrentPrincipal
     ) -> dict[str, object]:
-        _require_csrf(request, principal, settings)
-        try:
-            result = agent_service().create(
-                owner_id=principal.user_id,
-                values=body.model_dump(),
-            )
-        except UnsupportedAgentModel as error:
-            raise RepositoryInvalidRequest() from error
-        _audit(request, audit_hasher, audit_recorder, "agent", "created")
-        return result
+        with _agent_route_log(
+            request,
+            method="POST",
+            route="/api/v1/agents",
+            owner_id=principal.user_id,
+            status_code=status.HTTP_201_CREATED,
+        ):
+            _require_csrf(request, principal, settings)
+            try:
+                result = agent_service().create(
+                    owner_id=principal.user_id,
+                    values=body.model_dump(),
+                )
+            except UnsupportedAgentModel as error:
+                raise RepositoryInvalidRequest() from error
+            _audit(request, audit_hasher, audit_recorder, "agent", "created")
+            return result
 
     @app.get("/agents/{agent_id}", response_model=AgentResponse)
-    def get_agent(agent_id: UUID, principal: CurrentPrincipal) -> dict[str, object]:
-        return agent_service().get(owner_id=principal.user_id, agent_id=agent_id)
+    def get_agent(
+        request: Request, agent_id: UUID, principal: CurrentPrincipal
+    ) -> dict[str, object]:
+        with _agent_route_log(
+            request,
+            method="GET",
+            route="/api/v1/agents/{agent_id}",
+            owner_id=principal.user_id,
+            agent_id=agent_id,
+            status_code=status.HTTP_200_OK,
+        ):
+            return agent_service().get(owner_id=principal.user_id, agent_id=agent_id)
 
     @app.patch("/agents/{agent_id}", response_model=AgentResponse)
     def update_agent(
@@ -329,26 +359,44 @@ def install_resource_routes(
         body: AgentUpdate,
         principal: CurrentPrincipal,
     ) -> dict[str, object]:
-        _require_csrf(request, principal, settings)
-        try:
-            result = agent_service().update(
-                owner_id=principal.user_id,
-                agent_id=agent_id,
-                values=body.model_dump(exclude_unset=True),
-            )
-        except UnsupportedAgentModel as error:
-            raise RepositoryInvalidRequest() from error
-        _audit(request, audit_hasher, audit_recorder, "agent", "updated")
-        return result
+        values = body.model_dump(exclude_unset=True)
+        with _agent_route_log(
+            request,
+            method="PATCH",
+            route="/api/v1/agents/{agent_id}",
+            owner_id=principal.user_id,
+            agent_id=agent_id,
+            status_code=status.HTTP_200_OK,
+            skills_in_payload="skills" in values,
+        ):
+            _require_csrf(request, principal, settings)
+            try:
+                result = agent_service().update(
+                    owner_id=principal.user_id,
+                    agent_id=agent_id,
+                    values=values,
+                )
+            except UnsupportedAgentModel as error:
+                raise RepositoryInvalidRequest() from error
+            _audit(request, audit_hasher, audit_recorder, "agent", "updated")
+            return result
 
     @app.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
     def disable_agent(
         request: Request, agent_id: UUID, principal: CurrentPrincipal
     ) -> Response:
-        _require_csrf(request, principal, settings)
-        agent_service().disable(owner_id=principal.user_id, agent_id=agent_id)
-        _audit(request, audit_hasher, audit_recorder, "agent", "disabled")
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
+        with _agent_route_log(
+            request,
+            method="DELETE",
+            route="/api/v1/agents/{agent_id}",
+            owner_id=principal.user_id,
+            agent_id=agent_id,
+            status_code=status.HTTP_204_NO_CONTENT,
+        ):
+            _require_csrf(request, principal, settings)
+            agent_service().disable(owner_id=principal.user_id, agent_id=agent_id)
+            _audit(request, audit_hasher, audit_recorder, "agent", "disabled")
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post(
         "/agents/{agent_id}/avatar",
@@ -414,86 +462,129 @@ def install_resource_routes(
 
     @app.get("/skills", response_model=SkillsCatalogPage)
     def list_skills_catalog(
+        request: Request,
         principal: CurrentPrincipal,
         view: str = Query(default="all-time"),
         page: int = Query(default=0, ge=0, le=10_000),
         per_page: int = Query(default=20, ge=1, le=100),
         source: str | None = Query(default=None, max_length=200),
     ) -> dict[str, object]:
-        del principal
-        payload = agent_skill_service().list_catalog(
-            view=view, page=page, per_page=per_page, source=source
-        )
-        return _skills_catalog_page(payload)
+        with _agent_route_log(
+            request,
+            method="GET",
+            route="/api/v1/skills",
+            owner_id=principal.user_id,
+            status_code=status.HTTP_200_OK,
+            provider="skills.sh",
+        ):
+            payload = agent_skill_service().list_catalog(
+                view=view, page=page, per_page=per_page, source=source
+            )
+            return _skills_catalog_page(payload)
 
     @app.get("/skills/search", response_model=SkillsCatalogPage)
     def search_skills_catalog(
+        request: Request,
         principal: CurrentPrincipal,
         q: str = Query(min_length=2, max_length=200),
         limit: int = Query(default=20, ge=1, le=100),
         owner: str | None = Query(default=None, max_length=100),
     ) -> dict[str, object]:
-        del principal
-        payload = agent_skill_service().search_catalog(
-            query=q, limit=limit, owner=owner
-        )
-        return _skills_catalog_page(payload)
+        with _agent_route_log(
+            request,
+            method="GET",
+            route="/api/v1/skills/search",
+            owner_id=principal.user_id,
+            status_code=status.HTTP_200_OK,
+            provider="skills.sh",
+            query_len=len(q),
+        ):
+            payload = agent_skill_service().search_catalog(
+                query=q, limit=limit, owner=owner
+            )
+            return _skills_catalog_page(payload)
 
     @app.get("/skills/curated", response_model=SkillsCatalogPage)
-    def curated_skills_catalog(principal: CurrentPrincipal) -> dict[str, object]:
-        del principal
-        payload = agent_skill_service().curated_catalog()
-        # Flatten curated owner groups into a skill list for the UI.
-        data: list[dict[str, object]] = []
-        for group in payload.get("data", []):
-            if not isinstance(group, dict):
-                continue
-            skills = group.get("skills")
-            if not isinstance(skills, list):
-                continue
-            for skill in skills:
-                if isinstance(skill, dict):
-                    data.append(skill)
-        return _skills_catalog_page(
-            {
-                "data": data,
-                "totalOwners": payload.get("totalOwners"),
-                "totalSkills": payload.get("totalSkills"),
-                "generatedAt": payload.get("generatedAt"),
-            }
-        )
+    def curated_skills_catalog(
+        request: Request, principal: CurrentPrincipal
+    ) -> dict[str, object]:
+        with _agent_route_log(
+            request,
+            method="GET",
+            route="/api/v1/skills/curated",
+            owner_id=principal.user_id,
+            status_code=status.HTTP_200_OK,
+            provider="skills.sh",
+        ):
+            payload = agent_skill_service().curated_catalog()
+            # Flatten curated owner groups into a skill list for the UI.
+            data: list[dict[str, object]] = []
+            for group in payload.get("data", []):
+                if not isinstance(group, dict):
+                    continue
+                skills = group.get("skills")
+                if not isinstance(skills, list):
+                    continue
+                for skill in skills:
+                    if isinstance(skill, dict):
+                        data.append(skill)
+            return _skills_catalog_page(
+                {
+                    "data": data,
+                    "totalOwners": payload.get("totalOwners"),
+                    "totalSkills": payload.get("totalSkills"),
+                    "generatedAt": payload.get("generatedAt"),
+                }
+            )
 
     @app.get("/skills/{skill_id:path}", response_model=SkillsCatalogDetail)
     def get_skills_catalog_detail(
-        skill_id: str, principal: CurrentPrincipal
+        request: Request, skill_id: str, principal: CurrentPrincipal
     ) -> dict[str, object]:
-        del principal
-        try:
-            normalize_skill_id(skill_id)
-        except SkillValidationError as error:
-            raise RepositoryInvalidRequest() from error
-        detail = agent_skill_service().get_catalog_skill(skill_id)
-        return {
-            "id": detail["id"],
-            "slug": detail["slug"],
-            "name": detail["name"],
-            "source": detail["source"],
-            "source_type": detail["source_type"],
-            "installs": detail.get("installs"),
-            "install_url": detail.get("install_url"),
-            "url": detail["url"],
-            "hash": detail.get("hash"),
-            "has_skill_md": bool(detail.get("skill_md")),
-        }
+        with _agent_route_log(
+            request,
+            method="GET",
+            route="/api/v1/skills/{skill_id}",
+            owner_id=principal.user_id,
+            skill_id=skill_id,
+            status_code=status.HTTP_200_OK,
+            provider="skills.sh",
+        ):
+            try:
+                normalize_skill_id(skill_id)
+            except SkillValidationError as error:
+                raise RepositoryInvalidRequest() from error
+            detail = agent_skill_service().get_catalog_skill(skill_id)
+            return {
+                "id": detail["id"],
+                "slug": detail["slug"],
+                "name": detail["name"],
+                "source": detail["source"],
+                "source_type": detail["source_type"],
+                "installs": detail.get("installs"),
+                "install_url": detail.get("install_url"),
+                "url": detail["url"],
+                "hash": detail.get("hash"),
+                "has_skill_md": bool(detail.get("skill_md")),
+            }
 
     @app.get("/agents/{agent_id}/skills", response_model=AgentSkillPage)
     def list_agent_skills(
-        agent_id: UUID, principal: CurrentPrincipal
+        request: Request, agent_id: UUID, principal: CurrentPrincipal
     ) -> dict[str, object]:
-        items = agent_skill_service().list_for_agent(
-            owner_id=principal.user_id, agent_id=agent_id
-        )
-        return {"items": items}
+        with _agent_route_log(
+            request,
+            method="GET",
+            route="/api/v1/agents/{agent_id}/skills",
+            owner_id=principal.user_id,
+            agent_id=agent_id,
+            status_code=status.HTTP_200_OK,
+            provider="skills.sh",
+        ):
+            items = agent_skill_service().list_for_agent(
+                owner_id=principal.user_id, agent_id=agent_id
+            )
+            return {"items": items}
 
     @app.post(
         "/agents/{agent_id}/skills",
@@ -506,14 +597,40 @@ def install_resource_routes(
         body: AgentSkillAttach,
         principal: CurrentPrincipal,
     ) -> dict[str, object]:
-        _require_csrf(request, principal, settings)
-        result = agent_skill_service().attach(
+        with _agent_route_log(
+            request,
+            method="POST",
+            route="/api/v1/agents/{agent_id}/skills",
             owner_id=principal.user_id,
             agent_id=agent_id,
             skill_id=body.skill_id,
-        )
-        _audit(request, audit_hasher, audit_recorder, "agent_skill", "attached")
-        return result
+            status_code=status.HTTP_201_CREATED,
+            provider="skills.sh",
+        ):
+            _require_csrf(request, principal, settings)
+            result = agent_skill_service().attach(
+                owner_id=principal.user_id,
+                agent_id=agent_id,
+                skill_id=body.skill_id,
+            )
+            _audit(
+                request,
+                audit_hasher,
+                audit_recorder,
+                "agent_skill",
+                "attached",
+                status_code=status.HTTP_201_CREATED,
+            )
+            skills_log(
+                "agent_skill_audit",
+                step="audit_event",
+                outcome="success",
+                operation="attached",
+                agent_id=agent_id,
+                skill_id=body.skill_id,
+                owner_id=principal.user_id,
+            )
+            return result
 
     @app.delete(
         "/agents/{agent_id}/skills/{skill_id:path}",
@@ -525,18 +642,44 @@ def install_resource_routes(
         skill_id: str,
         principal: CurrentPrincipal,
     ) -> Response:
-        _require_csrf(request, principal, settings)
-        try:
-            normalize_skill_id(skill_id)
-        except SkillValidationError as error:
-            raise RepositoryInvalidRequest() from error
-        agent_skill_service().detach(
+        with _agent_route_log(
+            request,
+            method="DELETE",
+            route="/api/v1/agents/{agent_id}/skills/{skill_id}",
             owner_id=principal.user_id,
             agent_id=agent_id,
             skill_id=skill_id,
-        )
-        _audit(request, audit_hasher, audit_recorder, "agent_skill", "detached")
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
+            status_code=status.HTTP_204_NO_CONTENT,
+            provider="skills.sh",
+        ):
+            _require_csrf(request, principal, settings)
+            try:
+                normalize_skill_id(skill_id)
+            except SkillValidationError as error:
+                raise RepositoryInvalidRequest() from error
+            agent_skill_service().detach(
+                owner_id=principal.user_id,
+                agent_id=agent_id,
+                skill_id=skill_id,
+            )
+            _audit(
+                request,
+                audit_hasher,
+                audit_recorder,
+                "agent_skill",
+                "detached",
+                status_code=status.HTTP_204_NO_CONTENT,
+            )
+            skills_log(
+                "agent_skill_audit",
+                step="audit_event",
+                outcome="success",
+                operation="detached",
+                agent_id=agent_id,
+                skill_id=skill_id,
+                owner_id=principal.user_id,
+            )
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post(
         "/reviews",
@@ -896,6 +1039,62 @@ def _skills_catalog_page(payload: dict[str, object]) -> dict[str, object]:
         "total_skills": payload.get("totalSkills"),
         "generated_at": payload.get("generatedAt"),
     }
+
+
+@contextmanager
+def _agent_route_log(
+    request: Request,
+    *,
+    method: str,
+    route: str,
+    owner_id: UUID | None = None,
+    agent_id: UUID | str | None = None,
+    skill_id: str | None = None,
+    status_code: int = status.HTTP_200_OK,
+    **fields: object,
+) -> Iterator[None]:
+    request_id = getattr(request.state, "request_id", "unavailable")
+    started = time.perf_counter()
+    context_fields: dict[str, object] = {
+        "request_id": request_id,
+        "method": method,
+        "route": route,
+    }
+    if owner_id is not None:
+        context_fields["owner_id"] = owner_id
+    if agent_id is not None:
+        context_fields["agent_id"] = agent_id
+    if skill_id is not None:
+        context_fields["skill_id"] = skill_id
+    context_fields.update(fields)
+    with skills_log_context(**context_fields):
+        skills_log("agent_route_start", step="request")
+        try:
+            yield
+        except Exception as error:
+            skills_log(
+                "agent_route_complete",
+                level=logging.ERROR
+                if getattr(error, "status_code", 500) >= 500
+                else logging.WARNING,
+                step="request",
+                outcome="error",
+                status_code=getattr(
+                    error, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR
+                ),
+                error_type=type(error).__name__,
+                error_code=getattr(error, "code", type(error).__name__),
+                duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                exc_info=getattr(error, "status_code", 500) >= 500,
+            )
+            raise
+        skills_log(
+            "agent_route_complete",
+            step="request",
+            outcome="success",
+            status_code=status_code,
+            duration_ms=round((time.perf_counter() - started) * 1000, 3),
+        )
 
 
 def _require_csrf(request: Request, principal, settings: AuthSettings) -> None:

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from agents.skills.logging import skills_log, skills_transport_mode
 
 
 class SkillsSettings(BaseSettings):
@@ -44,7 +46,49 @@ class SkillsSettings(BaseSettings):
     max_files: int = Field(default=32, ge=1, le=64)
     max_file_chars: int = Field(default=100_000, ge=1_000, le=500_000)
 
+    @field_validator("proxy_url", "base_url", mode="before")
+    @classmethod
+    def _blank_string_to_none_or_strip(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("oidc_token", "proxy_secret", mode="before")
+    @classmethod
+    def _blank_secret_to_none(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        if isinstance(value, SecretStr) and not value.get_secret_value().strip():
+            return None
+        return value
+
+    def transport_mode(self) -> str:
+        return skills_transport_mode(
+            proxy_url=self.proxy_url,
+            proxy_secret_configured=self.proxy_secret is not None,
+            oidc_configured=self.oidc_token is not None,
+        )
+
+    def log_startup_status(self) -> None:
+        mode = self.transport_mode()
+        skills_log(
+            "skills_transport_status",
+            level=30 if mode in {"unconfigured", "proxy_misconfigured"} else 20,
+            transport=mode,
+            proxy_url_configured=bool(self.proxy_url),
+            proxy_secret_configured=self.proxy_secret is not None,
+            oidc_configured=self.oidc_token is not None,
+            base_host=self.base_url,
+        )
+
 
 @lru_cache
 def get_skills_settings() -> SkillsSettings:
-    return SkillsSettings()
+    settings = SkillsSettings()
+    settings.log_startup_status()
+    return settings

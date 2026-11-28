@@ -91,15 +91,44 @@ function upstreamSearch(url: URL): string {
   return serialized ? `?${serialized}` : ""
 }
 
+function proxyLog(
+  fields: Record<string, string | number | boolean | null | undefined>,
+): void {
+  // Never log Authorization, OIDC tokens, proxy secrets, or response bodies.
+  console.log(
+    JSON.stringify({
+      event: "skills_sh_proxy",
+      ...fields,
+    }),
+  )
+}
+
 export default {
   async fetch(request: Request): Promise<Response> {
+    const started = Date.now()
     if (request.method !== "GET" && request.method !== "HEAD") {
+      proxyLog({
+        step: "method_check",
+        outcome: "error",
+        error_code: "method_not_allowed",
+        method: request.method,
+        status_code: 405,
+        duration_ms: Date.now() - started,
+      })
       return json(405, {
         error: "method_not_allowed",
         message: "Only GET is supported.",
       })
     }
     if (!authorized(request)) {
+      proxyLog({
+        step: "auth",
+        outcome: "error",
+        error_code: "unauthorized",
+        proxy_secret_configured: Boolean(process.env.SKILLS_SH_PROXY_SECRET),
+        status_code: 401,
+        duration_ms: Date.now() - started,
+      })
       return json(401, {
         error: "unauthorized",
         message: "Invalid proxy credentials.",
@@ -107,8 +136,17 @@ export default {
     }
 
     const url = new URL(request.url)
-    const upstreamPath = sanitizePath(resolveProxyPathname(url))
+    const resolvedPath = resolveProxyPathname(url)
+    const upstreamPath = sanitizePath(resolvedPath)
     if (!upstreamPath) {
+      proxyLog({
+        step: "path_sanitize",
+        outcome: "error",
+        error_code: "invalid_path",
+        resolved_path: resolvedPath.slice(0, 200),
+        status_code: 400,
+        duration_ms: Date.now() - started,
+      })
       return json(400, {
         error: "invalid_path",
         message: "Path is not allowed.",
@@ -116,21 +154,32 @@ export default {
     }
 
     let token: string
+    let oidcSource: "vercel_oidc" | "env_fallback" = "vercel_oidc"
     try {
       token = await getVercelOidcToken()
     } catch {
       const fallback = process.env.VERCEL_OIDC_TOKEN
       if (!fallback) {
+        proxyLog({
+          step: "oidc",
+          outcome: "error",
+          error_code: "oidc_unavailable",
+          upstream_path: upstreamPath,
+          status_code: 503,
+          duration_ms: Date.now() - started,
+        })
         return json(503, {
           error: "oidc_unavailable",
           message: "Vercel OIDC token is unavailable.",
         })
       }
+      oidcSource = "env_fallback"
       token = fallback
     }
 
     const upstream = new URL(upstreamPath, SKILLS_SH_ORIGIN)
     upstream.search = upstreamSearch(url)
+    const upstreamStarted = Date.now()
 
     let response: Response
     try {
@@ -144,6 +193,18 @@ export default {
         redirect: "manual",
       })
     } catch {
+      proxyLog({
+        step: "upstream_fetch",
+        outcome: "error",
+        error_code: "upstream_unavailable",
+        upstream_path: upstreamPath,
+        oidc_source: oidcSource,
+        transport: "proxy",
+        provider: "skills.sh",
+        status_code: 503,
+        upstream_latency_ms: Date.now() - upstreamStarted,
+        duration_ms: Date.now() - started,
+      })
       return json(503, {
         error: "upstream_unavailable",
         message: "skills.sh is temporarily unavailable.",
@@ -151,6 +212,22 @@ export default {
     }
 
     const body = await response.text()
+    proxyLog({
+      step: "upstream_fetch",
+      outcome: response.ok ? "success" : "error",
+      upstream_path: upstreamPath,
+      upstream_status: response.status,
+      oidc_source: oidcSource,
+      transport: "proxy",
+      provider: "skills.sh",
+      ratelimit_limit: response.headers.get("x-ratelimit-limit"),
+      ratelimit_remaining: response.headers.get("x-ratelimit-remaining"),
+      ratelimit_reset: response.headers.get("x-ratelimit-reset"),
+      retry_after: response.headers.get("retry-after"),
+      upstream_latency_ms: Date.now() - upstreamStarted,
+      duration_ms: Date.now() - started,
+      status_code: response.status,
+    })
     return new Response(body, {
       status: response.status,
       headers: {

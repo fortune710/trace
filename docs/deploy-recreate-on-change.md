@@ -74,6 +74,12 @@ Optional integrations such as `TAVILY_API_KEY`, `SKILLS_SH_PROXY_URL`, and
 secret is unset; Compose receives an empty default. Never print secret values
 in workflow logs—only variable names belong in diagnostics.
 
+For skills.sh, both Actions secrets must be present on the VPS API/worker:
+`SKILLS_SH_PROXY_URL` (for example `https://<frontend-host>/api/skills-sh`) and
+`SKILLS_SH_PROXY_SECRET` (same value as the Vercel project env). A Vercel-only
+secret produces zero `/api/skills-sh` hits and attach logs
+`error_code=skills_transport_unconfigured`.
+
 A variable that is deliberately left to its Compose default goes in
 `EXTERNAL_VARIABLES` in `.github/scripts/check-production-env-wiring.py`, with a
 reason. The next deploy then reports the new variable by name and recreates the

@@ -9,6 +9,7 @@ from pydantic import SecretStr
 from agents.skills.client import (
     SkillsShAuthError,
     SkillsShClient,
+    SkillsShConfigError,
     SkillsShNotFoundError,
     SkillsShRateLimitError,
 )
@@ -163,3 +164,45 @@ def test_not_found_mapping() -> None:
     )
     with pytest.raises(SkillsShNotFoundError):
         client.get_skill("vercel-labs/skills/missing")
+
+
+def test_unconfigured_transport_raises_config_error_without_http() -> None:
+    calls = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        return httpx.Response(200, json={"data": []})
+
+    client = SkillsShClient(
+        _settings(oidc_token=None, proxy_url=None, proxy_secret=None),
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(SkillsShConfigError) as error:
+        client.search_skills(query="react")
+    assert error.value.code == "skills_transport_unconfigured"
+    assert calls["count"] == 0
+
+
+def test_proxy_url_without_secret_is_misconfigured() -> None:
+    client = SkillsShClient(
+        _settings(
+            oidc_token=None,
+            proxy_url="https://traceai.vercel.app/api/skills-sh",
+            proxy_secret=None,
+        ),
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={})),
+    )
+    with pytest.raises(SkillsShConfigError) as error:
+        client.list_skills()
+    assert error.value.code == "skills_proxy_secret_missing"
+
+
+def test_blank_proxy_url_env_is_treated_as_unconfigured() -> None:
+    settings = SkillsSettings(
+        base_url="https://skills.sh",
+        oidc_token=None,
+        proxy_url="   ",
+        proxy_secret=None,
+    )
+    assert settings.proxy_url is None
+    assert settings.transport_mode() == "unconfigured"

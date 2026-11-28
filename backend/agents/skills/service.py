@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, cast
 from uuid import UUID
 
@@ -14,11 +15,13 @@ from agents.skill_models import AgentSkill
 from agents.skills.client import (
     SkillsShAuthError,
     SkillsShClient,
+    SkillsShConfigError,
     SkillsShError,
     SkillsShNotFoundError,
     SkillsShRateLimitError,
     SkillsShUnavailableError,
 )
+from agents.skills.logging import classify_db_error, skills_log, timed_step
 from agents.skills.validation import (
     MAX_AGENT_SKILLS,
     SkillValidationError,
@@ -58,19 +61,39 @@ def _raise_access(connection: Connection, resource_id: UUID) -> None:
         {"resource_id": resource_id},
     ).scalar_one()
     if bool(exists):
+        skills_log(
+            "agent_skill_access",
+            level=logging.WARNING,
+            step="auth_ownership_check",
+            outcome="denied",
+            error_code="authorization_denied",
+            agent_id=resource_id,
+        )
         raise AuthorizationDenied()
+    skills_log(
+        "agent_skill_access",
+        level=logging.INFO,
+        step="auth_ownership_check",
+        outcome="not_found",
+        error_code="resource_not_found",
+        agent_id=resource_id,
+    )
     raise ResourceNotFound()
 
 
 def _lock_owned_agent(connection: Connection, owner_id: UUID, agent_id: UUID) -> Agent:
-    agent = _orm_scalar_one_or_none(
-        connection,
-        sa.select(Agent)
-        .where(Agent.id == agent_id, Agent.owner_id == owner_id)
-        .with_for_update(),
-    )
-    if agent is None:
-        _raise_access(connection, agent_id)
+    with timed_step("agent_row_lock", agent_id=agent_id, owner_id=owner_id) as fields:
+        agent = _orm_scalar_one_or_none(
+            connection,
+            sa.select(Agent)
+            .where(Agent.id == agent_id, Agent.owner_id == owner_id)
+            .with_for_update(),
+        )
+        if agent is None:
+            fields["outcome"] = "miss"
+            skills_log("agent_skill_lock", level=logging.INFO, fields=fields)
+            _raise_access(connection, agent_id)
+        skills_log("agent_skill_lock", fields=fields)
     return cast(Agent, agent)
 
 
@@ -138,195 +161,45 @@ class AgentSkillService:
         self, *, owner_id: UUID, agent_id: UUID, skill_id: str
     ) -> dict[str, object]:
         try:
-            normalized = normalize_skill_id(skill_id)
+            with timed_step(
+                "validation",
+                owner_id=owner_id,
+                agent_id=agent_id,
+                skill_id=skill_id,
+            ) as fields:
+                normalized = normalize_skill_id(skill_id)
+                fields["skill_id"] = normalized
+                skills_log("agent_skill_attach", fields=fields)
         except SkillValidationError as error:
+            skills_log(
+                "agent_skill_attach",
+                level=logging.WARNING,
+                step="validation",
+                outcome="error",
+                error_code="skill_id_invalid",
+                error_type=type(error).__name__,
+                owner_id=owner_id,
+                agent_id=agent_id,
+            )
             raise RepositoryInvalidRequest() from error
 
-        detail = self._map_client_errors(lambda: self._client.get_skill(normalized))
-        snapshot = skill_snapshot_dict(
-            skill_id=detail["id"],
-            slug=detail["slug"],
-            name=detail["name"],
-            source=detail["source"],
-            source_type=detail["source_type"],
-            install_url=detail.get("install_url"),
-            url=detail["url"],
-            content_hash=detail.get("hash"),
-            skill_md=detail["skill_md"],
-            files=[
-                {"path": file["path"], "contents": file["contents"]}
-                for file in detail.get("files", [])
-                if isinstance(file, dict)
-                and isinstance(file.get("path"), str)
-                and isinstance(file.get("contents"), str)
-            ],
-        )
+        with timed_step(
+            "upstream_fetch",
+            owner_id=owner_id,
+            agent_id=agent_id,
+            skill_id=normalized,
+        ) as fetch_fields:
+            detail = self._map_client_errors(lambda: self._client.get_skill(normalized))
+            fetch_fields["skill_source"] = detail.get("source")
+            fetch_fields["skill_slug"] = detail.get("slug")
+            skills_log("agent_skill_attach", fields=fetch_fields)
 
-        try:
-            with principal_transaction(self._engine, owner_id) as connection:
-                agent = _lock_owned_agent(connection, owner_id, agent_id)
-                if agent.disabled_at is not None:
-                    raise ResourceConflict("agent_disabled")
-                existing = cast(
-                    list[AgentSkill],
-                    _orm_scalars_all(
-                        connection,
-                        sa.select(AgentSkill).where(
-                            AgentSkill.owner_id == owner_id,
-                            AgentSkill.agent_id == agent_id,
-                        ),
-                    ),
-                )
-                for row in existing:
-                    if row.skill_id == normalized:
-                        connection.execute(
-                            sa.update(AgentSkill)
-                            .where(
-                                AgentSkill.owner_id == owner_id,
-                                AgentSkill.id == row.id,
-                            )
-                            .values(
-                                slug=detail["slug"],
-                                name=detail["name"],
-                                source=detail["source"],
-                                source_type=detail["source_type"],
-                                install_url=detail.get("install_url"),
-                                url=detail["url"],
-                                content_hash=detail.get("hash"),
-                                skill_md=detail["skill_md"],
-                                files=snapshot.get("files", []),
-                                updated_at=sa.func.current_timestamp(),
-                            )
-                        )
-                        self._sync_agent_skills_json(
-                            connection, owner_id=owner_id, agent_id=agent_id
-                        )
-                        refreshed = _orm_scalar_one(
-                            connection,
-                            sa.select(AgentSkill).where(
-                                AgentSkill.owner_id == owner_id,
-                                AgentSkill.id == row.id,
-                            ),
-                        )
-                        return self._row_response(refreshed)
-
-                if len(existing) >= MAX_AGENT_SKILLS:
-                    raise ResourceConflict("agent_skills_limit")
-
-                skill_row_id = uuid7()
-                connection.execute(
-                    sa.insert(AgentSkill).values(
-                        id=skill_row_id,
-                        owner_id=owner_id,
-                        agent_id=agent_id,
-                        skill_id=detail["id"],
-                        slug=detail["slug"],
-                        name=detail["name"],
-                        source=detail["source"],
-                        source_type=detail["source_type"],
-                        install_url=detail.get("install_url"),
-                        url=detail["url"],
-                        content_hash=detail.get("hash"),
-                        skill_md=detail["skill_md"],
-                        files=snapshot.get("files", []),
-                        sort_order=len(existing),
-                    )
-                )
-                self._sync_agent_skills_json(
-                    connection, owner_id=owner_id, agent_id=agent_id
-                )
-                created = _orm_scalar_one(
-                    connection,
-                    sa.select(AgentSkill).where(
-                        AgentSkill.owner_id == owner_id,
-                        AgentSkill.id == skill_row_id,
-                    ),
-                )
-        except sa.exc.IntegrityError as error:
-            raise ResourceConflict("agent_skill_conflict") from error
-        return self._row_response(created)
-
-    def detach(self, *, owner_id: UUID, agent_id: UUID, skill_id: str) -> None:
-        try:
-            normalized = normalize_skill_id(skill_id)
-        except SkillValidationError as error:
-            raise RepositoryInvalidRequest() from error
-
-        with principal_transaction(self._engine, owner_id) as connection:
-            _lock_owned_agent(connection, owner_id, agent_id)
-            result = connection.execute(
-                sa.delete(AgentSkill).where(
-                    AgentSkill.owner_id == owner_id,
-                    AgentSkill.agent_id == agent_id,
-                    AgentSkill.skill_id == normalized,
-                )
-            )
-            if result.rowcount == 0:
-                raise ResourceNotFound()
-            self._sync_agent_skills_json(
-                connection, owner_id=owner_id, agent_id=agent_id
-            )
-
-    def replace_skills_mirror(
-        self,
-        connection: Connection,
-        *,
-        owner_id: UUID,
-        agent_id: UUID,
-        skills: list[object],
-    ) -> list[object]:
-        """Validate a PATCH skills payload and refresh agent_skills + JSON mirror.
-
-        Client-supplied skill markdown is rejected. skills.sh entries must be
-        referenced by id and are resolved server-side.
-        """
-
-        if len(skills) > MAX_AGENT_SKILLS:
-            raise RepositoryInvalidRequest()
-
-        legacy: list[object] = []
-        resolved_ids: list[str] = []
-        for skill in skills:
-            if isinstance(skill, str):
-                text = skill.strip()
-                if not text or len(text) > 200:
-                    raise RepositoryInvalidRequest()
-                legacy.append(text)
-                continue
-            if not isinstance(skill, dict):
-                raise RepositoryInvalidRequest()
-            if skill.get("skill_md") is not None or skill.get("files") is not None:
-                raise RepositoryInvalidRequest()
-            if is_skills_sh_skill(skill) or "id" in skill:
-                skill_id = skill.get("id")
-                if not isinstance(skill_id, str):
-                    raise RepositoryInvalidRequest()
-                try:
-                    resolved_ids.append(normalize_skill_id(skill_id))
-                except SkillValidationError as error:
-                    raise RepositoryInvalidRequest() from error
-                continue
-            raise RepositoryInvalidRequest()
-
-        # Deduplicate while preserving order.
-        unique_ids: list[str] = []
-        for skill_id in resolved_ids:
-            if skill_id not in unique_ids:
-                unique_ids.append(skill_id)
-
-        _lock_owned_agent(connection, owner_id, agent_id)
-        connection.execute(
-            sa.delete(AgentSkill).where(
-                AgentSkill.owner_id == owner_id,
-                AgentSkill.agent_id == agent_id,
-            )
-        )
-
-        snapshots: list[object] = list(legacy)
-        for index, skill_id in enumerate(unique_ids):
-            detail = self._map_client_errors(
-                lambda sid=skill_id: self._client.get_skill(sid)
-            )
+        with timed_step(
+            "size_check",
+            owner_id=owner_id,
+            agent_id=agent_id,
+            skill_id=normalized,
+        ) as size_fields:
             snapshot = skill_snapshot_dict(
                 skill_id=detail["id"],
                 slug=detail["slug"],
@@ -345,35 +218,380 @@ class AgentSkillService:
                     and isinstance(file.get("contents"), str)
                 ],
             )
-            connection.execute(
-                sa.insert(AgentSkill).values(
-                    id=uuid7(),
+            snapshot_files = snapshot.get("files", [])
+            size_fields["skill_md_chars"] = len(detail["skill_md"])
+            size_fields["file_count"] = (
+                len(snapshot_files) if isinstance(snapshot_files, list) else 0
+            )
+            skills_log("agent_skill_attach", fields=size_fields)
+
+        try:
+            with principal_transaction(self._engine, owner_id) as connection:
+                agent = _lock_owned_agent(connection, owner_id, agent_id)
+                if agent.disabled_at is not None:
+                    skills_log(
+                        "agent_skill_attach",
+                        level=logging.WARNING,
+                        step="db_insert",
+                        outcome="error",
+                        error_code="agent_disabled",
+                        owner_id=owner_id,
+                        agent_id=agent_id,
+                        skill_id=normalized,
+                    )
+                    raise ResourceConflict("agent_disabled")
+                existing = cast(
+                    list[AgentSkill],
+                    _orm_scalars_all(
+                        connection,
+                        sa.select(AgentSkill).where(
+                            AgentSkill.owner_id == owner_id,
+                            AgentSkill.agent_id == agent_id,
+                        ),
+                    ),
+                )
+                for row in existing:
+                    if row.skill_id == normalized:
+                        with timed_step(
+                            "db_update",
+                            owner_id=owner_id,
+                            agent_id=agent_id,
+                            skill_id=normalized,
+                        ) as update_fields:
+                            connection.execute(
+                                sa.update(AgentSkill)
+                                .where(
+                                    AgentSkill.owner_id == owner_id,
+                                    AgentSkill.id == row.id,
+                                )
+                                .values(
+                                    slug=detail["slug"],
+                                    name=detail["name"],
+                                    source=detail["source"],
+                                    source_type=detail["source_type"],
+                                    install_url=detail.get("install_url"),
+                                    url=detail["url"],
+                                    content_hash=detail.get("hash"),
+                                    skill_md=detail["skill_md"],
+                                    files=snapshot.get("files", []),
+                                    updated_at=sa.func.current_timestamp(),
+                                )
+                            )
+                            self._sync_agent_skills_json(
+                                connection, owner_id=owner_id, agent_id=agent_id
+                            )
+                            refreshed = _orm_scalar_one(
+                                connection,
+                                sa.select(AgentSkill).where(
+                                    AgentSkill.owner_id == owner_id,
+                                    AgentSkill.id == row.id,
+                                ),
+                            )
+                            update_fields["operation"] = "refresh_existing"
+                            skills_log("agent_skill_attach", fields=update_fields)
+                        return self._row_response(refreshed)
+
+                if len(existing) >= MAX_AGENT_SKILLS:
+                    skills_log(
+                        "agent_skill_attach",
+                        level=logging.WARNING,
+                        step="db_insert",
+                        outcome="error",
+                        error_code="agent_skills_limit",
+                        owner_id=owner_id,
+                        agent_id=agent_id,
+                        skill_id=normalized,
+                        attached_count=len(existing),
+                    )
+                    raise ResourceConflict("agent_skills_limit")
+
+                skill_row_id = uuid7()
+                with timed_step(
+                    "db_insert",
                     owner_id=owner_id,
                     agent_id=agent_id,
-                    skill_id=detail["id"],
-                    slug=detail["slug"],
-                    name=detail["name"],
-                    source=detail["source"],
-                    source_type=detail["source_type"],
-                    install_url=detail.get("install_url"),
-                    url=detail["url"],
-                    content_hash=detail.get("hash"),
-                    skill_md=detail["skill_md"],
-                    files=snapshot.get("files", []),
-                    sort_order=index,
-                )
-            )
-            snapshots.append(snapshot)
+                    skill_id=normalized,
+                ) as insert_fields:
+                    connection.execute(
+                        sa.insert(AgentSkill).values(
+                            id=skill_row_id,
+                            owner_id=owner_id,
+                            agent_id=agent_id,
+                            skill_id=detail["id"],
+                            slug=detail["slug"],
+                            name=detail["name"],
+                            source=detail["source"],
+                            source_type=detail["source_type"],
+                            install_url=detail.get("install_url"),
+                            url=detail["url"],
+                            content_hash=detail.get("hash"),
+                            skill_md=detail["skill_md"],
+                            files=snapshot.get("files", []),
+                            sort_order=len(existing),
+                        )
+                    )
+                    insert_fields["operation"] = "insert"
+                    skills_log("agent_skill_attach", fields=insert_fields)
 
+                with timed_step(
+                    "mirror_agents_skills",
+                    owner_id=owner_id,
+                    agent_id=agent_id,
+                    skill_id=normalized,
+                ) as mirror_fields:
+                    self._sync_agent_skills_json(
+                        connection, owner_id=owner_id, agent_id=agent_id
+                    )
+                    skills_log("agent_skill_attach", fields=mirror_fields)
+
+                created = _orm_scalar_one(
+                    connection,
+                    sa.select(AgentSkill).where(
+                        AgentSkill.owner_id == owner_id,
+                        AgentSkill.id == skill_row_id,
+                    ),
+                )
+        except sa.exc.IntegrityError as error:
+            skills_log(
+                "agent_skill_attach",
+                level=logging.ERROR,
+                step="db_insert",
+                outcome="error",
+                error_code="agent_skill_conflict",
+                owner_id=owner_id,
+                agent_id=agent_id,
+                skill_id=normalized,
+                exc_info=True,
+                fields=classify_db_error(error),
+            )
+            raise ResourceConflict("agent_skill_conflict") from error
+        skills_log(
+            "agent_skill_attach",
+            step="complete",
+            outcome="success",
+            owner_id=owner_id,
+            agent_id=agent_id,
+            skill_id=normalized,
+            skill_source=detail.get("source"),
+            skill_slug=detail.get("slug"),
+            provider="skills.sh",
+        )
+        return self._row_response(created)
+
+    def detach(self, *, owner_id: UUID, agent_id: UUID, skill_id: str) -> None:
+        try:
+            with timed_step(
+                "validation",
+                owner_id=owner_id,
+                agent_id=agent_id,
+                skill_id=skill_id,
+            ) as fields:
+                normalized = normalize_skill_id(skill_id)
+                fields["skill_id"] = normalized
+                skills_log("agent_skill_detach", fields=fields)
+        except SkillValidationError as error:
+            skills_log(
+                "agent_skill_detach",
+                level=logging.WARNING,
+                step="validation",
+                outcome="error",
+                error_code="skill_id_invalid",
+                owner_id=owner_id,
+                agent_id=agent_id,
+            )
+            raise RepositoryInvalidRequest() from error
+
+        with principal_transaction(self._engine, owner_id) as connection:
+            _lock_owned_agent(connection, owner_id, agent_id)
+            with timed_step(
+                "db_delete",
+                owner_id=owner_id,
+                agent_id=agent_id,
+                skill_id=normalized,
+            ) as delete_fields:
+                result = connection.execute(
+                    sa.delete(AgentSkill).where(
+                        AgentSkill.owner_id == owner_id,
+                        AgentSkill.agent_id == agent_id,
+                        AgentSkill.skill_id == normalized,
+                    )
+                )
+                if result.rowcount == 0:
+                    delete_fields["outcome"] = "not_found"
+                    skills_log(
+                        "agent_skill_detach", level=logging.INFO, fields=delete_fields
+                    )
+                    raise ResourceNotFound()
+                skills_log("agent_skill_detach", fields=delete_fields)
+            with timed_step(
+                "mirror_agents_skills",
+                owner_id=owner_id,
+                agent_id=agent_id,
+                skill_id=normalized,
+            ) as mirror_fields:
+                self._sync_agent_skills_json(
+                    connection, owner_id=owner_id, agent_id=agent_id
+                )
+                skills_log("agent_skill_detach", fields=mirror_fields)
+
+    def replace_skills_mirror(
+        self,
+        connection: Connection,
+        *,
+        owner_id: UUID,
+        agent_id: UUID,
+        skills: list[object],
+    ) -> list[object]:
+        """Validate a PATCH skills payload and refresh agent_skills + JSON mirror.
+
+        Client-supplied skill markdown is rejected. skills.sh entries must be
+        referenced by id and are resolved server-side.
+        """
+
+        if len(skills) > MAX_AGENT_SKILLS:
+            skills_log(
+                "agent_skill_replace",
+                level=logging.WARNING,
+                step="validation",
+                outcome="error",
+                error_code="agent_skills_limit",
+                owner_id=owner_id,
+                agent_id=agent_id,
+                requested_count=len(skills),
+            )
+            raise RepositoryInvalidRequest()
+
+        legacy: list[object] = []
+        resolved_ids: list[str] = []
+        for skill in skills:
+            if isinstance(skill, str):
+                text = skill.strip()
+                if not text or len(text) > 200:
+                    raise RepositoryInvalidRequest()
+                legacy.append(text)
+                continue
+            if not isinstance(skill, dict):
+                raise RepositoryInvalidRequest()
+            if skill.get("skill_md") is not None or skill.get("files") is not None:
+                skills_log(
+                    "agent_skill_replace",
+                    level=logging.WARNING,
+                    step="validation",
+                    outcome="error",
+                    error_code="client_skill_body_rejected",
+                    owner_id=owner_id,
+                    agent_id=agent_id,
+                )
+                raise RepositoryInvalidRequest()
+            if is_skills_sh_skill(skill) or "id" in skill:
+                skill_id = skill.get("id")
+                if not isinstance(skill_id, str):
+                    raise RepositoryInvalidRequest()
+                try:
+                    resolved_ids.append(normalize_skill_id(skill_id))
+                except SkillValidationError as error:
+                    raise RepositoryInvalidRequest() from error
+                continue
+            raise RepositoryInvalidRequest()
+
+        # Deduplicate while preserving order.
+        unique_ids: list[str] = []
+        for skill_id in resolved_ids:
+            if skill_id not in unique_ids:
+                unique_ids.append(skill_id)
+
+        skills_log(
+            "agent_skill_replace",
+            step="validation",
+            outcome="success",
+            owner_id=owner_id,
+            agent_id=agent_id,
+            legacy_count=len(legacy),
+            catalog_count=len(unique_ids),
+        )
+
+        _lock_owned_agent(connection, owner_id, agent_id)
         connection.execute(
-            sa.update(Agent)
-            .where(Agent.id == agent_id, Agent.owner_id == owner_id)
-            .values(
-                skills=snapshots,
-                configuration_version=Agent.configuration_version + 1,
-                updated_at=sa.func.current_timestamp(),
+            sa.delete(AgentSkill).where(
+                AgentSkill.owner_id == owner_id,
+                AgentSkill.agent_id == agent_id,
             )
         )
+
+        snapshots: list[object] = list(legacy)
+        for index, skill_id in enumerate(unique_ids):
+            with timed_step(
+                "upstream_fetch",
+                owner_id=owner_id,
+                agent_id=agent_id,
+                skill_id=skill_id,
+            ) as fetch_fields:
+                detail = self._map_client_errors(
+                    lambda sid=skill_id: self._client.get_skill(sid)
+                )
+                fetch_fields["skill_source"] = detail.get("source")
+                skills_log("agent_skill_replace", fields=fetch_fields)
+            snapshot = skill_snapshot_dict(
+                skill_id=detail["id"],
+                slug=detail["slug"],
+                name=detail["name"],
+                source=detail["source"],
+                source_type=detail["source_type"],
+                install_url=detail.get("install_url"),
+                url=detail["url"],
+                content_hash=detail.get("hash"),
+                skill_md=detail["skill_md"],
+                files=[
+                    {"path": file["path"], "contents": file["contents"]}
+                    for file in detail.get("files", [])
+                    if isinstance(file, dict)
+                    and isinstance(file.get("path"), str)
+                    and isinstance(file.get("contents"), str)
+                ],
+            )
+            with timed_step(
+                "db_insert",
+                owner_id=owner_id,
+                agent_id=agent_id,
+                skill_id=detail["id"],
+            ) as insert_fields:
+                connection.execute(
+                    sa.insert(AgentSkill).values(
+                        id=uuid7(),
+                        owner_id=owner_id,
+                        agent_id=agent_id,
+                        skill_id=detail["id"],
+                        slug=detail["slug"],
+                        name=detail["name"],
+                        source=detail["source"],
+                        source_type=detail["source_type"],
+                        install_url=detail.get("install_url"),
+                        url=detail["url"],
+                        content_hash=detail.get("hash"),
+                        skill_md=detail["skill_md"],
+                        files=snapshot.get("files", []),
+                        sort_order=index,
+                    )
+                )
+                skills_log("agent_skill_replace", fields=insert_fields)
+            snapshots.append(snapshot)
+
+        with timed_step(
+            "mirror_agents_skills",
+            owner_id=owner_id,
+            agent_id=agent_id,
+        ) as mirror_fields:
+            connection.execute(
+                sa.update(Agent)
+                .where(Agent.id == agent_id, Agent.owner_id == owner_id)
+                .values(
+                    skills=snapshots,
+                    configuration_version=Agent.configuration_version + 1,
+                    updated_at=sa.func.current_timestamp(),
+                )
+            )
+            mirror_fields["snapshot_count"] = len(snapshots)
+            skills_log("agent_skill_replace", fields=mirror_fields)
         return snapshots
 
     def _sync_agent_skills_json(
@@ -469,16 +687,76 @@ class AgentSkillService:
         try:
             return operation()
         except SkillValidationError as error:
+            skills_log(
+                "skills_client_error",
+                level=logging.WARNING,
+                step="validation",
+                outcome="error",
+                error_code="skill_validation_failed",
+                error_type=type(error).__name__,
+            )
             raise RepositoryInvalidRequest() from error
         except SkillsShNotFoundError as error:
+            skills_log(
+                "skills_client_error",
+                level=logging.INFO,
+                step="upstream_fetch",
+                outcome="error",
+                error_code=error.code,
+                error_type=type(error).__name__,
+            )
             raise ResourceNotFound() from error
         except SkillsShRateLimitError as error:
+            skills_log(
+                "skills_client_error",
+                level=logging.WARNING,
+                step="upstream_fetch",
+                outcome="error",
+                error_code=error.code,
+                error_type=type(error).__name__,
+                retry_after=error.retry_after,
+            )
+            raise ResourceUnavailable() from error
+        except SkillsShConfigError as error:
+            skills_log(
+                "skills_client_error",
+                level=logging.ERROR,
+                step="transport_config",
+                outcome="error",
+                error_code=error.code,
+                error_type=type(error).__name__,
+            )
             raise ResourceUnavailable() from error
         except SkillsShAuthError as error:
+            skills_log(
+                "skills_client_error",
+                level=logging.ERROR,
+                step="upstream_fetch",
+                outcome="error",
+                error_code=error.code,
+                error_type=type(error).__name__,
+            )
             raise ResourceUnavailable() from error
         except SkillsShUnavailableError as error:
+            skills_log(
+                "skills_client_error",
+                level=logging.WARNING,
+                step="upstream_fetch",
+                outcome="error",
+                error_code=error.code,
+                error_type=type(error).__name__,
+            )
             raise ResourceUnavailable() from error
         except SkillsShError as error:
+            skills_log(
+                "skills_client_error",
+                level=logging.ERROR,
+                step="upstream_fetch",
+                outcome="error",
+                error_code=error.code,
+                error_type=type(error).__name__,
+                upstream_status=error.status_code,
+            )
             if error.status_code == 400:
                 raise RepositoryInvalidRequest() from error
             raise ResourceUnavailable() from error
