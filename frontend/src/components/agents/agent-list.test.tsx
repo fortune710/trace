@@ -52,4 +52,15 @@ describe("AgentList", () => {
     expect(screen.getByText("Disabled")).toBeTruthy()
     expect(screen.getByRole("link", { name: /security scout/i }).getAttribute("href")).toBe("/agents/disabled-agent")
   })
+
+  it("tolerates agents whose skills field is missing", () => {
+    const withoutSkills = {
+      ...activeAgent,
+      skills: undefined,
+    } as unknown as Agent
+
+    renderList(withoutSkills)
+
+    expect(screen.getByText("No skills configured")).toBeTruthy()
+  })
 })
