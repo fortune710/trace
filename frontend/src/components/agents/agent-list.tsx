@@ -18,8 +18,8 @@ function label(value: string) {
   return value.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase())
 }
 
-function skillSummary(skills: Agent["skills"]) {
-  if (skills.length === 0) return "No skills configured"
+function skillSummary(skills: Agent["skills"] | null | undefined) {
+  if (!skills || skills.length === 0) return "No skills configured"
   const names = skills.flatMap((skill) => {
     if (typeof skill === "string") return [skill]
     if (typeof skill.name === "string" && skill.name.trim()) return [skill.name]

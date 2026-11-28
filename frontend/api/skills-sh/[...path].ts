@@ -1,3 +1,4 @@
+/// <reference types="node" />
 /**
  * Vercel serverless OIDC proxy for skills.sh.
  *
