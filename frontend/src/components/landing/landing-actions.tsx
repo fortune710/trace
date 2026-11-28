@@ -4,6 +4,7 @@ import { Link } from "react-router-dom"
 import { resolveDesktopDownloadUrl } from "@/components/landing/desktop-download"
 import LogoApple from "@/components/logos/apple"
 import { buttonVariants } from "@/components/ui/button"
+import { trackEvent } from "@/lib/analytics"
 
 type LandingActionsProps = {
   className?: string
@@ -31,6 +32,9 @@ export function LandingActions({
           "h-11 w-full px-5 sm:h-10 sm:w-auto",
           downloadVariant === "secondary" && "border-border",
         )}
+        onClick={() =>
+          trackEvent("landing_cta_clicked", { cta: "download_macos" })
+        }
       >
         <LogoApple
           aria-hidden="true"
@@ -48,6 +52,9 @@ export function LandingActions({
           }),
           "h-11 w-full border-border px-5 sm:h-10 sm:w-auto",
         )}
+        onClick={() =>
+          trackEvent("landing_cta_clicked", { cta: "continue_on_web" })
+        }
       >
         Continue on web
       </Link>

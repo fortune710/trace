@@ -1,5 +1,8 @@
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
+import { trackEvent } from "@/lib/analytics"
+import { useTrackEntityOpened } from "@/hooks/use-track-entity-opened"
+
 import { ReviewFindings } from "@/components/findings/review-findings"
 import { AppShell } from "@/components/layout/app-shell"
 import { ReviewDetailsPageSkeleton } from "@/components/reviews/review-details-page-skeleton"
@@ -73,6 +76,15 @@ export function ReviewDetailsPage() {
   const projectPath = review.data
     ? `/projects/${encodeURIComponent(review.data.project_id)}`
     : null
+
+  const openedReview = review.data
+  useTrackEntityOpened(openedReview?.id, () => {
+    if (!openedReview) return
+    trackEvent("review_opened", {
+      review_id: openedReview.id,
+      status: openedReview.status,
+    })
+  })
 
   return (
     <AppShell>

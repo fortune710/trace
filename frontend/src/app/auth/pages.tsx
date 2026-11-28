@@ -5,7 +5,7 @@ import { AuthShell, RequestError } from "@/components/auth/layout"
 import { Google } from "@/components/logos/google"
 import { consumeReturnTo, rememberReturnTo } from "@/app/auth/return-to"
 import { sessionQueryKey } from "@/hooks/use-session"
-import { authApi } from "@/lib/api"
+import { ApiError, authApi } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -13,6 +13,7 @@ import { Separator } from "@/components/ui/separator"
 import { Spinner } from "@/components/ui/spinner"
 import { useDesktopOAuth } from "@/hooks/use-desktop-oauth"
 import { useRuntimeEnvironment } from "@/hooks/use-runtime-environment"
+import { trackEvent } from "@/lib/analytics"
 
 function Title({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -50,6 +51,11 @@ function OAuthButtons() {
 
   const begin = (provider: "github" | "google") => {
     rememberReturnTo("/account")
+    trackEvent("auth_oauth_started", {
+      provider,
+      surface: isTauri ? "desktop" : "web",
+    })
+    trackEvent("auth_sign_in_submitted", { method: "oauth" })
     if (isTauri) void desktopOAuth.start(provider)
     else window.location.assign(authApi.oauthUrl(provider))
   }
@@ -104,8 +110,15 @@ export function SignInPage() {
     mutationFn: () => authApi.login(email, password),
     retry: false,
     onSuccess: async () => {
+      trackEvent("auth_sign_in_succeeded", { method: "password" })
       await queryClient.invalidateQueries({ queryKey: sessionQueryKey })
       navigate(consumeReturnTo(), { replace: true })
+    },
+    onError: (error) => {
+      trackEvent("auth_sign_in_failed", {
+        method: "password",
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
     },
   })
   return (
@@ -115,6 +128,7 @@ export function SignInPage() {
         className="mt-6 grid gap-4"
         onSubmit={(event) => {
           event.preventDefault()
+          trackEvent("auth_sign_in_submitted", { method: "password" })
           login.mutate()
         }}
       >
@@ -150,6 +164,15 @@ export function SignUpPage() {
   const register = useMutation({
     mutationFn: () => authApi.register(email, password),
     retry: false,
+    onSuccess: () => {
+      trackEvent("auth_sign_up_succeeded", { method: "password" })
+    },
+    onError: (error) => {
+      trackEvent("auth_sign_up_failed", {
+        method: "password",
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
+    },
   })
   return (
     <AuthShell>
@@ -160,6 +183,7 @@ export function SignUpPage() {
         className="mt-6 grid gap-4"
         onSubmit={(event) => {
           event.preventDefault()
+          trackEvent("auth_sign_up_submitted", { method: "password" })
           register.mutate()
         }}
       >
@@ -189,6 +213,9 @@ export function VerifyEmailPage() {
   const verify = useMutation({
     mutationFn: () => authApi.verifyEmail(value ?? ""),
     retry: false,
+    onSuccess: () => {
+      trackEvent("auth_email_verify_succeeded")
+    },
   })
   return (
     <AuthShell>
@@ -198,7 +225,10 @@ export function VerifyEmailPage() {
       <Button
         className="mt-6 w-full"
         disabled={!value || verify.isPending}
-        onClick={() => verify.mutate()}
+        onClick={() => {
+          trackEvent("auth_email_verify_submitted")
+          verify.mutate()
+        }}
       >
         {verify.isPending ? <Spinner /> : null}Verify email
       </Button>
@@ -219,6 +249,9 @@ export function ForgotPasswordPage() {
   const recover = useMutation({
     mutationFn: () => authApi.recoverPassword(email),
     retry: false,
+    onSuccess: () => {
+      trackEvent("auth_password_recovery_succeeded")
+    },
   })
   return (
     <AuthShell>
@@ -230,6 +263,7 @@ export function ForgotPasswordPage() {
         className="mt-6 grid gap-4"
         onSubmit={(event) => {
           event.preventDefault()
+          trackEvent("auth_password_recovery_submitted")
           recover.mutate()
         }}
       >
@@ -253,6 +287,9 @@ export function ResetPasswordPage() {
   const reset = useMutation({
     mutationFn: () => authApi.resetPassword(value ?? "", password),
     retry: false,
+    onSuccess: () => {
+      trackEvent("auth_password_reset_succeeded")
+    },
   })
   return (
     <AuthShell>
@@ -261,6 +298,7 @@ export function ResetPasswordPage() {
         className="mt-6 grid gap-4"
         onSubmit={(event) => {
           event.preventDefault()
+          trackEvent("auth_password_reset_submitted")
           reset.mutate()
         }}
       >
@@ -289,16 +327,34 @@ export function CallbackPage() {
   const sessionCheckStarted = useRef(false)
   const failed = params.get("error")
   useEffect(() => {
-    if (failed || sessionCheckStarted.current) return
+    if (sessionCheckStarted.current) return
     sessionCheckStarted.current = true
+
+    if (failed) {
+      trackEvent("auth_sign_in_failed", {
+        method: "oauth",
+        error_code: failed,
+      })
+      return
+    }
+
     void queryClient
       .fetchQuery({
         queryKey: sessionQueryKey,
         queryFn: authApi.session,
         retry: false,
       })
-      .then(() => navigate(consumeReturnTo(), { replace: true }))
-      .catch(setError)
+      .then(() => {
+        trackEvent("auth_sign_in_succeeded", { method: "oauth" })
+        navigate(consumeReturnTo(), { replace: true })
+      })
+      .catch((error) => {
+        trackEvent("auth_sign_in_failed", {
+          method: "oauth",
+          error_code: error instanceof ApiError ? error.code : undefined,
+        })
+        setError(error)
+      })
   }, [failed, navigate, queryClient])
   return (
     <AuthShell>

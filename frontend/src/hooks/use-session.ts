@@ -3,6 +3,7 @@ import { authApi, isUnauthenticated, type Session } from '@/lib/api'
 import { getDesktopCsrfToken } from '@/lib/desktop-auth-state'
 import { isTauri } from '@tauri-apps/api/core'
 import { useSessionBoundary } from '@/components/auth/session-boundary-context'
+import { resetAnalytics, trackEvent } from '@/lib/analytics'
 
 export const sessionQueryKey = ['auth', 'session'] as const
 
@@ -57,9 +58,15 @@ export function useLogout() {
   return useMutation({
     mutationFn: authApi.logout,
     retry: false,
-    onMutate: () => boundary.markIntentionalLogout(),
+    onMutate: () => {
+      boundary.markIntentionalLogout()
+      trackEvent('auth_logout_clicked')
+    },
     onError: () => boundary.clearIntentionalLogout(),
-    onSettled: () => queryClient.setQueryData(sessionQueryKey, null),
+    onSettled: () => {
+      resetAnalytics()
+      queryClient.setQueryData(sessionQueryKey, null)
+    },
   })
 }
 
@@ -70,6 +77,9 @@ export function useUpdateAutomaticPullRequests() {
     mutationFn: authApi.updateAutomaticPullRequests,
     retry: false,
     onSuccess: ({ automatic_pull_requests }) => {
+      trackEvent('settings_automatic_prs_toggled', {
+        enabled: automatic_pull_requests,
+      })
       queryClient.setQueryData<Session | null>(sessionQueryKey, (session) =>
         session
           ? { ...session, automatic_pull_requests }

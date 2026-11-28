@@ -12,6 +12,7 @@ import {
   type Notification,
   type NotificationPage,
 } from "@/lib/api"
+import { trackEvent } from "@/lib/analytics"
 import { toast } from "@/components/ui/toast"
 import { useSession } from "@/hooks/use-session"
 
@@ -104,6 +105,7 @@ export function useMarkNotificationRead() {
   return useMutation({
     mutationFn: notificationsApi.markRead,
     onMutate: async (notificationId) => {
+      trackEvent("notification_mark_read", { scope: "one" })
       await queryClient.cancelQueries({ queryKey: notificationsQueryKey })
       const previous = queryClient.getQueriesData<InfiniteData<NotificationPage>>({
         queryKey: notificationsQueryKey,
@@ -132,6 +134,7 @@ export function useMarkAllNotificationsRead() {
   return useMutation({
     mutationFn: notificationsApi.markAllRead,
     onMutate: async () => {
+      trackEvent("notification_mark_read", { scope: "all" })
       await queryClient.cancelQueries({ queryKey: notificationsQueryKey })
       const previous = queryClient.getQueriesData<InfiniteData<NotificationPage>>({
         queryKey: notificationsQueryKey,

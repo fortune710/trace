@@ -25,6 +25,7 @@ import {
   useDetachAgentSkill,
   useSkillsSearch,
 } from "@/hooks/use-agents"
+import { trackEvent } from "@/lib/analytics"
 import type { Agent, AgentSkill, SkillsCatalogSkill } from "@/lib/api"
 
 function skillName(skill: AgentSkill, index: number) {
@@ -93,6 +94,11 @@ export function AgentSkillsPanel({
       ? (search.data?.data ?? [])
       : (curated.data?.data ?? [])
 
+  function openPicker() {
+    trackEvent("agent_skills_picker_opened", { agent_id: agent.id })
+    setIsDialogOpen(true)
+  }
+
   function handleAttach(skill: SkillsCatalogSkill) {
     attachSkill.mutate(skill.id, {
       onSuccess: () => {
@@ -140,7 +146,7 @@ export function AgentSkillsPanel({
       {agent.skills.length === 0 ? (
         <button
           type="button"
-          onClick={() => setIsDialogOpen(true)}
+          onClick={openPicker}
           disabled={disabled}
           className="w-full text-left disabled:cursor-default"
         >
@@ -193,7 +199,7 @@ export function AgentSkillsPanel({
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setIsDialogOpen(true)}
+                onClick={openPicker}
               >
                 <HugeiconsIcon icon={PlusSignIcon} size={16} strokeWidth={2} />
                 Add skill

@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Linear } from "@/components/logos/linear";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
+import { trackEvent } from "@/lib/analytics";
 import { ApiError, authApi } from "@/lib/api";
 
 function errorMessage(error: unknown) {
@@ -13,11 +14,18 @@ function errorMessage(error: unknown) {
 
 export function LinearIntegrationCard() {
   const connect = useMutation({
-    mutationFn: authApi.beginLinearConnection,
+    mutationFn: () => {
+      trackEvent("integration_connect_started", { provider: "linear" });
+      return authApi.beginLinearConnection();
+    },
     onSuccess: ({ authorization_url }) => {
       window.location.assign(authorization_url);
     },
     onError: (error) => {
+      trackEvent("integration_connect_failed", {
+        provider: "linear",
+        error_code: error instanceof ApiError ? error.code : undefined,
+      });
       toast.add({
         type: "error",
         title: "Linear connection could not start",

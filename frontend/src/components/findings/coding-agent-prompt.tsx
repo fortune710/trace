@@ -111,7 +111,11 @@ export function CodingAgentPrompt({ findingId }: { findingId: string }) {
   }
 
   return (
-    <section className="mt-6" aria-labelledby="coding-agent-prompt-heading">
+    <section
+      className="ph-no-capture mt-6"
+      aria-labelledby="coding-agent-prompt-heading"
+      data-ph-mask
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2
           id="coding-agent-prompt-heading"

@@ -14,6 +14,7 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react"
 
 import { useLogout, useSession } from "@/hooks/use-session"
+import { trackEvent } from "@/lib/analytics"
 import { Button } from "@/components/ui/button"
 import {
   Popover,
@@ -174,7 +175,16 @@ export function AppSidebar() {
                 return (
                   <SidebarMenuItem key={item.to}>
                     <SidebarMenuButton
-                      render={<NavLink to={item.to} />}
+                      render={
+                        <NavLink
+                          to={item.to}
+                          onClick={() =>
+                            trackEvent("navigation_sidebar_clicked", {
+                              destination: item.to,
+                            })
+                          }
+                        />
+                      }
                       isActive={isActive}
                       tooltip={item.label}
                       className="h-9 rounded-sm px-3 py-2"

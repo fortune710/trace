@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import {
+  ApiError,
   findingsApi,
   issueTrackingApi,
   projectsApi,
@@ -8,6 +9,7 @@ import {
   type IssueProviderName,
   type IssueTrackingDetails,
 } from "@/lib/api"
+import { trackEvent } from "@/lib/analytics"
 
 export const issueTrackingQueryKey = ["issue-tracking"] as const
 
@@ -39,12 +41,29 @@ export function useCreateRemediationIssue(
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (provider: IssueProviderName) =>
-      remediationsApi.createIssue(remediationId!, provider),
-    onSuccess: () =>
+    mutationFn: (provider: IssueProviderName) => {
+      trackEvent("finding_issue_create_submitted", {
+        finding_id: findingId,
+        provider,
+      })
+      return remediationsApi.createIssue(remediationId!, provider)
+    },
+    onSuccess: (_result, provider) => {
+      trackEvent("finding_issue_create_succeeded", {
+        finding_id: findingId,
+        provider,
+      })
       queryClient.invalidateQueries({
         queryKey: [...issueTrackingQueryKey, "finding", findingId],
-      }),
+      })
+    },
+    onError: (error, provider) => {
+      trackEvent("finding_issue_create_failed", {
+        finding_id: findingId,
+        provider,
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
+    },
   })
 }
 
@@ -63,10 +82,15 @@ export function useUpdateProjectIssueTracking(projectId: string) {
   return useMutation({
     mutationFn: (details: IssueTrackingDetails) =>
       projectsApi.updateIssueTracking(projectId, details),
-    onSuccess: () =>
+    onSuccess: (_result, details) => {
+      trackEvent("project_issue_tracking_updated", {
+        project_id: projectId,
+        provider_count: details.connected_projects.length,
+      })
       queryClient.invalidateQueries({
         queryKey: [...issueTrackingQueryKey, "project", projectId],
-      }),
+      })
+    },
   })
 }
 

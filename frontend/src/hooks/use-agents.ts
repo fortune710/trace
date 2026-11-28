@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-query"
 
 import {
+  ApiError,
   agentsApi,
   credentialsApi,
   skillsApi,
@@ -17,6 +18,7 @@ import {
   type CredentialCreate,
   type SkillsCatalogSkill,
 } from "@/lib/api"
+import { trackEvent } from "@/lib/analytics"
 
 export type { Agent, AgentCreate, AgentUpdate, Credential }
 
@@ -79,9 +81,28 @@ export function useProviderCredentials() {
 export function useCreateAgent() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (agent: AgentCreate) => agentsApi.create(agent),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+    mutationFn: (agent: AgentCreate) => {
+      trackEvent("agent_create_submitted", {
+        review_category: agent.review_category,
+        model_provider: agent.model_provider,
+      })
+      return agentsApi.create(agent)
+    },
+    onSuccess: (created, agent) => {
+      trackEvent("agent_create_succeeded", {
+        agent_id: created.id,
+        review_category: agent.review_category,
+        model_provider: agent.model_provider,
+      })
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey })
+    },
+    onError: (error, agent) => {
+      trackEvent("agent_create_failed", {
+        review_category: agent.review_category,
+        model_provider: agent.model_provider,
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
+    },
   })
 }
 
@@ -90,8 +111,13 @@ export function useUpdateAgent() {
   return useMutation({
     mutationFn: ({ agentId, agent }: { agentId: string; agent: AgentUpdate }) =>
       agentsApi.update(agentId, agent),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+    onSuccess: (_updated, { agentId, agent }) => {
+      trackEvent("agent_updated", {
+        agent_id: agentId,
+        fields: Object.keys(agent),
+      })
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey })
+    },
   })
 }
 
@@ -99,8 +125,10 @@ export function useDisableAgent() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (agentId: string) => agentsApi.disable(agentId),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+    onSuccess: (_result, agentId) => {
+      trackEvent("agent_disabled", { agent_id: agentId })
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey })
+    },
   })
 }
 
@@ -116,8 +144,10 @@ export function useUploadAgentAvatar() {
       file: Blob
       config: AvatarConfig
     }) => agentsApi.uploadAvatar(agentId, file, config),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+    onSuccess: (_result, { agentId }) => {
+      trackEvent("agent_avatar_uploaded", { agent_id: agentId })
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey })
+    },
   })
 }
 
@@ -125,8 +155,10 @@ export function useDeleteAgentAvatar() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (agentId: string) => agentsApi.deleteAvatar(agentId),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+    onSuccess: (_result, agentId) => {
+      trackEvent("agent_avatar_deleted", { agent_id: agentId })
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey })
+    },
   })
 }
 
@@ -134,8 +166,20 @@ export function useCreateProviderCredential() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: credentialsApi.create,
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: credentialsQueryKey }),
+    onSuccess: (_created, credential) => {
+      trackEvent("settings_api_key_saved", {
+        provider: credential.provider,
+        action: "create",
+      })
+      queryClient.invalidateQueries({ queryKey: credentialsQueryKey })
+    },
+    onError: (error, credential) => {
+      trackEvent("settings_api_key_save_failed", {
+        provider: credential.provider,
+        action: "create",
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
+    },
   })
 }
 
@@ -158,8 +202,20 @@ export function useRotateProviderCredential() {
       credentialId: string
       credential: CredentialCreate
     }) => credentialsApi.rotate(credentialId, credential),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: credentialsQueryKey }),
+    onSuccess: (_rotated, { credential }) => {
+      trackEvent("settings_api_key_saved", {
+        provider: credential.provider,
+        action: "rotate",
+      })
+      queryClient.invalidateQueries({ queryKey: credentialsQueryKey })
+    },
+    onError: (error, { credential }) => {
+      trackEvent("settings_api_key_save_failed", {
+        provider: credential.provider,
+        action: "rotate",
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
+    },
   })
 }
 
@@ -186,18 +242,60 @@ export function useCuratedSkills(enabled: boolean) {
 export function useAttachAgentSkill(agentId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (skillId: string) => agentsApi.attachSkill(agentId, skillId),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+    mutationFn: (skillId: string) => {
+      trackEvent("agent_skill_attach_submitted", {
+        agent_id: agentId,
+        skill_id: skillId,
+        provider: "skills.sh",
+      })
+      return agentsApi.attachSkill(agentId, skillId)
+    },
+    onSuccess: (_result, skillId) => {
+      trackEvent("agent_skill_attach_succeeded", {
+        agent_id: agentId,
+        skill_id: skillId,
+        provider: "skills.sh",
+      })
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey })
+    },
+    onError: (error, skillId) => {
+      trackEvent("agent_skill_attach_failed", {
+        agent_id: agentId,
+        skill_id: skillId,
+        provider: "skills.sh",
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
+    },
   })
 }
 
 export function useDetachAgentSkill(agentId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (skillId: string) => agentsApi.detachSkill(agentId, skillId),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+    mutationFn: (skillId: string) => {
+      trackEvent("agent_skill_detach_submitted", {
+        agent_id: agentId,
+        skill_id: skillId,
+        provider: "skills.sh",
+      })
+      return agentsApi.detachSkill(agentId, skillId)
+    },
+    onSuccess: (_result, skillId) => {
+      trackEvent("agent_skill_detach_succeeded", {
+        agent_id: agentId,
+        skill_id: skillId,
+        provider: "skills.sh",
+      })
+      queryClient.invalidateQueries({ queryKey: agentsQueryKey })
+    },
+    onError: (error, skillId) => {
+      trackEvent("agent_skill_detach_failed", {
+        agent_id: agentId,
+        skill_id: skillId,
+        provider: "skills.sh",
+        error_code: error instanceof ApiError ? error.code : undefined,
+      })
+    },
   })
 }
 

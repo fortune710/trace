@@ -9,6 +9,7 @@ import {
   useMarkNotificationRead,
   useNotifications,
 } from "@/hooks/use-notifications"
+import { trackEvent } from "@/lib/analytics"
 import type { Notification } from "@/lib/api"
 
 function isSafeActionPath(actionPath: string | null): actionPath is string {
@@ -223,6 +224,11 @@ export function NotificationsPage() {
                       <Link
                         to={notification.action_path}
                         className="mt-3 inline-block text-sm text-primary hover:underline"
+                        onClick={() =>
+                          trackEvent("notification_opened", {
+                            notification_id: notification.id,
+                          })
+                        }
                       >
                         View
                       </Link>
@@ -232,6 +238,11 @@ export function NotificationsPage() {
                         target="_blank"
                         rel="noopener noreferrer"
                         className="mt-3 inline-block text-sm text-primary hover:underline"
+                        onClick={() =>
+                          trackEvent("notification_opened", {
+                            notification_id: notification.id,
+                          })
+                        }
                       >
                         View
                       </a>

@@ -115,7 +115,7 @@ function ProviderApiKeyCard({
       </h2>
       <p className="mt-0 text-base text-muted-foreground">{description}</p>
       <form
-        className="mt-4 rounded-lg border border-white/6 bg-card p-3"
+        className="ph-no-capture mt-4 rounded-lg border border-white/6 bg-card p-3"
         onSubmit={handleSubmit}
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

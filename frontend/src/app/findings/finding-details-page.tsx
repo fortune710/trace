@@ -2,6 +2,9 @@ import { Link, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { trackEvent } from "@/lib/analytics";
+import { useTrackEntityOpened } from "@/hooks/use-track-entity-opened";
+
 import { FindingDetailsPageSkeleton } from "@/components/findings/finding-details-page-skeleton";
 import { CodingAgentPrompt } from "@/components/findings/coding-agent-prompt";
 import { FindingIssueActions } from "@/components/findings/finding-issue-actions";
@@ -78,6 +81,17 @@ export function FindingDetailsPage() {
   const sourceFilesForFinding = finding.data?.source_location
     ? sourceFiles(finding.data.source_location)
     : [];
+
+  const openedFinding = finding.data;
+  useTrackEntityOpened(openedFinding?.id, () => {
+    if (!openedFinding) return;
+    trackEvent("finding_opened", {
+      finding_id: openedFinding.id,
+      review_id: openedFinding.review_id,
+      severity: openedFinding.severity,
+      status: openedFinding.status,
+    });
+  });
 
   return (
     <AppShell>
