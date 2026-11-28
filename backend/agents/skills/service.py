@@ -82,7 +82,12 @@ def _raise_access(connection: Connection, resource_id: UUID) -> None:
 
 
 def _lock_owned_agent(connection: Connection, owner_id: UUID, agent_id: UUID) -> Agent:
-    with timed_step("agent_row_lock", agent_id=agent_id, owner_id=owner_id) as fields:
+    with timed_step(
+        "agent_skill_lock",
+        "agent_row_lock",
+        agent_id=agent_id,
+        owner_id=owner_id,
+    ) as fields:
         agent = _orm_scalar_one_or_none(
             connection,
             sa.select(Agent)
@@ -91,9 +96,7 @@ def _lock_owned_agent(connection: Connection, owner_id: UUID, agent_id: UUID) ->
         )
         if agent is None:
             fields["outcome"] = "miss"
-            skills_log("agent_skill_lock", level=logging.INFO, fields=fields)
             _raise_access(connection, agent_id)
-        skills_log("agent_skill_lock", fields=fields)
     return cast(Agent, agent)
 
 
@@ -162,28 +165,25 @@ class AgentSkillService:
     ) -> dict[str, object]:
         try:
             with timed_step(
+                "agent_skill_attach",
                 "validation",
+                level=logging.INFO,
+                error_level=logging.WARNING,
                 owner_id=owner_id,
                 agent_id=agent_id,
                 skill_id=skill_id,
             ) as fields:
-                normalized = normalize_skill_id(skill_id)
+                try:
+                    normalized = normalize_skill_id(skill_id)
+                except SkillValidationError:
+                    fields["error_code"] = "skill_id_invalid"
+                    raise
                 fields["skill_id"] = normalized
-                skills_log("agent_skill_attach", fields=fields)
         except SkillValidationError as error:
-            skills_log(
-                "agent_skill_attach",
-                level=logging.WARNING,
-                step="validation",
-                outcome="error",
-                error_code="skill_id_invalid",
-                error_type=type(error).__name__,
-                owner_id=owner_id,
-                agent_id=agent_id,
-            )
             raise RepositoryInvalidRequest() from error
 
         with timed_step(
+            "agent_skill_attach",
             "upstream_fetch",
             owner_id=owner_id,
             agent_id=agent_id,
@@ -192,9 +192,9 @@ class AgentSkillService:
             detail = self._map_client_errors(lambda: self._client.get_skill(normalized))
             fetch_fields["skill_source"] = detail.get("source")
             fetch_fields["skill_slug"] = detail.get("slug")
-            skills_log("agent_skill_attach", fields=fetch_fields)
 
         with timed_step(
+            "agent_skill_attach",
             "size_check",
             owner_id=owner_id,
             agent_id=agent_id,
@@ -223,7 +223,6 @@ class AgentSkillService:
             size_fields["file_count"] = (
                 len(snapshot_files) if isinstance(snapshot_files, list) else 0
             )
-            skills_log("agent_skill_attach", fields=size_fields)
 
         try:
             with principal_transaction(self._engine, owner_id) as connection:
@@ -253,6 +252,7 @@ class AgentSkillService:
                 for row in existing:
                     if row.skill_id == normalized:
                         with timed_step(
+                            "agent_skill_attach",
                             "db_update",
                             owner_id=owner_id,
                             agent_id=agent_id,
@@ -288,7 +288,6 @@ class AgentSkillService:
                                 ),
                             )
                             update_fields["operation"] = "refresh_existing"
-                            skills_log("agent_skill_attach", fields=update_fields)
                         return self._row_response(refreshed)
 
                 if len(existing) >= MAX_AGENT_SKILLS:
@@ -307,6 +306,7 @@ class AgentSkillService:
 
                 skill_row_id = uuid7()
                 with timed_step(
+                    "agent_skill_attach",
                     "db_insert",
                     owner_id=owner_id,
                     agent_id=agent_id,
@@ -331,18 +331,17 @@ class AgentSkillService:
                         )
                     )
                     insert_fields["operation"] = "insert"
-                    skills_log("agent_skill_attach", fields=insert_fields)
 
                 with timed_step(
+                    "agent_skill_attach",
                     "mirror_agents_skills",
                     owner_id=owner_id,
                     agent_id=agent_id,
                     skill_id=normalized,
-                ) as mirror_fields:
+                ):
                     self._sync_agent_skills_json(
                         connection, owner_id=owner_id, agent_id=agent_id
                     )
-                    skills_log("agent_skill_attach", fields=mirror_fields)
 
                 created = _orm_scalar_one(
                     connection,
@@ -352,6 +351,8 @@ class AgentSkillService:
                     ),
                 )
         except sa.exc.IntegrityError as error:
+            # Omit exc_info: SQLAlchemy may embed bound skill_md/files in the
+            # exception text. Keep class/sqlstate via classify_db_error only.
             skills_log(
                 "agent_skill_attach",
                 level=logging.ERROR,
@@ -361,7 +362,6 @@ class AgentSkillService:
                 owner_id=owner_id,
                 agent_id=agent_id,
                 skill_id=normalized,
-                exc_info=True,
                 fields=classify_db_error(error),
             )
             raise ResourceConflict("agent_skill_conflict") from error
@@ -381,29 +381,26 @@ class AgentSkillService:
     def detach(self, *, owner_id: UUID, agent_id: UUID, skill_id: str) -> None:
         try:
             with timed_step(
+                "agent_skill_detach",
                 "validation",
+                error_level=logging.WARNING,
                 owner_id=owner_id,
                 agent_id=agent_id,
                 skill_id=skill_id,
             ) as fields:
-                normalized = normalize_skill_id(skill_id)
+                try:
+                    normalized = normalize_skill_id(skill_id)
+                except SkillValidationError:
+                    fields["error_code"] = "skill_id_invalid"
+                    raise
                 fields["skill_id"] = normalized
-                skills_log("agent_skill_detach", fields=fields)
         except SkillValidationError as error:
-            skills_log(
-                "agent_skill_detach",
-                level=logging.WARNING,
-                step="validation",
-                outcome="error",
-                error_code="skill_id_invalid",
-                owner_id=owner_id,
-                agent_id=agent_id,
-            )
             raise RepositoryInvalidRequest() from error
 
         with principal_transaction(self._engine, owner_id) as connection:
             _lock_owned_agent(connection, owner_id, agent_id)
             with timed_step(
+                "agent_skill_detach",
                 "db_delete",
                 owner_id=owner_id,
                 agent_id=agent_id,
@@ -418,21 +415,17 @@ class AgentSkillService:
                 )
                 if result.rowcount == 0:
                     delete_fields["outcome"] = "not_found"
-                    skills_log(
-                        "agent_skill_detach", level=logging.INFO, fields=delete_fields
-                    )
                     raise ResourceNotFound()
-                skills_log("agent_skill_detach", fields=delete_fields)
             with timed_step(
+                "agent_skill_detach",
                 "mirror_agents_skills",
                 owner_id=owner_id,
                 agent_id=agent_id,
                 skill_id=normalized,
-            ) as mirror_fields:
+            ):
                 self._sync_agent_skills_json(
                     connection, owner_id=owner_id, agent_id=agent_id
                 )
-                skills_log("agent_skill_detach", fields=mirror_fields)
 
     def replace_skills_mirror(
         self,
@@ -521,6 +514,7 @@ class AgentSkillService:
         snapshots: list[object] = list(legacy)
         for index, skill_id in enumerate(unique_ids):
             with timed_step(
+                "agent_skill_replace",
                 "upstream_fetch",
                 owner_id=owner_id,
                 agent_id=agent_id,
@@ -530,7 +524,6 @@ class AgentSkillService:
                     lambda sid=skill_id: self._client.get_skill(sid)
                 )
                 fetch_fields["skill_source"] = detail.get("source")
-                skills_log("agent_skill_replace", fields=fetch_fields)
             snapshot = skill_snapshot_dict(
                 skill_id=detail["id"],
                 slug=detail["slug"],
@@ -550,11 +543,12 @@ class AgentSkillService:
                 ],
             )
             with timed_step(
+                "agent_skill_replace",
                 "db_insert",
                 owner_id=owner_id,
                 agent_id=agent_id,
                 skill_id=detail["id"],
-            ) as insert_fields:
+            ):
                 connection.execute(
                     sa.insert(AgentSkill).values(
                         id=uuid7(),
@@ -573,10 +567,10 @@ class AgentSkillService:
                         sort_order=index,
                     )
                 )
-                skills_log("agent_skill_replace", fields=insert_fields)
             snapshots.append(snapshot)
 
         with timed_step(
+            "agent_skill_replace",
             "mirror_agents_skills",
             owner_id=owner_id,
             agent_id=agent_id,
@@ -591,7 +585,6 @@ class AgentSkillService:
                 )
             )
             mirror_fields["snapshot_count"] = len(snapshots)
-            skills_log("agent_skill_replace", fields=mirror_fields)
         return snapshots
 
     def _sync_agent_skills_json(

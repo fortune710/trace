@@ -14,6 +14,7 @@ from agents.skills.logging import (
     reset_skills_log_context,
     skills_log,
     skills_log_context,
+    timed_step,
 )
 
 
@@ -91,6 +92,71 @@ def test_unconfigured_transport_logs_distinct_error_code(
         assert "oidc_token" not in payload
         assert "proxy_secret" not in payload
         assert "Authorization" not in json.dumps(payload)
+
+
+def test_skills_log_keeps_safe_diagnostic_flags(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="trace.skills")
+    skills_log(
+        "skills_transport_status",
+        proxy_secret_configured=True,
+        skill_md_chars=128,
+        proxy_secret="must-not-appear",
+        skill_md="---\nbody\n",
+    )
+
+    payload = json.loads(caplog.records[0].getMessage())
+    assert payload["proxy_secret_configured"] is True
+    assert payload["skill_md_chars"] == 128
+    assert "proxy_secret" not in payload
+    assert "skill_md" not in payload
+
+
+def test_timed_step_emits_after_duration_and_outcome(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="trace.skills")
+    with timed_step("agent_skill_attach", "size_check", skill_id="a/b/c") as fields:
+        fields["skill_md_chars"] = 42
+
+    assert len(caplog.records) == 1
+    payload = json.loads(caplog.records[0].getMessage())
+    assert payload["event"] == "agent_skill_attach"
+    assert payload["step"] == "size_check"
+    assert payload["outcome"] == "success"
+    assert payload["skill_md_chars"] == 42
+    assert isinstance(payload["duration_ms"], float)
+    assert payload["duration_ms"] >= 0
+
+
+def test_timed_step_emits_finalized_error_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR, logger="trace.skills")
+    with (
+        pytest.raises(RuntimeError, match="boom"),
+        timed_step("agent_skill_attach", "db_insert") as fields,
+    ):
+        fields["error_code"] = "agent_skill_conflict"
+        raise RuntimeError("boom")
+
+    payload = json.loads(caplog.records[0].getMessage())
+    assert payload["outcome"] == "error"
+    assert payload["error_code"] == "agent_skill_conflict"
+    assert payload["error_type"] == "RuntimeError"
+    assert isinstance(payload["duration_ms"], float)
+
+
+def test_blank_base_url_keeps_string_default() -> None:
+    settings = SkillsSettings(
+        base_url="   ",
+        oidc_token=None,
+        proxy_url="https://example.com/api/skills-sh",
+        proxy_secret=SecretStr("proxy-secret"),
+    )
+    assert settings.base_url == "https://skills.sh"
+    assert settings.proxy_url == "https://example.com/api/skills-sh"
 
 
 def test_proxy_success_logs_transport_and_upstream_status(

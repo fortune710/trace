@@ -127,7 +127,7 @@ class SkillsShClient:
         return self._normalize_detail(payload)
 
     def _normalize_detail(self, payload: dict[str, Any]) -> dict[str, Any]:
-        with timed_step("normalize_detail") as step_fields:
+        with timed_step("skills_upstream_normalize", "normalize_detail") as step_fields:
             skill_id = normalize_skill_id(str(payload.get("id", "")))
             source = str(payload.get("source", ""))
             slug = str(payload.get("slug", ""))
@@ -137,7 +137,6 @@ class SkillsShClient:
             if f"{source}/{slug}" != skill_id:
                 step_fields["outcome"] = "error"
                 step_fields["error_code"] = "skills_payload_invalid"
-                skills_log("skills_upstream_normalize", level=40, fields=step_fields)
                 raise SkillsShError("skills_payload_invalid", status_code=502)
 
             files_raw = payload.get("files")
@@ -148,9 +147,6 @@ class SkillsShClient:
                     step_fields["outcome"] = "error"
                     step_fields["error_code"] = "skills_payload_too_large"
                     step_fields["file_count"] = len(files_raw)
-                    skills_log(
-                        "skills_upstream_normalize", level=40, fields=step_fields
-                    )
                     raise SkillsShError("skills_payload_too_large", status_code=502)
                 for entry in files_raw:
                     if not isinstance(entry, dict):
@@ -162,16 +158,10 @@ class SkillsShClient:
                     if ".." in path or path.startswith("/") or len(path) > 512:
                         step_fields["outcome"] = "error"
                         step_fields["error_code"] = "skills_payload_invalid"
-                        skills_log(
-                            "skills_upstream_normalize", level=40, fields=step_fields
-                        )
                         raise SkillsShError("skills_payload_invalid", status_code=502)
                     if len(contents) > self._settings.max_file_chars:
                         step_fields["outcome"] = "error"
                         step_fields["error_code"] = "skills_payload_too_large"
-                        skills_log(
-                            "skills_upstream_normalize", level=40, fields=step_fields
-                        )
                         raise SkillsShError("skills_payload_too_large", status_code=502)
                     files.append({"path": path, "contents": contents})
                     if path == "SKILL.md" or path.endswith("/SKILL.md"):
@@ -180,13 +170,11 @@ class SkillsShClient:
             if not skill_md:
                 step_fields["outcome"] = "error"
                 step_fields["error_code"] = "skills_missing_skill_md"
-                skills_log("skills_upstream_normalize", level=40, fields=step_fields)
                 raise SkillsShError("skills_missing_skill_md", status_code=502)
             if len(skill_md) > self._settings.max_skill_md_chars:
                 step_fields["outcome"] = "error"
                 step_fields["error_code"] = "skills_payload_too_large"
                 step_fields["skill_md_chars"] = len(skill_md)
-                skills_log("skills_upstream_normalize", level=40, fields=step_fields)
                 raise SkillsShError("skills_payload_too_large", status_code=502)
 
             install_url = payload.get("installUrl")
@@ -208,7 +196,6 @@ class SkillsShClient:
 
             step_fields["file_count"] = len(files)
             step_fields["skill_md_chars"] = len(skill_md)
-            skills_log("skills_upstream_normalize", fields=step_fields)
             return {
                 "id": skill_id,
                 "slug": slug,

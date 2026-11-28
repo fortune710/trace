@@ -54,6 +54,31 @@ def _parse_locations(server_body: str) -> list[tuple[str, str, str]]:
     return locations
 
 
+def _direct_location_directives(body: str) -> str:
+    """Return a location body with nested location blocks removed."""
+
+    cleaned = body
+    while True:
+        match = LOCATION_RE.search(cleaned)
+        if match is None:
+            return cleaned
+        open_brace = match.end() - 1
+        depth = 0
+        end: int | None = None
+        for index in range(open_brace, len(cleaned)):
+            char = cleaned[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+        if end is None:
+            raise AssertionError("Unbalanced braces while stripping nested locations")
+        cleaned = cleaned[: match.start()] + cleaned[end:]
+
+
 class NginxAgentsLocationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.conf = HTTPS_CONF.read_text(encoding="utf-8")
@@ -150,13 +175,16 @@ class NginxAgentsLocationTests(unittest.TestCase):
         ]
         self.assertEqual(len(agents_prefix), 1)
         self.assertEqual(len(api_prefix), 1)
+        # Nested avatar location also includes the backend proxy; assert the
+        # parent prefix has its own include so skill paths stay proxied if the
+        # nested block is removed.
         self.assertIn(
             "include /etc/nginx/trace/backend-proxy.conf;",
-            agents_prefix[0],
+            _direct_location_directives(agents_prefix[0]),
         )
         self.assertIn(
             "include /etc/nginx/trace/backend-proxy.conf;",
-            api_prefix[0],
+            _direct_location_directives(api_prefix[0]),
         )
         # No dedicated trailing-slash trap for /skills — catalog lives under /api/.
         skills_exact = [

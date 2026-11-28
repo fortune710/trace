@@ -46,9 +46,19 @@ class SkillsSettings(BaseSettings):
     max_files: int = Field(default=32, ge=1, le=64)
     max_file_chars: int = Field(default=100_000, ge=1_000, le=500_000)
 
-    @field_validator("proxy_url", "base_url", mode="before")
+    @field_validator("base_url", mode="before")
     @classmethod
-    def _blank_string_to_none_or_strip(cls, value: object) -> object:
+    def _strip_or_default_base_url(cls, value: object) -> object:
+        if value is None:
+            return "https://skills.sh"
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or "https://skills.sh"
+        return value
+
+    @field_validator("proxy_url", mode="before")
+    @classmethod
+    def _blank_proxy_url_to_none(cls, value: object) -> object:
         if value is None:
             return None
         if isinstance(value, str):

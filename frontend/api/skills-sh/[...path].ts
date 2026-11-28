@@ -51,13 +51,15 @@ function authorized(request: Request): boolean {
 }
 
 function resolveProxyPathname(url: URL): string {
-  if (url.pathname.startsWith("/api/skills-sh/")) {
-    return url.pathname
-  }
-  // Vercel splat rewrites may surface the remainder as ?path=a/b/c.
+  // Vercel splat rewrites may surface the remainder as ?path=a/b/c while the
+  // request pathname is the literal catch-all route `/api/skills-sh/[...path]`.
+  // Prefer the query splat so nested proxy paths survive sanitizePath.
   const splat = url.searchParams.getAll("path").join("/")
   if (splat) {
     return `/api/skills-sh/${splat.replace(/^\/+/, "")}`
+  }
+  if (url.pathname.startsWith("/api/skills-sh/")) {
+    return url.pathname
   }
   return url.pathname
 }

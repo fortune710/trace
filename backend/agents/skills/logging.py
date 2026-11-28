@@ -38,6 +38,15 @@ _FORBIDDEN_FIELD_NAMES = frozenset(
         "vercel_oidc_token",
     }
 )
+# Safe diagnostics that contain sensitive substrings but never hold secret values.
+_SAFE_DIAGNOSTIC_KEYS = frozenset(
+    {
+        "oidc_configured",
+        "proxy_secret_configured",
+        "proxy_url_configured",
+        "skill_md_chars",
+    }
+)
 _SENSITIVE_KEY = re.compile(
     r"(api[_-]?key|authorization|cookie|credential|csrf|password|secret|token|skill_md)",
     re.IGNORECASE,
@@ -140,8 +149,20 @@ def classify_db_error(error: BaseException) -> dict[str, object]:
 
 
 @contextmanager
-def timed_step(step: str, **fields: object) -> Iterator[dict[str, object]]:
-    """Time a step and return a mutable bag of outcome fields for the caller."""
+def timed_step(
+    event: str,
+    step: str,
+    *,
+    level: int = logging.INFO,
+    error_level: int = logging.ERROR,
+    **fields: object,
+) -> Iterator[dict[str, object]]:
+    """Time a step and emit one finalized log record after outcome/duration settle.
+
+    Callers may mutate the yielded dict with extra safe fields. Do not call
+    ``skills_log`` inside the block for the same step — this context manager
+    emits after ``outcome`` and ``duration_ms`` are set, including on failure.
+    """
 
     started = time.perf_counter()
     outcome: dict[str, object] = {"step": step, **_sanitize_fields(fields)}
@@ -155,6 +176,8 @@ def timed_step(step: str, **fields: object) -> Iterator[dict[str, object]]:
         raise
     finally:
         outcome["duration_ms"] = round((time.perf_counter() - started) * 1000, 3)
+        log_level = error_level if outcome.get("outcome") == "error" else level
+        skills_log(event, level=log_level, fields=outcome)
 
 
 def _sanitize_fields(fields: Mapping[str, object]) -> dict[str, object]:
@@ -163,7 +186,9 @@ def _sanitize_fields(fields: Mapping[str, object]) -> dict[str, object]:
         if not isinstance(key, str):
             continue
         lowered = key.lower()
-        if lowered in _FORBIDDEN_FIELD_NAMES or _SENSITIVE_KEY.search(key):
+        if lowered in _FORBIDDEN_FIELD_NAMES:
+            continue
+        if lowered not in _SAFE_DIAGNOSTIC_KEYS and _SENSITIVE_KEY.search(key):
             continue
         cleaned[key] = _sanitize_value(value)
     return cleaned
