@@ -2,6 +2,7 @@
 
 from agents import avatar_models as agent_avatar_models  # noqa: F401
 from agents.models import Agent
+from agents.skill_models import AgentSkill
 from artifacts.models import LocalFileBackup
 from audit.models import AuditDeliveryJob
 from auth.models import (
@@ -45,6 +46,7 @@ from users.models import User
 
 __all__ = [
     "Agent",
+    "AgentSkill",
     "AuditDeliveryJob",
     "AuthIdentity",
     "AuthSession",

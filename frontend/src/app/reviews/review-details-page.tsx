@@ -21,9 +21,14 @@ function displaySourceKind(kind: "github" | "local") {
   return kind === "github" ? "GitHub" : "Local folder"
 }
 
-function displaySkills(skills: Array<string | Record<string, object>>) {
+function displaySkills(skills: Array<string | Record<string, unknown>>) {
   return skills
-    .map((skill) => (typeof skill === "string" ? skill : JSON.stringify(skill)))
+    .map((skill) => {
+      if (typeof skill === "string") return skill
+      if (typeof skill.name === "string" && skill.name.trim()) return skill.name
+      if (typeof skill.id === "string" && skill.id.trim()) return skill.id
+      return "Configured skill"
+    })
     .join(", ")
 }
 

@@ -5,6 +5,7 @@ this module preserve the existing import surface during the transition.
 """
 
 from agents.models import Agent
+from agents.skill_models import AgentSkill
 from artifacts.models import LocalFileBackup
 from audit.models import AuditDeliveryJob, AuditDeliveryStatus
 from auth.models import (
@@ -69,6 +70,7 @@ from users.models import User
 
 __all__ = [
     "Agent",
+    "AgentSkill",
     "AuditDeliveryJob",
     "AuditDeliveryStatus",
     "AuthIdentity",

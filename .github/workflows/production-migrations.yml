@@ -79,6 +79,8 @@ jobs:
           AGENT_GOOGLE_API_KEY: ${{ secrets.AGENT_GOOGLE_API_KEY }}
           AGENT_OPENAI_API_KEY: ${{ secrets.AGENT_OPENAI_API_KEY }}
           AGENT_XAI_API_KEY: ${{ secrets.AGENT_XAI_API_KEY }}
+          SKILLS_SH_PROXY_SECRET: ${{ secrets.SKILLS_SH_PROXY_SECRET }}
+          SKILLS_SH_PROXY_URL: ${{ secrets.SKILLS_SH_PROXY_URL }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
           AUDIT_DEAD_LETTER_RETENTION_DAYS: ${{ secrets.AUDIT_DEAD_LETTER_RETENTION_DAYS }}
           AUDIT_HOST: ${{ secrets.AUDIT_HOST }}

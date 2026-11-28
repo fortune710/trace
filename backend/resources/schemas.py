@@ -33,6 +33,19 @@ ShortName = Annotated[
 ]
 
 
+def _reject_client_skill_bodies(
+    value: list[dict[str, object] | str],
+) -> list[dict[str, object] | str]:
+    """Clients may reference skills by id, but must not upload skill bodies."""
+
+    for skill in value:
+        if isinstance(skill, dict) and (
+            "skill_md" in skill or "files" in skill or "contents" in skill
+        ):
+            raise ValueError("skill_body_not_allowed")
+    return value
+
+
 class PageQuery(RequestModel):
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=50, ge=1, le=100)
@@ -176,8 +189,15 @@ class AgentCreate(RequestModel):
         ]
         | None
     ) = None
-    skills: list[dict[str, object] | str] = Field(default_factory=list, max_length=64)
+    skills: list[dict[str, object] | str] = Field(default_factory=list, max_length=16)
     credential_id: UUID | None = None
+
+    @field_validator("skills")
+    @classmethod
+    def reject_client_supplied_skill_bodies(
+        cls, value: list[dict[str, object] | str]
+    ) -> list[dict[str, object] | str]:
+        return _reject_client_skill_bodies(value)
 
 
 class AgentUpdate(RequestModel):
@@ -197,8 +217,17 @@ class AgentUpdate(RequestModel):
         ]
         | None
     ) = None
-    skills: list[dict[str, object] | str] | None = Field(default=None, max_length=64)
+    skills: list[dict[str, object] | str] | None = Field(default=None, max_length=16)
     credential_id: UUID | None = None
+
+    @field_validator("skills")
+    @classmethod
+    def reject_client_supplied_skill_bodies(
+        cls, value: list[dict[str, object] | str] | None
+    ) -> list[dict[str, object] | str] | None:
+        if value is None:
+            return None
+        return _reject_client_skill_bodies(value)
 
 
 class AgentResponse(RequestModel):
@@ -221,6 +250,71 @@ class AgentResponse(RequestModel):
 class AgentPage(RequestModel):
     items: list[AgentResponse]
     next_offset: int | None
+
+
+class AgentSkillAttach(RequestModel):
+    skill_id: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=3, max_length=256)
+    ]
+
+
+class AgentSkillResponse(RequestModel):
+    id: UUID
+    agent_id: UUID
+    skill_id: str
+    slug: str
+    name: str
+    source: str
+    source_type: str
+    install_url: str | None
+    url: str
+    content_hash: str | None
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentSkillPage(RequestModel):
+    items: list[AgentSkillResponse]
+
+
+class SkillsCatalogSkill(RequestModel):
+    id: str
+    slug: str
+    name: str
+    source: str
+    installs: int | None = None
+    source_type: str | None = None
+    install_url: str | None = None
+    url: str | None = None
+    is_duplicate: bool | None = None
+
+
+class SkillsCatalogPage(RequestModel):
+    data: list[SkillsCatalogSkill]
+    pagination: dict[str, object] | None = None
+    query: str | None = None
+    search_type: str | None = None
+    count: int | None = None
+    duration_ms: int | None = None
+    total_owners: int | None = None
+    total_skills: int | None = None
+    generated_at: str | None = None
+
+
+class SkillsCatalogDetail(RequestModel):
+    id: str
+    slug: str
+    name: str
+    source: str
+    source_type: str
+    installs: int | None = None
+    install_url: str | None = None
+    url: str
+    hash: str | None = None
+    # Detail responses intentionally omit skill bodies from list/search UI
+    # round-trips; attach resolves content server-side.
+    has_skill_md: bool = True
 
 
 class AgentModelOption(RequestModel):

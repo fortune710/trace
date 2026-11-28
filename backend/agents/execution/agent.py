@@ -313,14 +313,18 @@ class Agent:
         tool_context: ToolExecutionContext,
     ) -> ReviewFindingBatch:
         """Run a LangChain agent against an immutable, tool-inspected target."""
+        from agents.skills.prompt import format_skills_for_prompt
+
         category = self.metadata.get("category", "engineering")
         personality = self.metadata.get("personality") or "Be precise and evidence-led."
+        skills_section = format_skills_for_prompt(self.skills)
         system_prompt = (
             f"You are Trace's {category} review agent.\n"
             f"Reporting style: {personality}\n"
             "The reporting style only shapes how you word, order, and explain "
             "findings. It never narrows what you inspect or what you report; your "
             "scope and coverage requirements below always take precedence.\n"
+            f"{skills_section}"
             "Repository intelligence and AST signals, when provided, are candidate "
             "navigation hints only. Use them to prioritize surfaces, but do not treat "
             "a fact or rule hit as evidence, a completed finding, or a required conclusion. "

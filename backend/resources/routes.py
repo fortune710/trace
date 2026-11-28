@@ -23,6 +23,8 @@ from agents.avatar import (
     validate_avatar_png,
 )
 from agents.catalog import model_catalog_response
+from agents.skills.service import AgentSkillService
+from agents.skills.validation import SkillValidationError, normalize_skill_id
 from audit.emit import enqueue_audit
 from audit.outbox import AuditRecorder
 from auth.audit import AuditHasher, log_auth_event
@@ -62,6 +64,9 @@ from resources.schemas import (
     AgentModelCatalogResponse,
     AgentPage,
     AgentResponse,
+    AgentSkillAttach,
+    AgentSkillPage,
+    AgentSkillResponse,
     AgentUpdate,
     CredentialCreate,
     CredentialPage,
@@ -80,6 +85,8 @@ from resources.schemas import (
     ReviewCreate,
     ReviewPage,
     ReviewResponse,
+    SkillsCatalogDetail,
+    SkillsCatalogPage,
 )
 from resources.services import (
     AgentService,
@@ -117,6 +124,10 @@ def install_resource_routes(
     @lru_cache
     def agent_service() -> AgentService:
         return AgentService(get_engine())
+
+    @lru_cache
+    def agent_skill_service() -> AgentSkillService:
+        return AgentSkillService(get_engine())
 
     @lru_cache
     def review_service() -> ReviewService:
@@ -400,6 +411,132 @@ def install_resource_routes(
             media_type=avatar.content_type,
             headers=headers,
         )
+
+    @app.get("/skills", response_model=SkillsCatalogPage)
+    def list_skills_catalog(
+        principal: CurrentPrincipal,
+        view: str = Query(default="all-time"),
+        page: int = Query(default=0, ge=0, le=10_000),
+        per_page: int = Query(default=20, ge=1, le=100),
+        source: str | None = Query(default=None, max_length=200),
+    ) -> dict[str, object]:
+        del principal
+        payload = agent_skill_service().list_catalog(
+            view=view, page=page, per_page=per_page, source=source
+        )
+        return _skills_catalog_page(payload)
+
+    @app.get("/skills/search", response_model=SkillsCatalogPage)
+    def search_skills_catalog(
+        principal: CurrentPrincipal,
+        q: str = Query(min_length=2, max_length=200),
+        limit: int = Query(default=20, ge=1, le=100),
+        owner: str | None = Query(default=None, max_length=100),
+    ) -> dict[str, object]:
+        del principal
+        payload = agent_skill_service().search_catalog(
+            query=q, limit=limit, owner=owner
+        )
+        return _skills_catalog_page(payload)
+
+    @app.get("/skills/curated", response_model=SkillsCatalogPage)
+    def curated_skills_catalog(principal: CurrentPrincipal) -> dict[str, object]:
+        del principal
+        payload = agent_skill_service().curated_catalog()
+        # Flatten curated owner groups into a skill list for the UI.
+        data: list[dict[str, object]] = []
+        for group in payload.get("data", []):
+            if not isinstance(group, dict):
+                continue
+            skills = group.get("skills")
+            if not isinstance(skills, list):
+                continue
+            for skill in skills:
+                if isinstance(skill, dict):
+                    data.append(skill)
+        return _skills_catalog_page(
+            {
+                "data": data,
+                "totalOwners": payload.get("totalOwners"),
+                "totalSkills": payload.get("totalSkills"),
+                "generatedAt": payload.get("generatedAt"),
+            }
+        )
+
+    @app.get("/skills/{skill_id:path}", response_model=SkillsCatalogDetail)
+    def get_skills_catalog_detail(
+        skill_id: str, principal: CurrentPrincipal
+    ) -> dict[str, object]:
+        del principal
+        try:
+            normalize_skill_id(skill_id)
+        except SkillValidationError as error:
+            raise RepositoryInvalidRequest() from error
+        detail = agent_skill_service().get_catalog_skill(skill_id)
+        return {
+            "id": detail["id"],
+            "slug": detail["slug"],
+            "name": detail["name"],
+            "source": detail["source"],
+            "source_type": detail["source_type"],
+            "installs": detail.get("installs"),
+            "install_url": detail.get("install_url"),
+            "url": detail["url"],
+            "hash": detail.get("hash"),
+            "has_skill_md": bool(detail.get("skill_md")),
+        }
+
+    @app.get("/agents/{agent_id}/skills", response_model=AgentSkillPage)
+    def list_agent_skills(
+        agent_id: UUID, principal: CurrentPrincipal
+    ) -> dict[str, object]:
+        items = agent_skill_service().list_for_agent(
+            owner_id=principal.user_id, agent_id=agent_id
+        )
+        return {"items": items}
+
+    @app.post(
+        "/agents/{agent_id}/skills",
+        response_model=AgentSkillResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def attach_agent_skill(
+        request: Request,
+        agent_id: UUID,
+        body: AgentSkillAttach,
+        principal: CurrentPrincipal,
+    ) -> dict[str, object]:
+        _require_csrf(request, principal, settings)
+        result = agent_skill_service().attach(
+            owner_id=principal.user_id,
+            agent_id=agent_id,
+            skill_id=body.skill_id,
+        )
+        _audit(request, audit_hasher, audit_recorder, "agent_skill", "attached")
+        return result
+
+    @app.delete(
+        "/agents/{agent_id}/skills/{skill_id:path}",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    def detach_agent_skill(
+        request: Request,
+        agent_id: UUID,
+        skill_id: str,
+        principal: CurrentPrincipal,
+    ) -> Response:
+        _require_csrf(request, principal, settings)
+        try:
+            normalize_skill_id(skill_id)
+        except SkillValidationError as error:
+            raise RepositoryInvalidRequest() from error
+        agent_skill_service().detach(
+            owner_id=principal.user_id,
+            agent_id=agent_id,
+            skill_id=skill_id,
+        )
+        _audit(request, audit_hasher, audit_recorder, "agent_skill", "detached")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post(
         "/reviews",
@@ -726,6 +863,39 @@ def install_resource_routes(
         )
         _audit(request, audit_hasher, audit_recorder, "credential", "revoked")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _skills_catalog_page(payload: dict[str, object]) -> dict[str, object]:
+    data = payload.get("data")
+    skills = data if isinstance(data, list) else []
+    normalized: list[dict[str, object]] = []
+    for skill in skills:
+        if not isinstance(skill, dict):
+            continue
+        normalized.append(
+            {
+                "id": skill.get("id"),
+                "slug": skill.get("slug"),
+                "name": skill.get("name"),
+                "source": skill.get("source"),
+                "installs": skill.get("installs"),
+                "source_type": skill.get("sourceType") or skill.get("source_type"),
+                "install_url": skill.get("installUrl") or skill.get("install_url"),
+                "url": skill.get("url"),
+                "is_duplicate": skill.get("isDuplicate"),
+            }
+        )
+    return {
+        "data": normalized,
+        "pagination": payload.get("pagination"),
+        "query": payload.get("query"),
+        "search_type": payload.get("searchType"),
+        "count": payload.get("count"),
+        "duration_ms": payload.get("durationMs"),
+        "total_owners": payload.get("totalOwners"),
+        "total_skills": payload.get("totalSkills"),
+        "generated_at": payload.get("generatedAt"),
+    }
 
 
 def _require_csrf(request: Request, principal, settings: AuthSettings) -> None:

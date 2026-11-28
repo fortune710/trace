@@ -490,6 +490,45 @@ def test_agent_prompt_identifies_the_tool_inspected_review_target(monkeypatch) -
     )
 
 
+def test_agent_prompt_includes_attached_skills(monkeypatch) -> None:
+    create_agent_arguments = {}
+
+    class LangChainAgent:
+        def invoke(self, inputs, *, context):
+            return {"structured_response": ReviewFindingBatch()}
+
+    def fake_create_agent(**kwargs):
+        create_agent_arguments.update(kwargs)
+        return LangChainAgent()
+
+    monkeypatch.setattr(Agent, "_model", lambda _agent: object())
+    monkeypatch.setattr(execution_agent_module, "create_agent", fake_create_agent)
+
+    Agent(
+        provider="openai",
+        model="test-model",
+        skills=(
+            {
+                "provider": "skills.sh",
+                "id": "vercel-labs/skills/find-skills",
+                "name": "find-skills",
+                "skill_md": "Prefer checking auth boundaries first.",
+            },
+        ),
+    ).run(
+        review_target=ReviewTarget(
+            source_kind="gitlab",
+            source_identifier="group/project",
+            source_revision="b" * 40,
+        ),
+        tool_context=_tool_context(),
+    )
+
+    system_prompt = create_agent_arguments["system_prompt"]
+    assert "Prefer checking auth boundaries first." in system_prompt
+    assert "untrusted reference material" in system_prompt
+
+
 @pytest.mark.parametrize(
     ("category", "research_required"),
     [

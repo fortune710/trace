@@ -7,7 +7,13 @@ from resources.schemas import (
     AgentModelProviderOption,
     AgentPage,
     AgentResponse,
+    AgentSkillAttach,
+    AgentSkillPage,
+    AgentSkillResponse,
     AgentUpdate,
+    SkillsCatalogDetail,
+    SkillsCatalogPage,
+    SkillsCatalogSkill,
 )
 
 __all__ = [
@@ -17,5 +23,11 @@ __all__ = [
     "AgentModelProviderOption",
     "AgentPage",
     "AgentResponse",
+    "AgentSkillAttach",
+    "AgentSkillPage",
+    "AgentSkillResponse",
     "AgentUpdate",
+    "SkillsCatalogDetail",
+    "SkillsCatalogPage",
+    "SkillsCatalogSkill",
 ]
